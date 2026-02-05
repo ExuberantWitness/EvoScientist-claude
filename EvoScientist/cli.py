@@ -20,7 +20,7 @@ import queue
 import sys
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 
@@ -34,7 +34,7 @@ from rich.table import Table  # type: ignore[import-untyped]
 
 # Backward-compat re-exports (tests import these from EvoScientist.cli)
 from .stream.state import SubAgentState, StreamState, _parse_todo_items, _build_todo_stats  # noqa: F401
-from .stream.display import console, _run_streaming, _astream_to_console
+from .stream.display import console, _run_streaming
 from .paths import ensure_dirs, new_run_dir, default_workspace_dir
 
 
