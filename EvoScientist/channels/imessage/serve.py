@@ -34,10 +34,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_agent_handler():
-    """Create handler that uses EvoScientist agent."""
+def create_agent_handler(on_thinking: Callable | None = None):
+    """Create handler that uses EvoScientist agent.
+
+    Args:
+        on_thinking: Optional async callback for thinking content.
+            Signature: async def on_thinking(sender: str, thinking: str) -> None
+    """
     from langchain_core.messages import HumanMessage
     from ...EvoScientist import create_cli_agent
+    from ...stream.events import stream_agent_events
 
     agent = create_cli_agent()
     sessions: dict[str, str] = {}  # sender -> thread_id
@@ -49,17 +55,42 @@ def create_agent_handler():
             sessions[sender] = str(uuid.uuid4())
         thread_id = sessions[sender]
 
-        config = {"configurable": {"thread_id": thread_id}}
-        result = agent.invoke(
-            {"messages": [HumanMessage(content=msg.content)]},
-            config=config,
-        )
-        # Extract last AI message
-        messages = result.get("messages", [])
-        for m in reversed(messages):
-            if hasattr(m, "content") and m.type == "ai":
-                return m.content
-        return "No response"
+        if on_thinking:
+            final_content = ""
+            thinking_buffer = []
+
+            async for event in stream_agent_events(agent, msg.content, thread_id):
+                event_type = event.get("type")
+
+                if event_type == "thinking":
+                    thinking_text = event.get("content", "")
+                    if thinking_text:
+                        thinking_buffer.append(thinking_text)
+                        if len("".join(thinking_buffer)) > 200:
+                            await on_thinking(sender, "".join(thinking_buffer))
+                            thinking_buffer.clear()
+
+                elif event_type == "text":
+                    final_content += event.get("content", "")
+
+                elif event_type == "done":
+                    final_content = event.get("content", "") or final_content
+
+            if thinking_buffer:
+                await on_thinking(sender, "".join(thinking_buffer))
+
+            return final_content or "No response"
+        else:
+            config = {"configurable": {"thread_id": thread_id}}
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=msg.content)]},
+                config=config,
+            )
+            messages = result.get("messages", [])
+            for m in reversed(messages):
+                if hasattr(m, "content") and m.type == "ai":
+                    return m.content
+            return "No response"
 
     return handler
 
@@ -71,6 +102,7 @@ class IMessageServer:
         self,
         config: IMessageConfig,
         handler: Callable | None = None,
+        send_thinking: bool = False,
         debounce_window: float = 1.0,
     ):
         """Initialize iMessage server.
@@ -78,14 +110,17 @@ class IMessageServer:
         Args:
             config: iMessage channel configuration.
             handler: Message handler function. If None, uses echo handler.
+            send_thinking: If True, send thinking content as intermediate messages.
             debounce_window: Time window (seconds) to wait for additional messages
                 before processing. Messages from same sender within this window
                 are merged. Default 1.0s.
         """
         self.config = config
         self.channel = IMessageChannel(config)
+        self.send_thinking = send_thinking
         self.debounce_window = debounce_window
         self._running = False
+        self._pending_thinking: dict[str, str] = {}  # sender -> accumulated thinking
 
         # Message buffering for debounce
         self._message_buffers: dict[str, list[str]] = {}  # sender -> [messages]
@@ -154,6 +189,18 @@ class IMessageServer:
 
         self._debounce_tasks[sender] = asyncio.create_task(debounce_callback())
 
+    async def send_thinking_message(self, sender: str, thinking: str) -> None:
+        """Send thinking content as intermediate message."""
+        if not self.send_thinking:
+            return
+
+        content = f"[Thinking...]\n{thinking}"
+        await self.channel.send(OutgoingMessage(
+            recipient=sender,
+            content=content,
+        ))
+        logger.debug(f"Sent thinking to {sender}: {thinking[:50]}...")
+
     async def run(self) -> None:
         """Run the server."""
         await self.channel.start()
@@ -214,6 +261,11 @@ def parse_args():
         help="Use EvoScientist agent as handler (default: echo)",
     )
     parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help="Send thinking content as intermediate messages (requires --agent)",
+    )
+    parser.add_argument(
         "--debounce",
         type=float,
         default=1.0,
@@ -234,16 +286,25 @@ async def async_main():
     )
 
     handler = None
+    send_thinking = args.thinking and args.agent
+
     if args.agent:
         logger.info("Loading EvoScientist agent...")
-        handler = create_agent_handler()
         logger.info("Agent loaded")
 
     server = IMessageServer(
         config,
-        handler=handler,
+        handler=None,
+        send_thinking=send_thinking,
         debounce_window=args.debounce,
     )
+
+    if args.agent:
+        on_thinking = server.send_thinking_message if send_thinking else None
+        handler = create_agent_handler(on_thinking=on_thinking)
+        server.handler = handler
+        if send_thinking:
+            logger.info("Thinking messages enabled")
 
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
