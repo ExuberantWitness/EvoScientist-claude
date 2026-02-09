@@ -215,37 +215,46 @@ def remove_mcp_server(name: str) -> bool:
 # =============================================================================
 
 
+def _infer_transport(target: str) -> str:
+    """Return ``'http'`` if *target* looks like a URL, else ``'stdio'``."""
+    if target.startswith(("http://", "https://", "ws://", "wss://")):
+        return "http"
+    return "stdio"
+
+
 def parse_mcp_add_args(tokens: list[str]) -> dict:
     """Parse CLI tokens for ``/mcp add`` into kwargs for :func:`add_mcp_server`.
 
     Syntax::
 
-        <name> <transport> <command-or-url> [extra-args...]
-            [--tools t1,t2] [--expose-to a1,a2] [--header Key:Value]...
-            [--env KEY=VALUE]...
+        <name> <command-or-url> [extra-args...]
+            [--transport T] [--tools t1,t2] [--expose-to a1,a2]
+            [--header Key:Value]... [--env KEY=VALUE]...
 
-    For stdio: positional args after transport are command + args.
-    For http/sse/websocket: first positional arg after transport is url.
+    Transport defaults to ``stdio`` for commands and ``http`` for URLs.
     """
-    if len(tokens) < 3:
+    if len(tokens) < 2:
         raise ValueError(
-            "Usage: <name> <transport> <command-or-url> [args...]\n"
-            "  Options: --tools t1,t2  --expose-to agent1,agent2  --header Key:Value  --env KEY=VALUE"
+            "Usage: <name> <command-or-url> [args...]\n"
+            "  Options: --transport T  --tools t1,t2  --expose-to agent1,agent2  --header Key:Value  --env KEY=VALUE"
         )
 
     name = tokens[0]
-    transport = tokens[1]
 
     positional: list[str] = []
+    transport: str | None = None
     tools: list[str] | None = None
     expose_to: list[str] | None = None
     headers: dict[str, str] = {}
     env: dict[str, str] = {}
 
-    i = 2
+    i = 1
     while i < len(tokens):
         tok = tokens[i]
-        if tok == "--tools" and i + 1 < len(tokens):
+        if tok in ("--transport", "-T") and i + 1 < len(tokens):
+            transport = tokens[i + 1]
+            i += 2
+        elif tok == "--tools" and i + 1 < len(tokens):
             tools = [t.strip() for t in tokens[i + 1].split(",") if t.strip()]
             i += 2
         elif tok == "--expose-to" and i + 1 < len(tokens):
@@ -263,26 +272,29 @@ def parse_mcp_add_args(tokens: list[str]) -> dict:
                 k, v = kv.split("=", 1)
                 env[k.strip()] = v.strip()
             i += 2
+        elif tok == "--env-ref" and i + 1 < len(tokens):
+            env[tokens[i + 1]] = "${" + tokens[i + 1] + "}"
+            i += 2
+        elif tok == "--":
+            i += 1  # skip -- separator (used by shells, not meaningful here)
         else:
             positional.append(tok)
             i += 1
 
+    if not positional:
+        raise ValueError("A command or URL is required after the server name")
+
+    if transport is None:
+        transport = _infer_transport(positional[0])
+
     kwargs: dict = {"name": name, "transport": transport}
 
     if transport == "stdio":
-        if not positional:
-            raise ValueError(
-                "stdio transport requires a command after the transport name"
-            )
         kwargs["command"] = positional[0]
         kwargs["args"] = positional[1:]
         if env:
             kwargs["env"] = env
     else:
-        if not positional:
-            raise ValueError(
-                f"{transport} transport requires a url after the transport name"
-            )
         kwargs["url"] = positional[0]
         if headers:
             kwargs["headers"] = headers

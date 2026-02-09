@@ -53,7 +53,7 @@ CONFIRM_STYLE = Style.from_dict({
     "text": "",
 })
 
-STEPS = ["Provider", "API Key", "Model", "Tavily Key", "Workspace", "Parameters", "Skills", "Channels"]
+STEPS = ["Provider", "API Key", "Model", "Tavily Key", "Workspace", "Parameters", "Skills", "MCP Servers", "Channels"]
 
 
 # =============================================================================
@@ -781,6 +781,67 @@ def _step_skills() -> list[str]:
     return installed
 
 
+_RECOMMENDED_MCP_SERVERS = [
+    {
+        "label": "Sequential Thinking (structured reasoning for non-reasoning models)",
+        "name": "sequential-thinking",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    },
+    {
+        "label": "Docs by LangChain (documentation for building agents)",
+        "name": "docs-langchain",
+        "url": "https://docs.langchain.com/mcp",
+    },
+]
+
+
+def _step_mcp_servers() -> list[str]:
+    """Step 8: Optionally install recommended MCP servers.
+
+    Shows a checkbox list of recommended servers. Selected ones are added
+    to the user MCP config via ``add_mcp_server()``.
+
+    Returns:
+        List of server names that were installed.
+    """
+    choices = [
+        Choice(title=srv["label"], value=srv["name"])
+        for srv in _RECOMMENDED_MCP_SERVERS
+    ]
+
+    selected = questionary.checkbox(
+        "Install recommended MCP servers:",
+        choices=choices,
+        style=WIZARD_STYLE,
+    ).ask()
+
+    if selected is None:
+        raise KeyboardInterrupt()
+
+    if not selected:
+        _print_step_skipped("MCP Servers", "none selected")
+        console.print("  [dim]Add later with: EvoSci mcp add <name> <command> [--env-ref KEY] -- [args][/dim]")
+        return []
+
+    from .mcp.client import add_mcp_server
+
+    installed = []
+    for name in selected:
+        srv = next(s for s in _RECOMMENDED_MCP_SERVERS if s["name"] == name)
+        try:
+            if "url" in srv:
+                add_mcp_server(name, "streamable_http", url=srv["url"])
+            else:
+                add_mcp_server(name, "stdio", command=srv["command"], args=srv["args"])
+            _print_step_result("MCP", f"{name}")
+            installed.append(name)
+        except Exception as e:
+            _print_step_result("MCP", f"{name} — {e}", success=False)
+
+    return installed
+
+
 def validate_imessage() -> tuple[bool, str]:
     """Validate iMessage environment by checking for the imsg CLI.
 
@@ -1091,7 +1152,10 @@ def run_onboard(skip_validation: bool = False) -> bool:
         # Step 7: Skills
         _step_skills()
 
-        # Step 8: Channels
+        # Step 8: MCP Servers
+        _step_mcp_servers()
+
+        # Step 9: Channels
         imessage_enabled, imessage_allowed_senders = _step_channels(config)
         config.imessage_enabled = imessage_enabled
         config.imessage_allowed_senders = imessage_allowed_senders

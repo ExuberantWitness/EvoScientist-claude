@@ -381,47 +381,76 @@ class TestRemoveMcpServer:
 
 class TestParseMcpAddArgs:
     def test_stdio_basic(self):
-        r = parse_mcp_add_args(["fs", "stdio", "npx", "-y", "server", "/tmp"])
+        r = parse_mcp_add_args(["fs", "npx", "-y", "server", "/tmp"])
         assert r["name"] == "fs"
         assert r["transport"] == "stdio"
         assert r["command"] == "npx"
         assert r["args"] == ["-y", "server", "/tmp"]
 
-    def test_http_basic(self):
-        r = parse_mcp_add_args(["api", "http", "http://localhost:8080/mcp"])
+    def test_http_auto_detected(self):
+        r = parse_mcp_add_args(["api", "http://localhost:8080/mcp"])
+        assert r["transport"] == "http"
         assert r["url"] == "http://localhost:8080/mcp"
 
+    def test_https_auto_detected(self):
+        r = parse_mcp_add_args(["api", "https://example.com/mcp"])
+        assert r["transport"] == "http"
+        assert r["url"] == "https://example.com/mcp"
+
+    def test_ws_auto_detected(self):
+        r = parse_mcp_add_args(["ws", "ws://localhost:9090"])
+        assert r["transport"] == "http"
+
+    def test_explicit_transport_override(self):
+        r = parse_mcp_add_args(["srv", "https://example.com/sse", "--transport", "sse"])
+        assert r["transport"] == "sse"
+        assert r["url"] == "https://example.com/sse"
+
+    def test_explicit_transport_short_flag(self):
+        r = parse_mcp_add_args(["srv", "https://x", "-T", "websocket"])
+        assert r["transport"] == "websocket"
+
     def test_tools_flag(self):
-        r = parse_mcp_add_args(["srv", "http", "http://x", "--tools", "a,b"])
+        r = parse_mcp_add_args(["srv", "http://x", "--tools", "a,b"])
         assert r["tools"] == ["a", "b"]
 
     def test_expose_to_flag(self):
         r = parse_mcp_add_args(
-            ["srv", "http", "http://x", "--expose-to", "main,code-agent"]
+            ["srv", "http://x", "--expose-to", "main,code-agent"]
         )
         assert r["expose_to"] == ["main", "code-agent"]
 
     def test_header_flag(self):
         r = parse_mcp_add_args(
-            ["srv", "http", "http://x", "--header", "Authorization:Bearer tok"]
+            ["srv", "http://x", "--header", "Authorization:Bearer tok"]
         )
         assert r["headers"] == {"Authorization": "Bearer tok"}
 
     def test_env_flag(self):
-        r = parse_mcp_add_args(["srv", "stdio", "cmd", "--env", "FOO=bar"])
+        r = parse_mcp_add_args(["srv", "cmd", "--env", "FOO=bar"])
         assert r["env"] == {"FOO": "bar"}
 
     def test_too_few_tokens_raises(self):
         with pytest.raises(ValueError, match="Usage"):
-            parse_mcp_add_args(["fs", "stdio"])
+            parse_mcp_add_args(["fs"])
 
-    def test_stdio_missing_command_raises(self):
-        with pytest.raises(ValueError, match="requires a command"):
-            parse_mcp_add_args(["fs", "stdio", "--tools", "a"])
+    def test_double_dash_ignored(self):
+        r = parse_mcp_add_args(["srv", "npx", "--", "-y", "pkg"])
+        assert r["command"] == "npx"
+        assert r["args"] == ["-y", "pkg"]
+        assert "--" not in r["args"]
 
-    def test_http_missing_url_raises(self):
-        with pytest.raises(ValueError, match="requires a url"):
-            parse_mcp_add_args(["srv", "http", "--tools", "a"])
+    def test_env_ref_flag(self):
+        r = parse_mcp_add_args(["srv", "cmd", "--env-ref", "FOO"])
+        assert r["env"] == {"FOO": "${FOO}"}
+
+    def test_env_ref_and_env_combined(self):
+        r = parse_mcp_add_args(["srv", "cmd", "--env", "DEBUG=true", "--env-ref", "API_KEY"])
+        assert r["env"] == {"DEBUG": "true", "API_KEY": "${API_KEY}"}
+
+    def test_missing_command_or_url_raises(self):
+        with pytest.raises(ValueError, match="command or URL is required"):
+            parse_mcp_add_args(["fs", "--tools", "a"])
 
 
 # ---- edit_mcp_server ----

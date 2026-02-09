@@ -22,10 +22,10 @@ from EvoScientist.config import EvoScientistConfig
 
 
 class TestConstants:
-    def test_steps_has_eight_items(self):
-        """Test that STEPS contains exactly 8 steps."""
-        assert len(STEPS) == 8
-        assert STEPS == ["Provider", "API Key", "Model", "Tavily Key", "Workspace", "Parameters", "Skills", "Channels"]
+    def test_steps_has_nine_items(self):
+        """Test that STEPS contains exactly 9 steps."""
+        assert len(STEPS) == 9
+        assert STEPS == ["Provider", "API Key", "Model", "Tavily Key", "Workspace", "Parameters", "Skills", "MCP Servers", "Channels"]
 
     def test_wizard_style_is_style_instance(self):
         """Test that WIZARD_STYLE is a prompt_toolkit Style."""

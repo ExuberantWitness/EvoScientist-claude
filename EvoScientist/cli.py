@@ -272,7 +272,7 @@ def _cmd_install_skill(source: str) -> None:
         console.print(f"[dim]Description:[/dim] {result.get('description', '(none)')}")
         console.print(f"[dim]Path:[/dim] [cyan]{_shorten_path(result['path'])}[/cyan]")
         console.print()
-        console.print("[dim]Reload the agent with /new to use the skill.[/dim]")
+        console.print("[dim]Reload with /new to apply.[/dim]")
     else:
         console.print(f"[red]Failed:[/red] {result['error']}")
     console.print()
@@ -292,7 +292,7 @@ def _cmd_uninstall_skill(name: str) -> None:
 
     if result["success"]:
         console.print(f"[green]Uninstalled:[/green] {name}")
-        console.print("[dim]Reload the agent with /new to apply changes.[/dim]")
+        console.print("[dim]Reload with /new to apply.[/dim]")
     else:
         console.print(f"[red]Failed:[/red] {result['error']}")
     console.print()
@@ -388,6 +388,7 @@ def _cmd_channel(args: str, agent: Any, thread_id: str) -> None:
 def _mcp_list_servers() -> None:
     """Print a table of configured MCP servers."""
     from .mcp import load_mcp_config
+    from .mcp.client import USER_MCP_CONFIG
 
     config = load_mcp_config()
 
@@ -414,7 +415,7 @@ def _mcp_list_servers() -> None:
         table.add_row(name, transport, tools_str, expose_str)
 
     console.print(table)
-    console.print("\n[dim]User config:[/dim] [cyan]~/.config/evoscientist/mcp.yaml[/cyan]")
+    console.print(f"\n[dim]Config file: {USER_MCP_CONFIG}[/dim]")
     console.print()
 
 
@@ -424,20 +425,22 @@ def _cmd_mcp_add(args_str: str) -> None:
     from .mcp import add_mcp_server, parse_mcp_add_args
 
     if not args_str.strip():
-        console.print("[bold]Usage:[/bold] /mcp add <name> <transport> <command-or-url> [args...]")
+        console.print("[bold]Usage:[/bold] /mcp add <name> <command-or-url> [args...]")
         console.print()
-        console.print("[dim]Transports:[/dim] stdio, http, sse, websocket")
+        console.print("[dim]Transport is auto-detected: URLs → http, commands → stdio[/dim]")
         console.print()
         console.print("[bold]Examples:[/bold]")
-        console.print("  /mcp add filesystem stdio npx -y @modelcontextprotocol/server-filesystem /tmp")
-        console.print("  /mcp add my-api http http://localhost:8080/mcp --header Authorization:Bearer\\ tok")
-        console.print("  /mcp add my-api sse http://localhost:9090/sse --expose-to research-agent")
+        console.print("  /mcp add sequential-thinking npx -y @modelcontextprotocol/server-sequential-thinking")
+        console.print("  /mcp add docs-langchain https://docs.langchain.com/mcp")
+        console.print("  /mcp add my-sse http://localhost:9090/sse --transport sse --expose-to research-agent")
         console.print()
         console.print("[dim]Options:[/dim]")
+        console.print("  --transport T          Transport type (default: auto-detect)")
         console.print("  --tools t1,t2          Tool allowlist")
         console.print("  --expose-to a1,a2      Target agents (default: main)")
         console.print("  --header Key:Value     HTTP header (repeatable)")
         console.print("  --env KEY=VALUE        Env var for stdio (repeatable)")
+        console.print("  --env-ref KEY          Env var as runtime ${KEY} reference (repeatable)")
         console.print()
         return
 
@@ -446,7 +449,7 @@ def _cmd_mcp_add(args_str: str) -> None:
         kwargs = parse_mcp_add_args(tokens)
         entry = add_mcp_server(**kwargs)
         console.print(f"[green]Added MCP server:[/green] [cyan]{kwargs['name']}[/cyan] ({entry['transport']})")
-        console.print("[dim]Reload the agent with /new to activate.[/dim]")
+        console.print("[dim]Reload with /new to apply.[/dim]")
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
     console.print()
@@ -478,7 +481,7 @@ def _cmd_mcp_edit(args_str: str) -> None:
         console.print(f"[green]Updated MCP server:[/green] [cyan]{name}[/cyan]")
         for k, v in fields.items():
             console.print(f"  [dim]{k}:[/dim] {v}")
-        console.print("[dim]Reload the agent with /new to apply.[/dim]")
+        console.print("[dim]Reload with /new to apply.[/dim]")
     except KeyError as exc:
         console.print(f"[red]{exc}[/red]")
     except ValueError as exc:
@@ -497,9 +500,64 @@ def _cmd_mcp_remove(name: str) -> None:
 
     if remove_mcp_server(name.strip()):
         console.print(f"[green]Removed MCP server:[/green] [cyan]{name.strip()}[/cyan]")
-        console.print("[dim]Reload the agent with /new to apply.[/dim]")
+        console.print("[dim]Reload with /new to apply.[/dim]")
     else:
         console.print(f"[red]Server not found:[/red] {name.strip()}")
+    console.print()
+
+
+def _cmd_mcp_config(name: str) -> None:
+    """Handle ``/mcp config [name]``."""
+    from .mcp import load_mcp_config
+    from .mcp.client import USER_MCP_CONFIG
+
+    config = load_mcp_config()
+    if not config:
+        console.print("[dim]No MCP servers configured.[/dim]")
+        console.print()
+        return
+
+    name = name.strip()
+    if name and name not in config:
+        console.print(f"[red]Server not found:[/red] {name}")
+        console.print()
+        return
+
+    servers = {name: config[name]} if name else config
+
+    for srv_name, srv in servers.items():
+        table = Table(
+            title=f"MCP Server: {srv_name}",
+            show_header=True,
+            title_style="bold cyan",
+        )
+        table.add_column("Setting", style="cyan")
+        table.add_column("Value")
+
+        table.add_row("transport", str(srv.get("transport", "(not set)")))
+        if srv.get("command"):
+            table.add_row("command", str(srv["command"]))
+        if srv.get("args"):
+            table.add_row("args", " ".join(str(a) for a in srv["args"]))
+        if srv.get("url"):
+            table.add_row("url", str(srv["url"]))
+        if srv.get("headers"):
+            for k, v in srv["headers"].items():
+                table.add_row(f"header: {k}", str(v))
+        if srv.get("env"):
+            for k, v in srv["env"].items():
+                table.add_row(f"env: {k}", str(v))
+        tools = srv.get("tools")
+        table.add_row("tools", ", ".join(tools) if tools else "[dim](all)[/dim]")
+        expose_to = srv.get("expose_to", ["main"])
+        if isinstance(expose_to, str):
+            expose_to = [expose_to]
+        table.add_row("expose_to", ", ".join(expose_to))
+
+        console.print(table)
+        console.print()
+
+    console.print(f"[dim]Config file: {USER_MCP_CONFIG}[/dim]")
     console.print()
 
 
@@ -515,10 +573,13 @@ def _cmd_mcp(args: str) -> None:
         _cmd_mcp_edit(args[4:].strip())
     elif args.startswith("remove"):
         _cmd_mcp_remove(args[6:].strip())
+    elif args.startswith("config"):
+        _cmd_mcp_config(args[6:].strip())
     else:
         console.print("[bold]MCP commands:[/bold]")
         console.print("  /mcp              List configured servers")
         console.print("  /mcp list         List configured servers")
+        console.print("  /mcp config       Show detailed server config")
         console.print("  /mcp add ...      Add a server")
         console.print("  /mcp edit ...     Edit an existing server")
         console.print("  /mcp remove ...   Remove a server")
@@ -982,7 +1043,37 @@ config_app = typer.Typer(help="Configuration management commands", invoke_withou
 app.add_typer(config_app, name="config")
 
 # MCP subcommand group
-mcp_app = typer.Typer(help="MCP server management commands", invoke_without_command=True)
+_MCP_HELP = """\
+Configure and manage MCP servers.
+
+Examples:
+  # Add a local MCP server (stdio auto-detected):
+  EvoSci mcp add local-server python -- /path/to/server.py
+
+  # Add an npx-based server:
+  EvoSci mcp add sequential-thinking npx -- -y @modelcontextprotocol/server-sequential-thinking
+
+  # Add an HTTP server (http auto-detected from URL):
+  EvoSci mcp add docs-langchain https://docs.langchain.com/mcp
+
+  # Add a stdio server with env vars (hardcoded):
+  EvoSci mcp add my-server node --env API_KEY=xxx -- server.js
+
+  # Add a server with runtime env ref (resolved from .env at startup):
+  EvoSci mcp add brave-search npx --env-ref BRAVE_API_KEY -- -y @modelcontextprotocol/server-brave-search
+
+  # Expose to a specific sub-agent (e.g. research-agent):
+  EvoSci mcp add brave-search npx --env-ref BRAVE_API_KEY -e research-agent -- -y @modelcontextprotocol/server-brave-search
+
+  # Expose to multiple agents:
+  EvoSci mcp add local-server python -e main,research-agent,code-agent -- /path/to/server.py
+
+  # Explicit transport override:
+  EvoSci mcp add my-sse https://example.com/sse --transport sse
+
+Sub-agents (-e): planner-agent | research-agent | code-agent | debug-agent | data-analysis-agent | writing-agent
+"""
+mcp_app = typer.Typer(help=_MCP_HELP, invoke_without_command=True)
 app.add_typer(mcp_app, name="mcp")
 
 
@@ -1131,26 +1222,100 @@ def mcp_list():
     _mcp_list_servers()
 
 
+@mcp_app.command("config")
+def mcp_config(
+    name: Optional[str] = typer.Argument(None, help="Server name (omit to show all)"),
+):
+    """Show detailed configuration for MCP servers.
+
+    \b
+    Examples:
+      evosci mcp config             # Show all servers in detail
+      evosci mcp config filesystem  # Show one server
+    """
+    from .mcp import load_mcp_config
+    from .mcp.client import USER_MCP_CONFIG
+
+    config = load_mcp_config()
+
+    if not config:
+        console.print("[dim]No MCP servers configured.[/dim]")
+        console.print("[dim]Add one with:[/dim] EvoSci mcp add <name> <transport> <command-or-url> [args...]")
+        return
+
+    if name and name not in config:
+        console.print(f"[red]Server not found:[/red] {name}")
+        raise typer.Exit(1)
+
+    servers = {name: config[name]} if name else config
+
+    for srv_name, srv in servers.items():
+        table = Table(
+            title=f"MCP Server: {srv_name}",
+            show_header=True,
+            title_style="bold cyan",
+        )
+        table.add_column("Setting", style="cyan")
+        table.add_column("Value")
+
+        table.add_row("transport", str(srv.get("transport", "(not set)")))
+
+        if srv.get("command"):
+            table.add_row("command", str(srv["command"]))
+        if srv.get("args"):
+            table.add_row("args", " ".join(str(a) for a in srv["args"]))
+        if srv.get("url"):
+            table.add_row("url", str(srv["url"]))
+        if srv.get("headers"):
+            for k, v in srv["headers"].items():
+                table.add_row(f"header: {k}", str(v))
+        if srv.get("env"):
+            for k, v in srv["env"].items():
+                table.add_row(f"env: {k}", str(v))
+
+        tools = srv.get("tools")
+        table.add_row("tools", ", ".join(tools) if tools else "[dim](all)[/dim]")
+
+        expose_to = srv.get("expose_to", ["main"])
+        if isinstance(expose_to, str):
+            expose_to = [expose_to]
+        table.add_row("expose_to", ", ".join(expose_to))
+
+        console.print(table)
+        console.print()
+
+    console.print(f"[dim]Config file: {USER_MCP_CONFIG}[/dim]")
+
+
 @mcp_app.command("add")
 def mcp_add(
     name: str = typer.Argument(..., help="Server name"),
-    transport: str = typer.Argument(..., help="Transport: stdio, http, sse, websocket"),
-    target: str = typer.Argument(..., help="Command (stdio) or URL (http/sse/websocket)"),
+    target: str = typer.Argument(..., help="Command (stdio) or URL (http/sse)"),
     args: Optional[list[str]] = typer.Argument(None, help="Extra args for stdio command"),
+    transport: Optional[str] = typer.Option(None, "--transport", "-T", help="Transport type (default: auto-detect)"),
     tools: Optional[str] = typer.Option(None, "--tools", "-t", help="Comma-separated tool allowlist"),
     expose_to: Optional[str] = typer.Option(None, "--expose-to", "-e", help="Comma-separated target agents"),
     header: Optional[list[str]] = typer.Option(None, "--header", "-H", help="HTTP header as Key:Value (repeatable)"),
     env: Optional[list[str]] = typer.Option(None, "--env", help="Env var as KEY=VALUE for stdio (repeatable)"),
+    env_ref: Optional[list[str]] = typer.Option(None, "--env-ref", help="Env var name as ${NAME} runtime ref (repeatable)"),
 ):
     """Add an MCP server to user config.
 
     \b
+    Transport is auto-detected: URLs default to http, commands default to stdio.
+
+    \b
     Examples:
-      evosci mcp add filesystem stdio npx -- -y @modelcontextprotocol/server-filesystem /tmp
-      evosci mcp add my-api http http://localhost:8080/mcp -H "Authorization:Bearer tok"
-      evosci mcp add my-sse sse http://localhost:9090/sse -e research-agent
+      evosci mcp add sequential-thinking npx -- -y @modelcontextprotocol/server-sequential-thinking
+      evosci mcp add docs-langchain https://docs.langchain.com/mcp
+      evosci mcp add my-sse https://example.com/sse --transport sse -e research-agent
+      evosci mcp add brave-search npx --env-ref BRAVE_API_KEY -- -y @modelcontextprotocol/server-brave-search
     """
     from .mcp import add_mcp_server
+    from .mcp.client import _infer_transport
+
+    if transport is None:
+        transport = _infer_transport(target)
 
     kwargs: dict = {
         "name": name,
@@ -1160,12 +1325,14 @@ def mcp_add(
     if transport == "stdio":
         kwargs["command"] = target
         kwargs["args"] = list(args) if args else []
-        if env:
+        if env or env_ref:
             env_dict = {}
-            for e in env:
+            for e in (env or []):
                 if "=" in e:
                     k, v = e.split("=", 1)
                     env_dict[k.strip()] = v.strip()
+            for ref in (env_ref or []):
+                env_dict[ref] = "${" + ref + "}"
             if env_dict:
                 kwargs["env"] = env_dict
     else:
