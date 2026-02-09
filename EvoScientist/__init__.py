@@ -1,58 +1,60 @@
-"""EvoScientist Agent — AI-powered research & code execution."""
+"""EvoScientist Agent - AI-powered research and code execution.
 
-from .backends import CustomSandboxBackend, ReadOnlyFilesystemBackend
-from .config import (
-    EvoScientistConfig,
-    load_config,
-    save_config,
-    get_effective_config,
-    get_config_path,
-)
-from .llm import get_chat_model, MODELS, list_models, DEFAULT_MODEL
-from .middleware import create_skills_middleware
-from .prompts import get_system_prompt, RESEARCHER_INSTRUCTIONS
-from .tools import tavily_search, think_tool, view_image
+This package exposes a convenience API at the package root while keeping
+imports lazy, so lightweight modules (for example config helpers) can be used
+without importing heavy runtime dependencies.
+"""
 
-# Lazy imports for EvoScientist_agent and create_cli_agent to avoid
-# triggering model initialization at import time. This allows CLI commands
-# like `onboard` and `config` to run without API keys being configured.
+from __future__ import annotations
+
+from importlib import import_module
 
 
-def __getattr__(name):
-    if name == "EvoScientist_agent":
-        from .EvoScientist import EvoScientist_agent
-        return EvoScientist_agent
-    if name == "create_cli_agent":
-        from .EvoScientist import create_cli_agent
-        return create_cli_agent
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-__all__ = [
-    # Agent graph (main export, lazily loaded)
-    "EvoScientist_agent",
-    "create_cli_agent",
+_EXPORTS: dict[str, tuple[str, str]] = {
+    # Agent graph (lazy to avoid expensive initialization at import time)
+    "EvoScientist_agent": (".EvoScientist", "EvoScientist_agent"),
+    "create_cli_agent": (".EvoScientist", "create_cli_agent"),
     # Backends
-    "CustomSandboxBackend",
-    "ReadOnlyFilesystemBackend",
+    "CustomSandboxBackend": (".backends", "CustomSandboxBackend"),
+    "ReadOnlyFilesystemBackend": (".backends", "ReadOnlyFilesystemBackend"),
     # Configuration
-    "EvoScientistConfig",
-    "load_config",
-    "save_config",
-    "get_effective_config",
-    "get_config_path",
+    "EvoScientistConfig": (".config", "EvoScientistConfig"),
+    "load_config": (".config", "load_config"),
+    "save_config": (".config", "save_config"),
+    "get_effective_config": (".config", "get_effective_config"),
+    "get_config_path": (".config", "get_config_path"),
     # LLM
-    "get_chat_model",
-    "MODELS",
-    "list_models",
-    "DEFAULT_MODEL",
+    "get_chat_model": (".llm", "get_chat_model"),
+    "MODELS": (".llm", "MODELS"),
+    "list_models": (".llm", "list_models"),
+    "DEFAULT_MODEL": (".llm", "DEFAULT_MODEL"),
     # Middleware
-    "create_skills_middleware",
+    "create_skills_middleware": (".middleware", "create_skills_middleware"),
     # Prompts
-    "get_system_prompt",
-    "RESEARCHER_INSTRUCTIONS",
+    "get_system_prompt": (".prompts", "get_system_prompt"),
+    "RESEARCHER_INSTRUCTIONS": (".prompts", "RESEARCHER_INSTRUCTIONS"),
     # Tools
-    "tavily_search",
-    "think_tool",
-    "view_image",
-]
+    "tavily_search": (".tools", "tavily_search"),
+    "think_tool": (".tools", "think_tool"),
+    "view_image": (".tools", "view_image"),
+}
+
+
+def __getattr__(name: str):
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = target
+    module = import_module(module_name, package=__name__)
+    value = getattr(module, attr_name)
+    # Cache after first load to avoid repeated import lookups.
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_EXPORTS))
+
+
+__all__ = list(_EXPORTS)

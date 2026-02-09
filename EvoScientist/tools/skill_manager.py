@@ -25,7 +25,8 @@ def skill_manager(
 
     action="list":
       List installed skills. By default only shows user-installed skills.
-      Set include_system=True to also show built-in system skills (peft, accelerate, flash-attention, etc.).
+      Set include_system=True to also show built-in system skills.
+      Built-in skills evolve over time, so use action="list" to see the current set.
 
     action="info" (requires name):
       Get details (description, source, path) about a specific skill by name.
@@ -37,7 +38,7 @@ def skill_manager(
     Args:
         action: The operation to perform — "install", "list", "info", or "uninstall"
         source: Required for install — GitHub shorthand, GitHub URL, or local directory path
-        name: Required for info and uninstall — the skill name (e.g. "peft", "my-custom-skill")
+        name: Required for info and uninstall — the skill name (for example, one returned by action="list")
         include_system: Only for list — set True to include built-in system skills in the output
 
     Returns:

@@ -419,10 +419,146 @@ def _mcp_list_servers() -> None:
     console.print()
 
 
+def _mcp_add_server_from_kwargs(
+    kwargs: dict[str, Any],
+    *,
+    show_reload_hint: bool = False,
+) -> bool:
+    """Add an MCP server from prepared kwargs."""
+    from .mcp import add_mcp_server
+
+    try:
+        entry = add_mcp_server(**kwargs)
+        console.print(f"[green]Added MCP server:[/green] [cyan]{kwargs['name']}[/cyan] ({entry['transport']})")
+        if show_reload_hint:
+            console.print("[dim]Reload with /new to apply.[/dim]")
+        return True
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return False
+
+
+def _mcp_edit_server_fields(
+    name: str,
+    fields: dict[str, Any],
+    *,
+    show_reload_hint: bool = False,
+) -> bool:
+    """Edit an MCP server from prepared field updates."""
+    from .mcp import edit_mcp_server
+
+    if not fields:
+        console.print("[red]No fields to edit. Use --transport, --command, --url, --tools, --expose-to, etc.[/red]")
+        return False
+
+    try:
+        edit_mcp_server(name, **fields)
+        console.print(f"[green]Updated MCP server:[/green] [cyan]{name}[/cyan]")
+        for k, v in fields.items():
+            console.print(f"  [dim]{k}:[/dim] {v}")
+        if show_reload_hint:
+            console.print("[dim]Reload with /new to apply.[/dim]")
+        return True
+    except KeyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return False
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return False
+
+
+def _mcp_remove_server(name: str, *, show_reload_hint: bool = False) -> bool:
+    """Remove an MCP server by name."""
+    from .mcp import remove_mcp_server
+
+    clean_name = name.strip()
+    if not clean_name:
+        console.print("[red]Usage:[/red] /mcp remove <name>")
+        return False
+
+    if remove_mcp_server(clean_name):
+        console.print(f"[green]Removed MCP server:[/green] [cyan]{clean_name}[/cyan]")
+        if show_reload_hint:
+            console.print("[dim]Reload with /new to apply.[/dim]")
+        return True
+
+    console.print(f"[red]Server not found:[/red] {clean_name}")
+    return False
+
+
+def _render_mcp_server_config_table(name: str, server: dict[str, Any]) -> None:
+    """Render one MCP server config table."""
+    table = Table(
+        title=f"MCP Server: {name}",
+        show_header=True,
+        title_style="bold cyan",
+    )
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value")
+
+    table.add_row("transport", str(server.get("transport", "(not set)")))
+    if server.get("command"):
+        table.add_row("command", str(server["command"]))
+    if server.get("args"):
+        table.add_row("args", " ".join(str(a) for a in server["args"]))
+    if server.get("url"):
+        table.add_row("url", str(server["url"]))
+    if server.get("headers"):
+        for k, v in server["headers"].items():
+            table.add_row(f"header: {k}", str(v))
+    if server.get("env"):
+        for k, v in server["env"].items():
+            table.add_row(f"env: {k}", str(v))
+
+    tools = server.get("tools")
+    table.add_row("tools", ", ".join(tools) if tools else "[dim](all)[/dim]")
+    expose_to = server.get("expose_to", ["main"])
+    if isinstance(expose_to, str):
+        expose_to = [expose_to]
+    table.add_row("expose_to", ", ".join(expose_to))
+
+    console.print(table)
+    console.print()
+
+
+def _show_mcp_config(name: str = "", *, show_blank_line: bool = True) -> str:
+    """Show MCP config details.
+
+    Returns:
+        "ok" when rendered, "empty" when no config exists, "missing" when
+        a specific server name is requested but not found.
+    """
+    from .mcp import load_mcp_config
+    from .mcp.client import USER_MCP_CONFIG
+
+    config = load_mcp_config()
+    if not config:
+        console.print("[dim]No MCP servers configured.[/dim]")
+        if show_blank_line:
+            console.print()
+        return "empty"
+
+    name = name.strip()
+    if name and name not in config:
+        console.print(f"[red]Server not found:[/red] {name}")
+        if show_blank_line:
+            console.print()
+        return "missing"
+
+    servers = {name: config[name]} if name else config
+    for srv_name, srv in servers.items():
+        _render_mcp_server_config_table(srv_name, srv)
+
+    console.print(f"[dim]Config file: {USER_MCP_CONFIG}[/dim]")
+    if show_blank_line:
+        console.print()
+    return "ok"
+
+
 def _cmd_mcp_add(args_str: str) -> None:
     """Handle ``/mcp add ...``."""
     import shlex
-    from .mcp import add_mcp_server, parse_mcp_add_args
+    from .mcp import parse_mcp_add_args
 
     if not args_str.strip():
         console.print("[bold]Usage:[/bold] /mcp add <name> <command-or-url> [args...]")
@@ -447,9 +583,7 @@ def _cmd_mcp_add(args_str: str) -> None:
     try:
         tokens = shlex.split(args_str)
         kwargs = parse_mcp_add_args(tokens)
-        entry = add_mcp_server(**kwargs)
-        console.print(f"[green]Added MCP server:[/green] [cyan]{kwargs['name']}[/cyan] ({entry['transport']})")
-        console.print("[dim]Reload with /new to apply.[/dim]")
+        _mcp_add_server_from_kwargs(kwargs, show_reload_hint=True)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
     console.print()
@@ -458,7 +592,7 @@ def _cmd_mcp_add(args_str: str) -> None:
 def _cmd_mcp_edit(args_str: str) -> None:
     """Handle ``/mcp edit <name> --field value ...``."""
     import shlex
-    from .mcp import edit_mcp_server, parse_mcp_edit_args
+    from .mcp import parse_mcp_edit_args
 
     if not args_str.strip():
         console.print("[bold]Usage:[/bold] /mcp edit <name> --<field> <value> ...")
@@ -477,13 +611,7 @@ def _cmd_mcp_edit(args_str: str) -> None:
     try:
         tokens = shlex.split(args_str)
         name, fields = parse_mcp_edit_args(tokens)
-        edit_mcp_server(name, **fields)
-        console.print(f"[green]Updated MCP server:[/green] [cyan]{name}[/cyan]")
-        for k, v in fields.items():
-            console.print(f"  [dim]{k}:[/dim] {v}")
-        console.print("[dim]Reload with /new to apply.[/dim]")
-    except KeyError as exc:
-        console.print(f"[red]{exc}[/red]")
+        _mcp_edit_server_fields(name, fields, show_reload_hint=True)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
     console.print()
@@ -491,90 +619,36 @@ def _cmd_mcp_edit(args_str: str) -> None:
 
 def _cmd_mcp_remove(name: str) -> None:
     """Handle ``/mcp remove <name>``."""
-    from .mcp import remove_mcp_server
-
-    if not name.strip():
-        console.print("[red]Usage:[/red] /mcp remove <name>")
-        console.print()
-        return
-
-    if remove_mcp_server(name.strip()):
-        console.print(f"[green]Removed MCP server:[/green] [cyan]{name.strip()}[/cyan]")
-        console.print("[dim]Reload with /new to apply.[/dim]")
-    else:
-        console.print(f"[red]Server not found:[/red] {name.strip()}")
+    _mcp_remove_server(name, show_reload_hint=True)
     console.print()
 
 
 def _cmd_mcp_config(name: str) -> None:
     """Handle ``/mcp config [name]``."""
-    from .mcp import load_mcp_config
-    from .mcp.client import USER_MCP_CONFIG
-
-    config = load_mcp_config()
-    if not config:
-        console.print("[dim]No MCP servers configured.[/dim]")
-        console.print()
-        return
-
-    name = name.strip()
-    if name and name not in config:
-        console.print(f"[red]Server not found:[/red] {name}")
-        console.print()
-        return
-
-    servers = {name: config[name]} if name else config
-
-    for srv_name, srv in servers.items():
-        table = Table(
-            title=f"MCP Server: {srv_name}",
-            show_header=True,
-            title_style="bold cyan",
-        )
-        table.add_column("Setting", style="cyan")
-        table.add_column("Value")
-
-        table.add_row("transport", str(srv.get("transport", "(not set)")))
-        if srv.get("command"):
-            table.add_row("command", str(srv["command"]))
-        if srv.get("args"):
-            table.add_row("args", " ".join(str(a) for a in srv["args"]))
-        if srv.get("url"):
-            table.add_row("url", str(srv["url"]))
-        if srv.get("headers"):
-            for k, v in srv["headers"].items():
-                table.add_row(f"header: {k}", str(v))
-        if srv.get("env"):
-            for k, v in srv["env"].items():
-                table.add_row(f"env: {k}", str(v))
-        tools = srv.get("tools")
-        table.add_row("tools", ", ".join(tools) if tools else "[dim](all)[/dim]")
-        expose_to = srv.get("expose_to", ["main"])
-        if isinstance(expose_to, str):
-            expose_to = [expose_to]
-        table.add_row("expose_to", ", ".join(expose_to))
-
-        console.print(table)
-        console.print()
-
-    console.print(f"[dim]Config file: {USER_MCP_CONFIG}[/dim]")
-    console.print()
+    _show_mcp_config(name, show_blank_line=True)
 
 
 def _cmd_mcp(args: str) -> None:
     """Dispatch ``/mcp`` subcommands."""
     args = args.strip()
-
-    if not args or args == "list":
+    if not args:
         _mcp_list_servers()
-    elif args.startswith("add"):
-        _cmd_mcp_add(args[3:].strip())
-    elif args.startswith("edit"):
-        _cmd_mcp_edit(args[4:].strip())
-    elif args.startswith("remove"):
-        _cmd_mcp_remove(args[6:].strip())
-    elif args.startswith("config"):
-        _cmd_mcp_config(args[6:].strip())
+        return
+
+    parts = args.split(maxsplit=1)
+    subcmd = parts[0].lower()
+    subargs = parts[1] if len(parts) > 1 else ""
+
+    if subcmd == "list":
+        _mcp_list_servers()
+    elif subcmd == "add":
+        _cmd_mcp_add(subargs)
+    elif subcmd == "edit":
+        _cmd_mcp_edit(subargs)
+    elif subcmd == "remove":
+        _cmd_mcp_remove(subargs)
+    elif subcmd == "config":
+        _cmd_mcp_config(subargs)
     else:
         console.print("[bold]MCP commands:[/bold]")
         console.print("  /mcp              List configured servers")
@@ -1233,58 +1307,12 @@ def mcp_config(
       evosci mcp config             # Show all servers in detail
       evosci mcp config filesystem  # Show one server
     """
-    from .mcp import load_mcp_config
-    from .mcp.client import USER_MCP_CONFIG
-
-    config = load_mcp_config()
-
-    if not config:
-        console.print("[dim]No MCP servers configured.[/dim]")
+    status = _show_mcp_config(name or "", show_blank_line=False)
+    if status == "empty":
         console.print("[dim]Add one with:[/dim] EvoSci mcp add <name> <transport> <command-or-url> [args...]")
         return
-
-    if name and name not in config:
-        console.print(f"[red]Server not found:[/red] {name}")
+    if status == "missing":
         raise typer.Exit(1)
-
-    servers = {name: config[name]} if name else config
-
-    for srv_name, srv in servers.items():
-        table = Table(
-            title=f"MCP Server: {srv_name}",
-            show_header=True,
-            title_style="bold cyan",
-        )
-        table.add_column("Setting", style="cyan")
-        table.add_column("Value")
-
-        table.add_row("transport", str(srv.get("transport", "(not set)")))
-
-        if srv.get("command"):
-            table.add_row("command", str(srv["command"]))
-        if srv.get("args"):
-            table.add_row("args", " ".join(str(a) for a in srv["args"]))
-        if srv.get("url"):
-            table.add_row("url", str(srv["url"]))
-        if srv.get("headers"):
-            for k, v in srv["headers"].items():
-                table.add_row(f"header: {k}", str(v))
-        if srv.get("env"):
-            for k, v in srv["env"].items():
-                table.add_row(f"env: {k}", str(v))
-
-        tools = srv.get("tools")
-        table.add_row("tools", ", ".join(tools) if tools else "[dim](all)[/dim]")
-
-        expose_to = srv.get("expose_to", ["main"])
-        if isinstance(expose_to, str):
-            expose_to = [expose_to]
-        table.add_row("expose_to", ", ".join(expose_to))
-
-        console.print(table)
-        console.print()
-
-    console.print(f"[dim]Config file: {USER_MCP_CONFIG}[/dim]")
 
 
 @mcp_app.command("add")
@@ -1311,7 +1339,6 @@ def mcp_add(
       evosci mcp add my-sse https://example.com/sse --transport sse -e research-agent
       evosci mcp add brave-search npx --env-ref BRAVE_API_KEY -- -y @modelcontextprotocol/server-brave-search
     """
-    from .mcp import add_mcp_server
     from .mcp.client import _infer_transport
 
     if transport is None:
@@ -1351,11 +1378,7 @@ def mcp_add(
     if expose_to:
         kwargs["expose_to"] = [a.strip() for a in expose_to.split(",") if a.strip()]
 
-    try:
-        entry = add_mcp_server(**kwargs)
-        console.print(f"[green]Added MCP server:[/green] [cyan]{name}[/cyan] ({entry['transport']})")
-    except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+    if not _mcp_add_server_from_kwargs(kwargs, show_reload_hint=False):
         raise typer.Exit(1)
 
 
@@ -1379,8 +1402,6 @@ def mcp_edit(
       evosci mcp edit my-api --url http://new-host:9090/mcp
       evosci mcp edit my-api --tools none
     """
-    from .mcp import edit_mcp_server
-
     fields: dict = {}
     if transport is not None:
         fields["transport"] = transport
@@ -1409,20 +1430,7 @@ def mcp_edit(
         if env_dict:
             fields["env"] = env_dict
 
-    if not fields:
-        console.print("[red]No fields to edit. Use --transport, --command, --url, --tools, --expose-to, etc.[/red]")
-        raise typer.Exit(1)
-
-    try:
-        edit_mcp_server(name, **fields)
-        console.print(f"[green]Updated MCP server:[/green] [cyan]{name}[/cyan]")
-        for k, v in fields.items():
-            console.print(f"  [dim]{k}:[/dim] {v}")
-    except KeyError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
-    except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+    if not _mcp_edit_server_fields(name, fields, show_reload_hint=False):
         raise typer.Exit(1)
 
 
@@ -1431,12 +1439,7 @@ def mcp_remove(
     name: str = typer.Argument(..., help="Server name to remove"),
 ):
     """Remove an MCP server from user config."""
-    from .mcp import remove_mcp_server
-
-    if remove_mcp_server(name):
-        console.print(f"[green]Removed MCP server:[/green] [cyan]{name}[/cyan]")
-    else:
-        console.print(f"[red]Server not found:[/red] {name}")
+    if not _mcp_remove_server(name, show_reload_hint=False):
         raise typer.Exit(1)
 
 
