@@ -13,7 +13,7 @@ from rich.table import Table
 from ..stream.display import console
 from ..paths import ensure_dirs, default_workspace_dir
 from ._app import app, config_app, mcp_app
-from .agent import _shorten_path, _deduplicate_run_name, _create_session_workspace, _load_agent
+from .agent import _deduplicate_run_name, _create_session_workspace, _load_agent
 from .mcp_ui import (
     _mcp_list_servers,
     _mcp_add_server_from_kwargs,
