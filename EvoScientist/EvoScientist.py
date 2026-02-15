@@ -28,7 +28,6 @@ from .prompts import RESEARCHER_INSTRUCTIONS, get_system_prompt
 from .utils import load_subagents
 from .tools import tavily_search, think_tool, skill_manager, view_image
 from .paths import (
-    ensure_dirs,
     default_workspace_dir,
     set_active_workspace,
     MEMORY_DIR as _MEMORY_DIR_PATH,
@@ -47,8 +46,7 @@ apply_config_to_env(_config)
 MAX_CONCURRENT = _config.max_concurrent
 MAX_ITERATIONS = _config.max_iterations
 
-# Workspace settings
-ensure_dirs()
+# Workspace settings (defer dir creation to CLI; here we just resolve paths)
 WORKSPACE_DIR = str(default_workspace_dir())
 set_active_workspace(WORKSPACE_DIR)
 MEMORY_DIR = str(_MEMORY_DIR_PATH)  # Shared across sessions (not per-session)

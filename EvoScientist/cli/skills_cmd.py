@@ -5,23 +5,36 @@ from .agent import _shorten_path
 
 
 def _cmd_list_skills() -> None:
-    """List installed user skills."""
+    """List all available skills (user and system)."""
     from ..tools.skills_manager import list_skills
     from ..paths import USER_SKILLS_DIR
 
-    skills = list_skills(include_system=False)
+    skills = list_skills(include_system=True)
 
     if not skills:
-        console.print("[dim]No user-installed skills.[/dim]")
+        console.print("[dim]No skills available.[/dim]")
         console.print("[dim]Install with:[/dim] /install-skill <path-or-url>")
         console.print(f"[dim]Skills directory:[/dim] [cyan]{_shorten_path(str(USER_SKILLS_DIR))}[/cyan]")
         console.print()
         return
 
-    console.print(f"[bold]User-Installed Skills[/bold] ({len(skills)}):")
-    for skill in skills:
-        console.print(f"  [green]{skill.name}[/green] - {skill.description}")
-    console.print(f"\n[dim]Location:[/dim] [cyan]{_shorten_path(str(USER_SKILLS_DIR))}[/cyan]")
+    user_skills = [s for s in skills if s.source == "user"]
+    system_skills = [s for s in skills if s.source == "system"]
+
+    if user_skills:
+        console.print(f"[bold]User Skills[/bold] ({len(user_skills)}):")
+        for skill in user_skills:
+            console.print(f"  [green]{skill.name}[/green] - {skill.description}")
+
+    if user_skills and system_skills:
+        console.print()
+
+    if system_skills:
+        console.print(f"[bold]Built-in Skills[/bold] ({len(system_skills)}):")
+        for skill in system_skills:
+            console.print(f"  [cyan]{skill.name}[/cyan] - {skill.description}")
+
+    console.print(f"\n[dim]User skills folder:[/dim] [green]{_shorten_path(str(USER_SKILLS_DIR))}[/green]")
     console.print()
 
 

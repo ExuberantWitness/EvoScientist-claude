@@ -257,14 +257,14 @@ class TestStepModel:
 
 class TestStepWorkspace:
     def test_returns_mode_and_empty_workdir(self):
-        """Test workspace step with no custom directory."""
+        """Test workspace step with no custom directory (user keeps cwd default)."""
         from EvoScientist.config.onboard import _step_workspace
 
         config = EvoScientistConfig()
 
         with patch("EvoScientist.config.onboard.questionary") as mock_q:
             mock_q.select.return_value.ask.return_value = "daemon"
-            mock_q.confirm.return_value.ask.return_value = False  # No custom dir
+            mock_q.text.return_value.ask.return_value = ""  # Keep default (empty = use cwd)
             result = _step_workspace(config)
 
         assert result == ("daemon", "")
@@ -277,7 +277,6 @@ class TestStepWorkspace:
 
         with patch("EvoScientist.config.onboard.questionary") as mock_q:
             mock_q.select.return_value.ask.return_value = "run"
-            mock_q.confirm.return_value.ask.return_value = True  # Use custom dir
             mock_q.text.return_value.ask.return_value = "/custom/path"
             result = _step_workspace(config)
 
@@ -686,10 +685,10 @@ class TestRunOnboard:
                 "",  # Tavily key (keep current)
             ]
             mock_q.confirm.return_value.ask.side_effect = [
-                False,  # Custom workdir
                 True,  # Save config
             ]
             mock_q.text.return_value.ask.side_effect = [
+                "",  # Workspace directory (empty = use cwd)
                 "3",  # Max concurrent
                 "3",  # Max iterations
             ]
@@ -735,10 +734,13 @@ class TestRunOnboard:
             ]
             mock_q.password.return_value.ask.side_effect = ["", ""]
             mock_q.confirm.return_value.ask.side_effect = [
-                False,  # Custom workdir
                 False,  # Save config - NO
             ]
-            mock_q.text.return_value.ask.side_effect = ["3", "3"]
+            mock_q.text.return_value.ask.side_effect = [
+                "",  # Workspace directory (empty = use cwd)
+                "3",  # Max concurrent
+                "3",  # Max iterations
+            ]
             mock_q.checkbox.return_value.ask.return_value = []  # Skills: skip
 
             result = run_onboard(skip_validation=True)

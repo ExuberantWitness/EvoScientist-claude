@@ -644,13 +644,15 @@ def _step_workspace(config: EvoScientistConfig) -> tuple[str, str]:
         Tuple of (mode, workdir).
     """
     # Mode selection
+    cwd = os.getcwd()
+    cwd_short = os.path.basename(cwd) or cwd
     mode_choices = [
         Choice(
-            title="Daemon (persistent workspace ./workspace/)",
+            title="Daemon (persistent workspace)",
             value="daemon",
         ),
         Choice(
-            title="Run (isolated per-session ./workspace/runs/<timestamp>/)",
+            title="Run (isolated per-session)",
             value="run",
         ),
     ]
@@ -668,27 +670,16 @@ def _step_workspace(config: EvoScientistConfig) -> tuple[str, str]:
         raise KeyboardInterrupt()
 
     # Custom workdir (optional)
-    use_custom = questionary.confirm(
-        "Use custom workspace directory? (default: ./workspace/)",
-        default=bool(config.default_workdir),
+    current_default = config.default_workdir or ""
+    workdir = questionary.text(
+        f"Workspace directory (Enter to use ./{cwd_short}/):",
+        default=current_default,
         style=WIZARD_STYLE,
         qmark=QMARK,
     ).ask()
-
-    if use_custom is None:
+    if workdir is None:
         raise KeyboardInterrupt()
-
-    workdir = ""
-    if use_custom:
-        workdir = questionary.text(
-            "Workspace directory path:",
-            default=config.default_workdir or "",
-            style=WIZARD_STYLE,
-            qmark=QMARK,
-        ).ask()
-        if workdir is None:
-            raise KeyboardInterrupt()
-        workdir = workdir.strip()
+    workdir = workdir.strip()
 
     return mode, workdir
 

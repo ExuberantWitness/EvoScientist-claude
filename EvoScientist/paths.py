@@ -18,8 +18,8 @@ def _env_path(key: str) -> Path | None:
     return _expand(value)
 
 
-# Workspace root: directly under cwd (no hidden .evoscientist layer)
-WORKSPACE_ROOT = _env_path("EVOSCIENTIST_WORKSPACE_DIR") or (Path.cwd() / "workspace")
+# Workspace root: current working directory by default (user's project dir)
+WORKSPACE_ROOT = _env_path("EVOSCIENTIST_WORKSPACE_DIR") or Path.cwd()
 
 RUNS_DIR = _env_path("EVOSCIENTIST_RUNS_DIR") or (WORKSPACE_ROOT / "runs")
 MEMORY_DIR = _env_path("EVOSCIENTIST_MEMORY_DIR") or (WORKSPACE_ROOT / "memory")
@@ -27,8 +27,12 @@ USER_SKILLS_DIR = _env_path("EVOSCIENTIST_SKILLS_DIR") or (WORKSPACE_ROOT / "ski
 
 
 def ensure_dirs() -> None:
-    """Create runtime directories if they do not exist."""
-    for path in (WORKSPACE_ROOT, RUNS_DIR, MEMORY_DIR, USER_SKILLS_DIR):
+    """Create runtime subdirectories (memory, skills) if they do not exist.
+
+    Does NOT create the workspace root itself — it should already exist
+    (either the user's cwd or a directory they specified).
+    """
+    for path in (MEMORY_DIR, USER_SKILLS_DIR):
         path.mkdir(parents=True, exist_ok=True)
 
 
