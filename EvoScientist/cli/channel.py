@@ -192,7 +192,7 @@ def _cmd_channel(args: str, agent: Any, thread_id: str) -> None:
 
     # Read send_thinking preference from config
     from ..config import load_config as _load_config
-    send_thinking = _load_config().imessage_send_thinking
+    send_thinking = _load_config().channel_send_thinking
 
     server = IMessageServer(
         config,

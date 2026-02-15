@@ -542,7 +542,7 @@ def display_final_results(
 
     if state.response_text:
         # Strip trailing standalone "..." lines
-        clean_response = state.response_text.rstrip()
+        clean_response = state.response_text.strip()
         while clean_response.endswith("\n...") or clean_response.rstrip() == "...":
             clean_response = clean_response.rstrip().removesuffix("...").rstrip()
         console.print()
@@ -721,7 +721,7 @@ def _run_streaming(
             show_tools=True,
         )
 
-    return state.response_text or ""
+    return (state.response_text or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -803,11 +803,11 @@ async def _astream_to_console(
 
     # 4) Response
     if state.response_text:
-        clean = state.response_text.rstrip()
+        clean = state.response_text.strip()
         while clean.endswith("\n...") or clean.rstrip() == "...":
             clean = clean.rstrip().removesuffix("...").rstrip()
         console.print()
         console.print(Markdown(clean or state.response_text))
         console.print()
 
-    return state.response_text or ""
+    return (state.response_text or "").strip()
