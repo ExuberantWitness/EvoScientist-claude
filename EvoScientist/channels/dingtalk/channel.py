@@ -21,6 +21,7 @@ TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
 SEND_URL = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"
 MEDIA_SEND_URL = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"
 MEDIA_UPLOAD_URL = "https://oapi.dingtalk.com/media/upload"
+FILE_DOWNLOAD_URL = "https://api.dingtalk.com/v1.0/robot/messageFiles/download"
 
 
 @dataclass
@@ -67,6 +68,23 @@ class DingTalkChannel(Channel, WebSocketMixin, TokenMixin):
         resp = await self._http_client.post(url, json=body, headers=headers)
         return resp.json()
 
+    async def _resolve_download_code(self, download_code: str) -> str | None:
+        """Exchange a DingTalk downloadCode for a real download URL."""
+        try:
+            token = await self._ensure_token()
+            data = await self._api_post(
+                FILE_DOWNLOAD_URL,
+                {"downloadCode": download_code, "robotCode": self.config.client_id},
+                headers={"x-acs-dingtalk-access-token": token},
+            )
+            url = data.get("downloadUrl") or ""
+            if url:
+                return url
+            logger.warning(f"DingTalk downloadCode resolve failed: {data}")
+        except Exception as e:
+            logger.warning(f"DingTalk downloadCode resolve error: {e}")
+        return None
+
     # ── WebSocketMixin ────────────────────────────────────────────
 
     async def _get_ws_url(self) -> str:
@@ -103,19 +121,67 @@ class DingTalkChannel(Channel, WebSocketMixin, TokenMixin):
         payload = json.loads(payload) if isinstance(payload, str) else payload
         text_obj = payload.get("text", {})
         content = (text_obj.get("content", "") if isinstance(text_obj, dict) else str(text_obj)).strip()
-        content = content or payload.get("content", "").strip()
         if not content:
-            return
+            raw_content = payload.get("content", "")
+            content = raw_content.strip() if isinstance(raw_content, str) else ""
 
         # Download attachments if present
         annotations: list[str] = []
         media_paths: list[str] = []
+
+        # DingTalk file/image messages may put download info in
+        # payload["content"] (as a dict) instead of in a dedicated
+        # "fileContent"/"imageContent" key.
+        raw_content_obj = payload.get("content")
+        if isinstance(raw_content_obj, dict) and raw_content_obj not in [
+            payload.get(k) for k in ("imageContent", "fileContent", "videoContent", "audioContent")
+        ]:
+            msg_type = payload.get("msgtype") or payload.get("msgType") or ""
+            media_label = msg_type or "file"
+            file_size = raw_content_obj.get("fileSize") or raw_content_obj.get("downloadSize") or 0
+            file_name = raw_content_obj.get("fileName") or raw_content_obj.get("name") or f"dingtalk_{msg_type}"
+            download_code = raw_content_obj.get("downloadCode") or ""
+            download_url = raw_content_obj.get("downloadUrl") or ""
+            # downloadCode is NOT a URL — resolve it via DingTalk API first
+            if download_code and not download_code.startswith("http"):
+                resolved = await self._resolve_download_code(download_code)
+                if resolved:
+                    download_url = resolved
+            elif download_code:
+                download_url = download_code
+            if download_url:
+                try:
+                    dl_token = await self._ensure_token()
+                    dl_headers = {"x-acs-dingtalk-access-token": dl_token}
+                except Exception:
+                    dl_headers = None
+                local, ann = await self._download_attachment(
+                    download_url, f"dingtalk_{file_name}",
+                    headers=dl_headers,
+                    file_size=int(file_size) if file_size else None,
+                )
+                if local:
+                    media_paths.append(local)
+                if ann:
+                    ann = ann.replace("[attachment:", f"[{media_label}:")
+                    annotations.append(ann)
+            elif file_name:
+                annotations.append(f"[{media_label}: {file_name}]")
+
         for att_key in ("imageContent", "fileContent", "videoContent", "audioContent"):
             att = payload.get(att_key)
             if att and isinstance(att, dict):
                 file_size = att.get("fileSize") or att.get("downloadSize") or 0
                 file_name = att.get("fileName", att_key)
-                download_url = att.get("downloadCode") or att.get("downloadUrl") or ""
+                download_code = att.get("downloadCode") or ""
+                download_url = att.get("downloadUrl") or ""
+                # Resolve downloadCode via API if it's not a URL
+                if download_code and not download_code.startswith("http"):
+                    resolved = await self._resolve_download_code(download_code)
+                    if resolved:
+                        download_url = resolved
+                elif download_code:
+                    download_url = download_code
                 # DingTalk audioContent is voice messages
                 media_label = "voice" if att_key == "audioContent" else att_key
                 if download_url and (self.config.include_attachments if hasattr(self.config, 'include_attachments') else True):
@@ -141,6 +207,9 @@ class DingTalkChannel(Channel, WebSocketMixin, TokenMixin):
                         annotations.append(too_large)
                     else:
                         annotations.append(f"[{media_label}: {file_name}]")
+
+        if not content and not media_paths and not annotations:
+            return
 
         sender_id = payload.get("senderStaffId") or payload.get("senderId", "")
         conv_id = payload.get("conversationId", "")

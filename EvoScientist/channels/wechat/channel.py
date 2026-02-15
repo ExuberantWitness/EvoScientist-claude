@@ -316,6 +316,7 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
         except Exception:
             return web.Response(status=400)
 
+        logger.info(f"WeChat callback POST received, body length={len(body)}")
         xml_data = parse_xml(body)
 
         # If encrypted, decrypt first
@@ -350,6 +351,8 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
         content = xml_data.get("Content", "")
         msg_id = xml_data.get("MsgId", "")
         create_time = xml_data.get("CreateTime", "")
+
+        logger.info(f"WeChat message received: type={msg_type}, from={from_user}, id={msg_id}, keys={list(xml_data.keys())}")
 
         if not from_user:
             return
@@ -431,6 +434,21 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
             lat = xml_data.get("Location_X", "")
             lon = xml_data.get("Location_Y", "")
             text = f"[位置] {label} ({lat}, {lon})"
+        elif msg_type == "file":
+            media_id = xml_data.get("MediaId", "")
+            file_name = xml_data.get("Title", f"wechat_file_{msg_id}")
+            logger.info(f"WeChat file message: name={file_name}, media_id={media_id!r}, keys={list(xml_data.keys())}")
+            if media_id:
+                local, ann = await self._download_wechat_media(
+                    media_id, f"wechat_file_{msg_id}_{file_name}",
+                )
+                logger.info(f"WeChat file download result: local={local}, ann={ann}")
+                if local:
+                    media_paths.append(local)
+                if ann:
+                    annotations.append(ann)
+            if not media_paths:
+                annotations.append(f"[file: {file_name}]")
         elif msg_type == "link":
             title = xml_data.get("Title", "")
             description = xml_data.get("Description", "")

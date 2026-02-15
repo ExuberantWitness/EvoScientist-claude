@@ -275,7 +275,7 @@ class InboundConsumer:
                     await channel.start_typing(msg.chat_id)
 
                 async for event in _timeout_aiter(
-                    stream_agent_events(self.agent, msg.content, thread_id),
+                    stream_agent_events(self.agent, msg.content, thread_id, media=msg.media or None),
                     self._inference_timeout,
                 ):
                     event_type = event.get("type")

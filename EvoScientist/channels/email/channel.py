@@ -124,14 +124,24 @@ class EmailChannel(Channel, PollingMixin):
                 attachments = []
                 if msg.is_multipart():
                     for part in msg.walk():
-                        content_disp = str(part.get("Content-Disposition", ""))
+                        content_disp = part.get("Content-Disposition") or ""
                         content_type = part.get_content_type() or ""
-                        is_attachment = "attachment" in content_disp
+                        is_attachment = "attachment" in content_disp.lower()
                         is_inline_image = (
-                            "inline" in content_disp
+                            "inline" in content_disp.lower()
                             and content_type.startswith("image/")
                         )
-                        if is_attachment or is_inline_image:
+                        # Also detect non-text parts with a filename but no
+                        # Content-Disposition header (common for PDFs, docs,
+                        # etc. sent by some email clients).
+                        is_named_file = (
+                            not is_attachment
+                            and not is_inline_image
+                            and part.get_filename()
+                            and not content_type.startswith("multipart/")
+                            and not content_type.startswith("text/")
+                        )
+                        if is_attachment or is_inline_image or is_named_file:
                             filename = part.get_filename() or "attachment"
                             filename = _decode_hdr(filename)
                             payload_data = part.get_payload(decode=True)
