@@ -24,6 +24,25 @@ from .targets import (
 logger = logging.getLogger(__name__)
 
 
+class _IMessageAllowListMiddleware:
+    """Custom allow-list middleware for iMessage's rich sender filtering.
+
+    Supports chat_id/chat_guid matching, wildcard, and normalized
+    phone/email matching — logic that the generic AllowListMiddleware
+    does not cover.
+    """
+
+    def __init__(self, channel: 'IMessageChannelRpc'):
+        self._channel = channel
+
+    async def process_inbound(self, raw, context):
+        chat_id = raw.metadata.get("chat_id")
+        chat_guid = raw.metadata.get("chat_guid")
+        if not self._channel._is_sender_allowed(raw.sender_id, chat_id, chat_guid):
+            return None
+        return raw
+
+
 @dataclass
 class IMessageConfig(BaseChannelConfig):
     """Configuration for iMessage channel."""
@@ -55,18 +74,18 @@ class IMessageChannelRpc(Channel):
 
     # ── Pipeline overrides ────────────────────────────────────────
 
-    def is_allowed(self, sender: str) -> bool:
-        # Rich filtering is handled in _build_inbound via _is_sender_allowed
-        return True
+    def _build_inbound_middlewares(self):
+        """Use iMessage-specific allow-list middleware.
 
-    def _build_inbound(self, raw):
-        """Override to apply iMessage's rich sender filtering."""
-        chat_id = raw.metadata.get("chat_id")
-        chat_guid = raw.metadata.get("chat_guid")
-        if not self._is_sender_allowed(raw.sender_id, chat_id, chat_guid):
-            logger.debug(f"Ignoring message from {raw.sender_id}")
-            return None
-        return super()._build_inbound(raw)
+        iMessage doesn't need MentionGating (always sets was_mentioned=True).
+        """
+        from ..middleware import DedupMiddleware, GroupHistoryMiddleware
+        middlewares = []
+        middlewares.append(DedupMiddleware())
+        middlewares.append(_IMessageAllowListMiddleware(self))
+        if self.capabilities.groups:
+            middlewares.append(GroupHistoryMiddleware())
+        return middlewares
 
     # ── Incoming message handling ─────────────────────────────────
 

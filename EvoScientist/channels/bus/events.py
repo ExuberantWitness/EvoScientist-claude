@@ -21,6 +21,8 @@ class InboundMessage:
     message_id: str = ""
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    is_group: bool = False
+    was_mentioned: bool = True
 
     @property
     def sender(self) -> str:

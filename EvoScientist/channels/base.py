@@ -9,7 +9,6 @@ import asyncio
 import dataclasses
 import logging
 import re
-import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable as CallableABC
 from dataclasses import dataclass, field
@@ -291,10 +290,6 @@ class Channel(ChannelPlugin, ABC):
         self._message_ids: dict[str, str] = {}
         self._debounce_tasks: dict[str, asyncio.Task] = {}
 
-        # Deduplication
-        from .middleware import DedupCache
-        self._dedup = DedupCache()
-
         # Mention gating: "always" | "group" | "off"
         self.require_mention: str = getattr(config, "require_mention", "group")
 
@@ -312,9 +307,56 @@ class Channel(ChannelPlugin, ABC):
         # Per-chat send locks to prevent message reordering
         self._send_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-        # Group history buffer for context injection
-        from .middleware import GroupHistoryBuffer
-        self._group_history = GroupHistoryBuffer()
+        # Build inbound middleware pipeline
+        self._inbound_middlewares = self._build_inbound_middlewares()
+
+    def _build_inbound_middlewares(self) -> list:
+        """Build the inbound middleware chain from config and capabilities.
+
+        Middleware order:
+        1. DedupMiddleware — drop duplicates early
+        2. AllowListMiddleware — enforce sender/channel restrictions
+        3. PairingMiddleware — handle DM pairing (if applicable)
+        4. GroupHistoryMiddleware — buffer/inject group history
+        5. MentionGatingMiddleware — filter by mention policy
+        """
+        from .middleware import (
+            DedupMiddleware, AllowListMiddleware,
+            PairingMiddleware, GroupHistoryMiddleware, MentionGatingMiddleware,
+        )
+        middlewares = []
+        middlewares.append(DedupMiddleware())
+        # AllowList
+        allowed_senders = getattr(self.config, "allowed_senders", None)
+        allowed_channels = getattr(self.config, "allowed_channels", None)
+        if allowed_senders and not isinstance(allowed_senders, set):
+            allowed_senders = set(allowed_senders)
+        if allowed_channels and not isinstance(allowed_channels, set):
+            allowed_channels = set(allowed_channels)
+        middlewares.append(AllowListMiddleware(
+            allowed_senders=allowed_senders,
+            allowed_channels=allowed_channels,
+            dm_policy=self.dm_policy,
+        ))
+        # Pairing
+        if self.dm_policy == "pairing":
+            async def _send_pair(chat_id, text):
+                await self._send_chunk(chat_id, text, text, None, {})
+            middlewares.append(PairingMiddleware(
+                channel_name=self.name,
+                send_response_fn=_send_pair,
+                dm_policy=self.dm_policy,
+            ))
+        # GroupHistory
+        if self.capabilities.groups:
+            middlewares.append(GroupHistoryMiddleware())
+        # MentionGating
+        if self.capabilities.mentions:
+            middlewares.append(MentionGatingMiddleware(
+                require_mention=self.require_mention,
+                strip_fn=self._strip_mention,
+            ))
+        return middlewares
 
     @abstractmethod
     async def start(self) -> None:
@@ -721,8 +763,36 @@ class Channel(ChannelPlugin, ABC):
 
     # ── Inbound message pipeline ──────────────────────────────────────
 
+    def _raw_to_inbound(self, raw: RawIncoming) -> InboundMessage | None:
+        """Convert a RawIncoming to InboundMessage (pure transformation, no filtering).
+
+        Merges text + annotations into content, sets metadata.
+        Returns None only if there is no content and no media.
+        """
+        parts = []
+        if raw.text:
+            parts.append(raw.text)
+        parts.extend(raw.content_annotations)
+        content = "\n".join(p for p in parts if p)
+        if not content and not raw.media_files:
+            return None
+        meta = dict(raw.metadata)
+        meta.setdefault("chat_id", raw.chat_id)
+        return InboundMessage(
+            channel=self.name, sender_id=raw.sender_id, chat_id=raw.chat_id,
+            content=content or "[media only]", timestamp=raw.timestamp,
+            message_id=raw.message_id, media=raw.media_files, metadata=meta,
+            is_group=raw.is_group, was_mentioned=raw.was_mentioned,
+        )
+
     def _build_inbound(self, raw: RawIncoming) -> InboundMessage | None:
         """Build an ``InboundMessage`` from raw platform data.
+
+        .. deprecated::
+            This method is superseded by the middleware pipeline in
+            ``_enqueue_raw()``.  It is kept for backward compatibility
+            with tests that call it directly.  New code should use
+            ``_enqueue_raw()`` instead.
 
         Performs mention gating, allow-list checks, and merges text +
         annotations into a single content string.  Returns ``None`` if
@@ -792,44 +862,28 @@ class Channel(ChannelPlugin, ABC):
         )
 
     async def _enqueue_raw(self, raw: RawIncoming) -> None:
-        """Build an InboundMessage from *raw* and put it on the queue.
+        """Run *raw* through the inbound middleware pipeline, convert to
+        InboundMessage, and put it on the queue.
 
         Convenience method for subclass ``_on_message`` handlers.
-        Stores non-mentioned group messages in history buffer and injects
-        context when the bot is mentioned.
         """
-        from .middleware import HistoryEntry
-
-        # Store all group messages in history buffer BEFORE mention gating
-        if raw.is_group:
-            ts = raw.timestamp.timestamp() if hasattr(raw.timestamp, 'timestamp') else time.time()
-            if not raw.was_mentioned:
-                # Store for context, _build_inbound will return None via _should_process
-                self._group_history.add(raw.chat_id, HistoryEntry(
-                    sender_id=raw.sender_id,
-                    text=raw.text,
-                    timestamp=ts,
-                    message_id=raw.message_id,
-                ))
-            else:
-                # Inject context before the current message
-                context = self._group_history.format_context(raw.chat_id)
-                if context:
-                    raw = dataclasses.replace(
-                        raw,
-                        text=context + "\n\n[Current message - respond to this]\n" + raw.text,
-                    )
-                self._group_history.clear(raw.chat_id)
-
-        msg = self._build_inbound(raw)
-        if msg is not None:
-            # Fire-and-forget ACK reaction
-            if raw.message_id:
-                try:
-                    await self._send_ack_reaction(raw.chat_id, raw.message_id)
-                except Exception:
-                    pass
-            await self._queue.put(msg)
+        context: dict = {"channel": self}
+        current: RawIncoming | None = raw
+        for mw in self._inbound_middlewares:
+            if current is None:
+                return
+            current = await mw.process_inbound(current, context)
+        if current is None:
+            return
+        msg = self._raw_to_inbound(current)
+        if msg is None:
+            return
+        if raw.message_id:
+            try:
+                await self._send_ack_reaction(raw.chat_id, raw.message_id)
+            except Exception:
+                pass
+        await self._queue.put(msg)
 
     # ── Bus integration ──────────────────────────────────────────────
 
@@ -838,22 +892,16 @@ class Channel(ChannelPlugin, ABC):
         self._bus = bus
 
     async def queue_message(self, msg: InboundMessage) -> None:
-        """Buffer *msg* with debounce + dedup, then publish to bus."""
+        """Buffer *msg* with debounce, then publish to bus."""
         sender = msg.sender_id
-
-        # Deduplication
-        mid = msg.message_id
-        if mid and self._dedup.is_duplicate(mid):
-            _logger.debug(f"Dedup: skipping duplicate message {mid}")
-            return
 
         if sender not in self._message_buffers:
             self._message_buffers[sender] = []
             self._message_metadata[sender] = msg.metadata
             self._message_media[sender] = []
         self._message_buffers[sender].append(msg.content)
-        if mid:
-            self._message_ids[sender] = mid
+        if msg.message_id:
+            self._message_ids[sender] = msg.message_id
         if msg.media:
             self._message_media[sender].extend(msg.media)
 

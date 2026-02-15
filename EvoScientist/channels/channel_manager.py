@@ -248,17 +248,6 @@ class AccountManager:
 from .middleware import (
     InboundMiddleware,
     OutboundMiddlewareBase,
-    DedupMiddleware,
-    AllowListMiddleware,
-    MentionGatingMiddleware,
-    GroupHistoryMiddleware,
-    DebounceMiddleware,
-    AckReactionMiddleware,
-    FormattingMiddleware,
-    ChunkingMiddleware,
-    RetryMiddleware,
-    TypingMiddleware,
-    PairingMiddleware,
 )
 
 
@@ -314,67 +303,16 @@ class OutboundPipeline:
         return current
 
 
-def build_inbound_pipeline(
-    plugin: ChannelPlugin,
-    config: Any,
-) -> InboundPipeline:
-    """Auto-assemble inbound pipeline based on plugin capabilities.
-
-    Middleware order:
-    1. DedupMiddleware — drop duplicates early
-    2. AllowListMiddleware — enforce sender/channel restrictions
-    3. PairingMiddleware — handle DM pairing (if applicable)
-    4. GroupHistoryMiddleware — buffer/inject group history
-    5. MentionGatingMiddleware — filter by mention policy
-    """
-    caps = plugin.capabilities
-    middlewares: list[InboundMiddleware] = []
-
-    middlewares.append(DedupMiddleware())
-
-    allowed_senders = getattr(config, "allowed_senders", None)
-    allowed_channels = getattr(config, "allowed_channels", None)
-    dm_policy = getattr(config, "dm_policy", "allowlist")
-    if allowed_senders:
-        allowed_senders = set(allowed_senders) if not isinstance(allowed_senders, set) else allowed_senders
-    if allowed_channels:
-        allowed_channels = set(allowed_channels) if not isinstance(allowed_channels, set) else allowed_channels
-    middlewares.append(AllowListMiddleware(
-        allowed_senders=allowed_senders,
-        allowed_channels=allowed_channels,
-        dm_policy=dm_policy,
-    ))
-
-    if plugin.pairing is not None:
-        middlewares.append(PairingMiddleware(
-            channel_name=plugin.id,
-            dm_policy=dm_policy,
-        ))
-
-    if caps.groups:
-        middlewares.append(GroupHistoryMiddleware())
-
-    if caps.mentions:
-        strip_fn = None
-        if plugin.mentions is not None:
-            strip_fn = lambda text, _adapter=plugin.mentions: _adapter.strip_mentions(text, {})  # noqa: E731
-        require_mention = getattr(config, "require_mention", "group")
-        middlewares.append(MentionGatingMiddleware(
-            require_mention=require_mention,
-            strip_fn=strip_fn,
-        ))
-
-    return InboundPipeline(plugin, middlewares)
-
-
 def build_outbound_pipeline(
     plugin: ChannelPlugin,
     config: Any,
 ) -> OutboundPipeline:
-    """Auto-assemble outbound pipeline based on plugin capabilities."""
-    caps = plugin.capabilities
+    """Auto-assemble outbound pipeline based on plugin capabilities.
+
+    FormattingMiddleware has been removed — Channel.send() handles
+    formatting + chunking via _format_chunk() / _prepare_chunks().
+    """
     middlewares: list[OutboundMiddlewareBase] = []
-    middlewares.append(FormattingMiddleware(caps))
     return OutboundPipeline(plugin, middlewares)
 
 
@@ -672,7 +610,6 @@ class ChannelManager:
         self._health_providers: dict[str, Callable[[], dict]] = {}
         self._account_manager = AccountManager()
         # Pipelines (built during registration)
-        self._inbound_pipelines: dict[str, InboundPipeline] = {}
         self._outbound_pipelines: dict[str, OutboundPipeline] = {}
         # Shared webhook
         self._shared_webhook_port = shared_webhook_port
@@ -742,7 +679,6 @@ class ChannelManager:
         if channel.config_adapter is not None:
             self._account_manager.register_plugin(channel)
         if config is not None:
-            self._inbound_pipelines[name] = build_inbound_pipeline(channel, config)
             self._outbound_pipelines[name] = build_outbound_pipeline(channel, config)
         logger.info(f"Registered channel: {name} (slots: {channel.filled_slots()})")
         return channel
@@ -1086,7 +1022,6 @@ class ChannelManager:
                     "total_successes": health.total_successes,
                 },
                 "plugin_slots": channel.filled_slots(),
-                "has_inbound_pipeline": name in self._inbound_pipelines,
                 "has_outbound_pipeline": name in self._outbound_pipelines,
             }
         return result

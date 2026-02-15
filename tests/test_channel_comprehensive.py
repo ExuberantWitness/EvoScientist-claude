@@ -64,6 +64,7 @@ class _FakeConfig:
     allowed_channels: list | None = None
     proxy: str | None = None
     require_mention: str = "group"
+    dm_policy: str = "allowlist"
 
 
 class StubChannel(Channel):
@@ -618,6 +619,64 @@ class TestChannelBuildInbound:
         assert msg.metadata["extra"] == "data"
 
 
+class TestInboundPipeline:
+    """Tests for the new middleware-based inbound pipeline in _enqueue_raw()."""
+
+    def test_pipeline_dedup(self):
+        """Duplicate messages are dropped by the pipeline."""
+        async def _test():
+            ch = StubChannel()
+            raw = RawIncoming(sender_id="u1", chat_id="c1", text="hello", message_id="m1")
+            await ch._enqueue_raw(raw)
+            await ch._enqueue_raw(raw)
+            assert ch._queue.qsize() == 1
+        _run(_test())
+
+    def test_pipeline_allowlist_blocks(self):
+        """Non-allowed senders are blocked by the pipeline."""
+        async def _test():
+            cfg = _FakeConfig(allowed_senders=["alice"])
+            ch = StubChannel(cfg)
+            raw = RawIncoming(sender_id="eve", chat_id="c1", text="hack")
+            await ch._enqueue_raw(raw)
+            assert ch._queue.qsize() == 0
+        _run(_test())
+
+    def test_pipeline_allowlist_passes(self):
+        """Allowed senders pass through the pipeline."""
+        async def _test():
+            cfg = _FakeConfig(allowed_senders=["alice"])
+            ch = StubChannel(cfg)
+            raw = RawIncoming(sender_id="alice", chat_id="c1", text="hello")
+            await ch._enqueue_raw(raw)
+            assert ch._queue.qsize() == 1
+        _run(_test())
+
+    def test_pipeline_channel_allowlist_blocks(self):
+        """Non-allowed channels are blocked by the pipeline."""
+        async def _test():
+            cfg = _FakeConfig(allowed_channels=["c1"])
+            ch = StubChannel(cfg)
+            raw = RawIncoming(sender_id="u1", chat_id="c2", text="hello")
+            await ch._enqueue_raw(raw)
+            assert ch._queue.qsize() == 0
+        _run(_test())
+
+    def test_pipeline_inbound_has_is_group(self):
+        """InboundMessage carries is_group and was_mentioned from RawIncoming."""
+        async def _test():
+            ch = StubChannel()
+            raw = RawIncoming(
+                sender_id="u1", chat_id="c1", text="hello",
+                is_group=True, was_mentioned=True,
+            )
+            await ch._enqueue_raw(raw)
+            msg = await ch._queue.get()
+            assert msg.is_group is True
+            assert msg.was_mentioned is True
+        _run(_test())
+
+
 class TestChannelDebounce:
 
     def test_single_message_processed(self):
@@ -670,23 +729,19 @@ class TestChannelDebounce:
         _run(_test())
 
     def test_dedup_skips_duplicate(self):
+        """Dedup is now handled in _enqueue_raw pipeline, not queue_message."""
         async def _test():
-            bus = MessageBus()
             ch = StubChannel()
-            ch.set_bus(bus)
-            ch.initial_debounce = 0.05
 
-            msg = InboundMessage(
-                channel="stub", sender_id="u1", chat_id="c1",
-                content="hello", message_id="m1",
-                metadata={"chat_id": "c1"},
+            raw = RawIncoming(
+                sender_id="u1", chat_id="c1", text="hello",
+                message_id="m1",
             )
-            await ch.queue_message(msg)
-            await ch.queue_message(msg)  # duplicate
-            await asyncio.sleep(0.2)
+            await ch._enqueue_raw(raw)
+            await ch._enqueue_raw(raw)  # duplicate
 
-            # Only one should be processed (dedup catches second)
-            assert bus.inbound.qsize() == 1
+            # Only one should be enqueued (dedup catches second)
+            assert ch._queue.qsize() == 1
         _run(_test())
 
     def test_debounce_metadata_from_first_message(self):
