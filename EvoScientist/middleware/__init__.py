@@ -10,10 +10,12 @@ from .memory import (
     ExtractedMemory,
     create_memory_middleware,
 )
+from .tool_error_handler import ToolErrorHandlerMiddleware
 
 __all__ = [
     "EvoMemoryMiddleware",
     "EvoMemoryState",
     "ExtractedMemory",
+    "ToolErrorHandlerMiddleware",
     "create_memory_middleware",
 ]
