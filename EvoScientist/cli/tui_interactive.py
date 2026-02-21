@@ -271,7 +271,7 @@ def run_textual_interactive(
         ) -> None:
             super().__init__()
             self._agent = agent
-            self._thread_id = thread_id_value
+            self._conversation_tid = thread_id_value
             self._workspace_dir = workspace
             self._checkpointer = checkpointer
             self._channel_send_thinking = channel_send_thinking_value
@@ -312,10 +312,10 @@ def run_textual_interactive(
                 self._append_system(self._resume_warning, style="yellow")
             elif self._resumed:
                 self._append_system(
-                    f"Resumed session: {self._thread_id}", style="green",
+                    f"Resumed session: {self._conversation_tid}", style="green",
                 )
                 self.call_later(
-                    lambda: asyncio.ensure_future(self._render_history(self._thread_id))
+                    lambda: asyncio.ensure_future(self._render_history(self._conversation_tid))
                 )
             # Auto-start channels
             self._start_channels()
@@ -331,7 +331,7 @@ def run_textual_interactive(
                 if cfg and cfg.channel_enabled and not _channels_is_running():
                     _auto_start_channel(
                         self._agent,
-                        self._thread_id,
+                        self._conversation_tid,
                         cfg,
                         send_thinking=self._channel_send_thinking,
                     )
@@ -504,7 +504,7 @@ def run_textual_interactive(
                 async for event in stream_agent_events(
                     self._agent,
                     user_text,
-                    self._thread_id,
+                    self._conversation_tid,
                     metadata=metadata,
                 ):
                     event_type = state.handle_event(event)
@@ -1067,7 +1067,7 @@ def run_textual_interactive(
             if cmd == "/current":
                 from .. import paths
 
-                self._append_system(f"Thread: {self._thread_id}", style="dim")
+                self._append_system(f"Thread: {self._conversation_tid}", style="dim")
                 if self._workspace_dir:
                     self._append_system(
                         f"Workspace: {_shorten_path(self._workspace_dir)}",
@@ -1089,17 +1089,17 @@ def run_textual_interactive(
 
                 if not workspace_fixed:
                     self._workspace_dir = create_session_workspace(run_name)
-                self._thread_id = generate_thread_id()
+                self._conversation_tid = generate_thread_id()
                 self._agent = load_agent(
                     workspace_dir=self._workspace_dir,
                     checkpointer=self._checkpointer,
                 )
                 if _channels_is_running():
                     _ch_mod._cli_agent = self._agent
-                    _ch_mod._cli_thread_id = self._thread_id
+                    _ch_mod._cli_thread_id = self._conversation_tid
                 self._render_welcome()
                 self._render_status()
-                self._append_system(f"New session: {self._thread_id}", style="green")
+                self._append_system(f"New session: {self._conversation_tid}", style="green")
                 return
 
             if cmd == "/clear":
@@ -1182,7 +1182,7 @@ def run_textual_interactive(
             table.add_column("Last Used", style="dim")
             for thread in threads:
                 thread_id_value = thread["thread_id"]
-                marker = " *" if thread_id_value == self._thread_id else ""
+                marker = " *" if thread_id_value == self._conversation_tid else ""
                 table.add_row(
                     f"{thread_id_value}{marker}",
                     thread.get("preview", "") or "",
@@ -1245,14 +1245,14 @@ def run_textual_interactive(
             if restored_workspace:
                 self._workspace_dir = restored_workspace
 
-            self._thread_id = resolved
+            self._conversation_tid = resolved
             self._agent = load_agent(
                 workspace_dir=self._workspace_dir,
                 checkpointer=self._checkpointer,
             )
             if _channels_is_running():
                 _ch_mod._cli_agent = self._agent
-                _ch_mod._cli_thread_id = self._thread_id
+                _ch_mod._cli_thread_id = self._conversation_tid
             self._render_welcome()
             self._render_status()
             self._append_system(f"Resumed session: {resolved}", style="green")
@@ -1267,7 +1267,7 @@ def run_textual_interactive(
             if not resolved:
                 return
 
-            if resolved == self._thread_id:
+            if resolved == self._conversation_tid:
                 self._append_system(
                     "Cannot delete the current session.",
                     style="yellow",
@@ -1614,14 +1614,14 @@ def run_textual_interactive(
                             results.append((ct, False, str(e)))
             else:
                 _ch_mod._cli_agent = self._agent
-                _ch_mod._cli_thread_id = self._thread_id
+                _ch_mod._cli_thread_id = self._conversation_tid
                 original = app_config.channel_enabled
                 app_config.channel_enabled = channel_type
                 try:
                     _start_channels_bus_mode(
                         app_config,
                         self._agent,
-                        self._thread_id,
+                        self._conversation_tid,
                         send_thinking=self._channel_send_thinking,
                     )
                     results = [
@@ -1711,7 +1711,7 @@ def run_textual_interactive(
             welcome = self.query_one("#welcome", Static)
             welcome.update(
                 _build_welcome_banner(
-                    thread_id=self._thread_id,
+                    thread_id=self._conversation_tid,
                     workspace_dir=self._workspace_dir,
                     mode=mode,
                     model=model,
