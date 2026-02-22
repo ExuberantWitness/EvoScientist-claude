@@ -9,14 +9,28 @@
 
 <div align="center">
 
-[![PyPI](https://img.shields.io/badge/PyPI-v0.0.1-3da9fc?style=for-the-badge&logo=python&logoColor=3da9fc)](https://pypi.org/project/EvoScientist/)
-[![Project Page](https://img.shields.io/badge/Project-Page-ff8e3c?style=for-the-badge&logo=googlelens&logoColor=ff8e3c)]()
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-<!-- [![arXiv](https://img.shields.io/badge/arXiv-xxxx.xxxx-b31b1b?style=for-the-badge&logo=arxiv&logoColor=b31b1b)]() -->
-<!-- [![Gradio Demo](https://img.shields.io/badge/Gradio-Online_Demo-FFCC00?style=for-the-badge&logo=gradio&logoColor=yellow&labelColor=grey)]()
-[![Evaluation Split](https://img.shields.io/badge/HF-Test_Dataset-AECBFA?style=for-the-badge&logo=huggingface&logoColor=FFCC00&labelColor=grey)]() -->
+<a href="https://pypi.org/project/EvoScientist/"><picture>
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/badge-pypi-dark.svg">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/badge-pypi-light.svg">
+  <img alt="PyPI v0.0.1" src=".github/assets/badge-pypi-dark.svg" height="28">
+</picture></a>&nbsp;
+<a href="https://evoscientist.ai/"><picture>
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/badge-website-dark.svg">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/badge-website-light.svg">
+  <img alt="Website" src=".github/assets/badge-website-dark.svg" height="28">
+</picture></a>&nbsp;
+<a href="https://github.com/langchain-ai/deepagents"><picture>
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/badge-framework-dark.svg">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/badge-framework-light.svg">
+  <img alt="Framework DeepAgents" src=".github/assets/badge-framework-dark.svg" height="28">
+</picture></a>&nbsp;
+<a href="https://github.com/EvoScientist/EvoScientist/blob/main/LICENSE"><picture>
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/badge-license-dark.svg">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/badge-license-light.svg">
+  <img alt="License MIT" src=".github/assets/badge-license-dark.svg" height="28">
+</picture></a>
 
-<a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&width=435&lines=Towards+Self-Evolving+AI+Scientists+for+End-to-End+Scientific+Discovery" alt="Typing SVG" /></a>
+<a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Sans-Serif&pause=1000&color=64B5F6&center=true&vCenter=true&width=435&lines=Towards+Self-Evolving+AI+Scientists;Harness+Vibe-Driven+Research" alt="Typing SVG" /></a>
 
 </div>
 
