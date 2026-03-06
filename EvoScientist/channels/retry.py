@@ -13,7 +13,7 @@ T = TypeVar("T")
 
 @dataclass
 class RetryConfig:
-    """Configuration for retry behaviour."""
+    """Configuration for retry behavior."""
 
     attempts: int = 3
     min_delay_s: float = 0.3

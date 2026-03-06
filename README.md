@@ -40,7 +40,7 @@
 
 **EvoScientist aims to harness vibe research by enabling self-evolving AI scientists that autonomously explore, generate insights, and iteratively improve.
 It is designed to be opinionated and ready to use out of the box, offering a living research system that grows alongside evolving agent skills, toolsets, and memory bases.
-Going beyond traditional human-in-the-loop systems, EvoScientist introduces an AI-in-human’s-loop paradigm, where AI acts as a research buddy that co-evolves with human researchers and internalises scholarly taste and scientific judgement.**
+Going beyond traditional human-in-the-loop systems, EvoScientist introduces an AI-in-human’s-loop paradigm, where AI acts as a research buddy that co-evolves with human researchers and internalizes scholarly taste and scientific judgment.**
 
 <!-- <h3>Unified Control, Different Surfaces</h3>
 [TODO: Add a Demo to demonstrate the different interfaces (TUI, mobile) and how they connect to the same underlying proxy system.] -->
@@ -59,14 +59,16 @@ Going beyond traditional human-in-the-loop systems, EvoScientist introduces an A
 - [x] 🖥️ TUI powered by Rich and Textual
 - [x] 📻 EvoMemory v1.0 shipped
 - [x] ⚒️ 200+ predefined skills built in
+- [x] 🧩 Built-in research-lifecycle skills shipped
+- [ ] 📺 Web app with workspace UI
 - [ ] 📑 Technical report on the way
-- [ ] 📺 Demo and tutorial in the works
+- [ ] 📹 Demo and tutorial in the works
 - [ ] 📊 Benchmark suite to be released
 - [ ] ⏰ Scheduled tasks for the core system planned
-- [ ] 🧩 More built-in skills and integrations ahead
 
 ## 🔥 News
-- **[27 Feb 2026]** ⛳ EvoScientist officially debuts!
+- **[?? Mar 2026]** ⛳ Technical Report is live! [**Check it out**](https://arxiv.org/abs/1234.56780) 👈
+- **[?? Mar 2026]** 🚀 [**EvoScientist**](https://github.com/EvoScientist/EvoScientist) officially debuts!
 
 ## 📖 Table of Contents
 
@@ -381,7 +383,7 @@ Jan Piotrowski, Wiktor Cupiał, Yuyue Zhao, Xinhao Yi, Jakub Kaliski, Jakub Fili
 
 > *Xiaoyi DeepResearch Team* and the wider open-source community contribute to this project.
 
-For any enquiries or collaboration opportunities, please contact: [**EvoScientist.ai@gmail.com**](mailto:evoscientist.ai@gmail.com)
+For any inquiries or collaboration opportunities, please contact: [**EvoScientist.ai@gmail.com**](mailto:evoscientist.ai@gmail.com)
 
 <p align="right"><a href="#top">🔝Back to top</a></p>
 

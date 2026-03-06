@@ -33,7 +33,7 @@ async def _cancel_task(task: asyncio.Task) -> None:
 
     Suppresses ``CancelledError`` from the cancelled *task* but re-raises
     if the **current** task was itself cancelled (to avoid swallowing an
-    outer cancellation signal — required for correct behaviour on
+    outer cancellation signal — required for correct behavior on
     Python 3.12+ where ``_must_cancel`` no longer auto-re-delivers).
     """
     task.cancel()
@@ -65,7 +65,7 @@ class DedupCache:
     Entries expire after *ttl_seconds* and are pruned lazily on each
     lookup.  When the cache exceeds *max_size* entries it is trimmed
     down to *trim_to* by evicting the oldest entries.  Accessed entries
-    are moved to the end (LRU behaviour).
+    are moved to the end (LRU behavior).
     """
 
     def __init__(

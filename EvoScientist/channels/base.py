@@ -670,7 +670,7 @@ class Channel(ChannelPlugin, ABC):
         4. Rate-limit pattern match → ``_rate_limit_delay``.
         5. Default ``1.0`` s (generic transient-error retry).
 
-        Channels can customise behaviour declaratively via class attributes
+        Channels can customize behavior declaratively via class attributes
         ``_non_retryable_patterns``, ``_rate_limit_patterns``, and
         ``_rate_limit_delay``, or override this method entirely.
         """
