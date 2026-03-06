@@ -268,10 +268,9 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
             "analyzer_model": "<model-name>",
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "evals_run": eval_ids,
-            "runs_per_configuration": min(
-                (len(runs) for runs in results.values() if runs),
-                default=0,
-            )
+            "runs_per_configuration": {
+                config: len(runs) for config, runs in results.items() if runs
+            }
         },
         "runs": runs,
         "run_summary": run_summary,
@@ -279,6 +278,19 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
     }
 
     return benchmark
+
+
+def _format_runs_per_config(rpc) -> str:
+    """Format runs_per_configuration for display (handles both int and dict)."""
+    if isinstance(rpc, int):
+        return f"{rpc} runs each"
+    if isinstance(rpc, dict):
+        counts = sorted(set(rpc.values()))
+        if len(counts) == 1:
+            return f"{counts[0]} runs each"
+        parts = [f"{config}: {n}" for config, n in rpc.items()]
+        return ", ".join(parts)
+    return str(rpc)
 
 
 def generate_markdown(benchmark: dict) -> str:
@@ -298,7 +310,7 @@ def generate_markdown(benchmark: dict) -> str:
         "",
         f"**Model**: {metadata['executor_model']}",
         f"**Date**: {metadata['timestamp']}",
-        f"**Evals**: {', '.join(map(str, metadata['evals_run']))} ({metadata['runs_per_configuration']} runs each per configuration)",
+        f"**Evals**: {', '.join(map(str, metadata['evals_run']))} ({_format_runs_per_config(metadata['runs_per_configuration'])} per configuration)",
         "",
         "## Summary",
         "",

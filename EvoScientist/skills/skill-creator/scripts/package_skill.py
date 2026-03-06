@@ -71,9 +71,9 @@ def package_skill(skill_path, output_dir=None):
         print(f"❌ Error: SKILL.md not found in {skill_path}")
         return None
 
-    # Run validation before packaging
+    # Run validation before packaging (strict mode catches TODO placeholders)
     print("🔍 Validating skill...")
-    valid, message = validate_skill(skill_path)
+    valid, message = validate_skill(skill_path, strict=True)
     if not valid:
         print(f"❌ Validation failed: {message}")
         print("   Please fix the validation errors before packaging.")
@@ -113,22 +113,21 @@ def package_skill(skill_path, output_dir=None):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python utils/package_skill.py <path/to/skill-folder> [output-directory]")
-        print("\nExample:")
-        print("  python utils/package_skill.py skills/public/my-skill")
-        print("  python utils/package_skill.py skills/public/my-skill ./dist")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Package a skill folder into a distributable .skill file"
+    )
+    parser.add_argument("skill_path", help="Path to the skill folder")
+    parser.add_argument("output_dir", nargs="?", default=None,
+                        help="Output directory for the .skill file (default: current directory)")
+    args = parser.parse_args()
 
-    skill_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else None
-
-    print(f"📦 Packaging skill: {skill_path}")
-    if output_dir:
-        print(f"   Output directory: {output_dir}")
+    print(f"📦 Packaging skill: {args.skill_path}")
+    if args.output_dir:
+        print(f"   Output directory: {args.output_dir}")
     print()
 
-    result = package_skill(skill_path, output_dir)
+    result = package_skill(args.skill_path, args.output_dir)
 
     if result:
         sys.exit(0)

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Eval Review</title>
+  <!-- Fonts and SheetJS loaded from CDN; page degrades gracefully offline -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
@@ -826,8 +827,17 @@
       }
     }
 
-    // ---- XLSX rendering via SheetJS ----
+    // ---- XLSX rendering via SheetJS (degrades to download link if CDN unavailable) ----
     function renderXlsx(container, b64Data) {
+      if (typeof XLSX === "undefined") {
+        const a = document.createElement("a");
+        a.className = "download-link";
+        a.href = "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + b64Data;
+        a.download = "spreadsheet.xlsx";
+        a.textContent = "Download .xlsx (SheetJS unavailable offline)";
+        container.appendChild(a);
+        return;
+      }
       try {
         const raw = Uint8Array.from(atob(b64Data), c => c.charCodeAt(0));
         const wb = XLSX.read(raw, { type: "array" });
