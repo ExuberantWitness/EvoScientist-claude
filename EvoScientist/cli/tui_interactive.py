@@ -109,6 +109,14 @@ def _build_welcome_banner(
                 info.append("  ", style="dim")
             info.append(label, style="dim")
             info.append(value, style="magenta")
+    # Directory line
+    import os
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
+    dir_display = cwd.replace(home, "~", 1) if cwd.startswith(home) else cwd
+    info.append("\n  ", style="dim")
+    info.append("Directory: ", style="dim")
+    info.append(dir_display, style="magenta")
     info.append("\n  Type ", style="#ffe082")
     info.append("/", style="#ffe082 bold")
     info.append(" for commands", style="#ffe082")

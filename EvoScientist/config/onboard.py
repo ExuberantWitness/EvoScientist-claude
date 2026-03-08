@@ -900,18 +900,15 @@ def _step_tavily_key(
     )
 
 
-def _step_workspace(config: EvoScientistConfig) -> tuple[str, str]:
-    """Step 5: Configure workspace settings.
+def _step_workspace(config: EvoScientistConfig) -> str:
+    """Step 5: Configure workspace mode.
 
     Args:
         config: Current configuration.
 
     Returns:
-        Tuple of (mode, workdir).
+        Selected mode ("daemon" or "run").
     """
-    # Mode selection
-    cwd = os.getcwd()
-    cwd_short = os.path.basename(cwd) or cwd
     mode_choices = [
         Choice(
             title="Daemon (persistent workspace)",
@@ -935,23 +932,7 @@ def _step_workspace(config: EvoScientistConfig) -> tuple[str, str]:
     if mode is None:
         raise KeyboardInterrupt()
 
-    # Custom workdir (optional)
-    current_default = config.default_workdir or ""
-    if current_default:
-        prompt_text = f"Workspace directory (Enter to keep '{current_default}'):"
-    else:
-        prompt_text = f"Workspace directory (Enter to use ./{cwd_short}/):"
-    workdir = questionary.text(
-        prompt_text,
-        default=current_default,
-        style=WIZARD_STYLE,
-        qmark=QMARK,
-    ).ask()
-    if workdir is None:
-        raise KeyboardInterrupt()
-    workdir = workdir.strip()
-
-    return mode, workdir
+    return mode
 
 
 def _step_thinking(config: EvoScientistConfig) -> bool:
@@ -961,7 +942,7 @@ def _step_thinking(config: EvoScientistConfig) -> bool:
         config: Current configuration.
 
     Returns:
-        Whether to show thinking panels in CLI.
+        Whether to show thinking panels in the interface.
     """
     thinking_choices = [
         Choice(title="On (show model reasoning)", value=True),
@@ -969,7 +950,7 @@ def _step_thinking(config: EvoScientistConfig) -> bool:
     ]
 
     show_thinking = questionary.select(
-        "Show thinking panel in CLI?",
+        "Show thinking panel?",
         choices=thinking_choices,
         default=config.show_thinking,
         style=WIZARD_STYLE,
@@ -2066,9 +2047,8 @@ def run_onboard(skip_validation: bool = False) -> bool:
                 _print_step_skipped("Tavily Key", "not set")
 
         # Step 5: Workspace
-        mode, workdir = _step_workspace(config)
+        mode = _step_workspace(config)
         config.default_mode = mode
-        config.default_workdir = workdir
 
         # Step 6: Thinking
         show_thinking = _step_thinking(config)

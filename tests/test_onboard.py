@@ -256,31 +256,29 @@ class TestStepModel:
 
 
 class TestStepWorkspace:
-    def test_returns_mode_and_empty_workdir(self):
-        """Test workspace step with no custom directory (user keeps cwd default)."""
+    def test_returns_daemon_mode(self):
+        """Test workspace step returns selected mode."""
         from EvoScientist.config.onboard import _step_workspace
 
         config = EvoScientistConfig()
 
         with patch("EvoScientist.config.onboard.questionary") as mock_q:
             mock_q.select.return_value.ask.return_value = "daemon"
-            mock_q.text.return_value.ask.return_value = ""  # Keep default (empty = use cwd)
             result = _step_workspace(config)
 
-        assert result == ("daemon", "")
+        assert result == "daemon"
 
-    def test_returns_mode_and_custom_workdir(self):
-        """Test workspace step with custom directory."""
+    def test_returns_run_mode(self):
+        """Test workspace step returns run mode."""
         from EvoScientist.config.onboard import _step_workspace
 
         config = EvoScientistConfig()
 
         with patch("EvoScientist.config.onboard.questionary") as mock_q:
             mock_q.select.return_value.ask.return_value = "run"
-            mock_q.text.return_value.ask.return_value = "/custom/path"
             result = _step_workspace(config)
 
-        assert result == ("run", "/custom/path")
+        assert result == "run"
 
 
 class TestPromptAndValidateApiKey:
