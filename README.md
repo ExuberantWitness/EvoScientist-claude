@@ -379,6 +379,15 @@ We thank the authors for their valuable contributions to the open-source communi
         </a>
       </td>
       <td align="center">
+        <a href="https://go0day.github.io/">
+          <img src="https://go0day.github.io/authors/admin/avatar_hu_ee1051aceae96124.png"
+               width="100" height="100"
+               style="object-fit: cover; border-radius: 20%;" alt="Yuyue Zhao"/>
+          <br />
+          <sub><b>Yuyue Zhao</b><sup>‡</sup></sub>
+        </a>
+      </td>
+      <td align="center">
         <a href="https://muxincg2004.github.io/">
           <img src="https://muxincg2004.github.io/resume_avatar.jpg"
                width="100" height="100"
