@@ -10,6 +10,7 @@ from .user_message import UserMessage
 from .system_message import SystemMessage
 from .usage_widget import UsageWidget
 from .approval_widget import ApprovalWidget
+from .thread_selector import ThreadPickerWidget
 
 __all__ = [
     "LoadingWidget",
@@ -22,4 +23,5 @@ __all__ = [
     "SystemMessage",
     "UsageWidget",
     "ApprovalWidget",
+    "ThreadPickerWidget",
 ]

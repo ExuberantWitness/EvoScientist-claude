@@ -275,6 +275,7 @@ def run_textual_interactive(
         BINDINGS = [
             Binding("ctrl+c", "request_quit", "Quit", show=False),
             Binding("up", "edit_queued", show=False, priority=True),
+            Binding("down", "down_delegate", show=False, priority=True),
             Binding("escape", "cancel_queued", show=False, priority=True),
         ]
 
@@ -306,6 +307,7 @@ def run_textual_interactive(
             self._comp_index: int = -1
             self._hitl_auto_approve: bool = False
             self._approval_future: asyncio.Future | None = None
+            self._picker_future: asyncio.Future | None = None
             self._history_suggester = HistorySuggester(get_config_dir() / "history")
 
         # ── Layout ─────────────────────────────────────────────
@@ -415,6 +417,33 @@ def run_textual_interactive(
             """Handle ApprovalWidget.Decided message."""
             if self._approval_future and not self._approval_future.done():
                 self._approval_future.set_result(event)
+
+        async def _wait_for_thread_pick(self, picker_widget) -> str | None:
+            """Wait for user to pick a thread from ThreadPickerWidget.
+
+            Returns the selected thread_id, or ``None`` on cancel/timeout.
+            """
+            self._picker_future = asyncio.get_event_loop().create_future()
+            try:
+                return await asyncio.wait_for(self._picker_future, timeout=120)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                return None
+            finally:
+                self._picker_future = None
+                try:
+                    picker_widget.remove()
+                except Exception:
+                    pass
+
+        def on_thread_picker_widget_picked(self, event) -> None:  # type: ignore[override]
+            """Handle ThreadPickerWidget.Picked message."""
+            if self._picker_future and not self._picker_future.done():
+                self._picker_future.set_result(event.thread_id)
+
+        def on_thread_picker_widget_cancelled(self, event) -> None:  # type: ignore[override]
+            """Handle ThreadPickerWidget.Cancelled message."""
+            if self._picker_future and not self._picker_future.done():
+                self._picker_future.set_result(None)
 
         # ── Streaming core ─────────────────────────────────────
 
@@ -1138,7 +1167,10 @@ def run_textual_interactive(
 
             if text.startswith("/"):
                 self._hide_completions()
-                await self._handle_command(text)
+                # Launch as independent task to free the message pump.
+                # Commands like /resume mount interactive widgets that need
+                # the pump to process key events and message bubbling.
+                asyncio.ensure_future(self._handle_command(text))
                 return
 
             self._history_suggester.append_entry(text)
@@ -1183,12 +1215,16 @@ def run_textual_interactive(
 
         def action_cancel_queued(self) -> None:
             """Cancel the last queued message on Esc."""
-            # Delegate to ApprovalWidget if it has focus
+            # Delegate to ApprovalWidget or ThreadPickerWidget if focused
             focused = self.focused
             if focused is not None:
                 from .widgets.approval_widget import ApprovalWidget
+                from .widgets.thread_selector import ThreadPickerWidget
                 if isinstance(focused, ApprovalWidget):
                     focused.action_select_reject()
+                    return
+                if isinstance(focused, ThreadPickerWidget):
+                    focused.action_cancel()
                     return
             if self._queued_messages:
                 self._queued_messages.pop()
@@ -1196,11 +1232,15 @@ def run_textual_interactive(
 
         def action_edit_queued(self) -> None:
             """Pop the last queued message back into input for editing."""
-            # Skip if an ApprovalWidget has focus — let it handle up/down
+            # Skip if an ApprovalWidget or ThreadPickerWidget has focus
             focused = self.focused
             if focused is not None:
                 from .widgets.approval_widget import ApprovalWidget
+                from .widgets.thread_selector import ThreadPickerWidget
                 if isinstance(focused, ApprovalWidget):
+                    focused.action_move_up()
+                    return
+                if isinstance(focused, ThreadPickerWidget):
                     focused.action_move_up()
                     return
             if self._queued_messages:
@@ -1210,6 +1250,19 @@ def run_textual_interactive(
                 prompt.cursor_position = len(prompt.value)
                 prompt.focus()
                 self._render_queue_indicator()
+
+        def action_down_delegate(self) -> None:
+            """Delegate down key to focused ApprovalWidget or ThreadPickerWidget."""
+            focused = self.focused
+            if focused is not None:
+                from .widgets.approval_widget import ApprovalWidget
+                from .widgets.thread_selector import ThreadPickerWidget
+                if isinstance(focused, ApprovalWidget):
+                    focused.action_move_down()
+                    return
+                if isinstance(focused, ThreadPickerWidget):
+                    focused.action_move_down()
+                    return
 
         def on_key(self, event: Any) -> None:
             comp_widget = self.query_one("#completions", Static)
@@ -1446,9 +1499,32 @@ def run_textual_interactive(
 
         async def _cmd_resume(self, arg: str) -> None:
             if not arg:
-                self._append_system("Usage: /resume <thread-id-prefix>", style="yellow")
-                await self._cmd_threads()
-                return
+                # Show inline thread picker
+                threads = await list_threads(
+                    limit=0,
+                    include_message_count=True,
+                    include_preview=True,
+                )
+                if not threads:
+                    self._append_system("No sessions to resume.", style="yellow")
+                    return
+
+                from .widgets.thread_selector import ThreadPickerWidget
+
+                container = self.query_one("#chat", VerticalScroll)
+                picker = ThreadPickerWidget(
+                    threads,
+                    current_thread=self._conversation_tid,
+                    title=">>> Select session to resume <<<",
+                )
+                await container.mount(picker)
+                container.scroll_end(animate=False)
+                picker.focus()
+
+                selected = await self._wait_for_thread_pick(picker)
+                if selected is None:
+                    return
+                arg = selected
 
             resolved = await self._resolve_thread_id(arg)
             if not resolved:
@@ -1474,8 +1550,32 @@ def run_textual_interactive(
 
         async def _cmd_delete(self, arg: str) -> None:
             if not arg:
-                self._append_system("Usage: /delete <thread-id-prefix>", style="yellow")
-                return
+                # Show inline thread picker for deletion
+                threads = await list_threads(
+                    limit=0,
+                    include_message_count=True,
+                    include_preview=True,
+                )
+                if not threads:
+                    self._append_system("No sessions to delete.", style="yellow")
+                    return
+
+                from .widgets.thread_selector import ThreadPickerWidget
+
+                container = self.query_one("#chat", VerticalScroll)
+                picker = ThreadPickerWidget(
+                    threads,
+                    current_thread=self._conversation_tid,
+                    title=">>> Select session to delete <<<",
+                )
+                await container.mount(picker)
+                container.scroll_end(animate=False)
+                picker.focus()
+
+                selected = await self._wait_for_thread_pick(picker)
+                if selected is None:
+                    return
+                arg = selected
 
             resolved = await self._resolve_thread_id(arg)
             if not resolved:
