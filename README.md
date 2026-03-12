@@ -89,6 +89,7 @@ Moving beyond traditional human-in-the-loop systems, EvoScientist adopts a human
 - [📚 Acknowledgments](#-acknowledgments)
 - [🌍 Project Roles](#-project-roles)
 - [🤝 Contributing](#-contributing)
+- [📝 Citation](#-citation)
 
 ## 📦 Installation
 
