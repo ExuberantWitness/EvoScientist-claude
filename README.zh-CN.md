@@ -491,7 +491,7 @@ Jan Piotrowski, Wiktor Cupiał, Jakub Kaliski, Jakub Filipiuk, Xinhao Yi, Shuyu 
 
 ### 📈 Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=EvoScientist/EvoScientist&type=date&legend=top-left)](https://www.star-history.com/#EvoScientist/EvoScientist&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/image?repos=EvoScientist/EvoScientist&type=date&legend=top-left)](https://www.star-history.com/?repos=EvoScientist%2FEvoScientist&type=date&legend=top-left)
 
 <p align="right"><a href="#top">🔝回到顶部</a></p>
 

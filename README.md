@@ -482,7 +482,7 @@ We welcome contributions from developers, researchers, and AI coding agents at a
 
 ### 📈 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=EvoScientist/EvoScientist&type=date&legend=top-left)](https://www.star-history.com/#EvoScientist/EvoScientist&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/image?repos=EvoScientist/EvoScientist&type=date&legend=top-left)](https://www.star-history.com/?repos=EvoScientist%2FEvoScientist&type=date&legend=top-left)
 
 <p align="right"><a href="#top">🔝Back to top</a></p>
 
