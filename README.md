@@ -44,7 +44,6 @@ Moving beyond traditional human-in-the-loop systems, EvoScientist adopts a human
 
 <h3>Unified Control, Different Surfaces</h3>
 
-<!-- Replace VIDEO_URL_MOBILE when ready -->
 <table>
   <tr>
     <th width="65%"><p align="center">🖥️ CLI / TUI</p></th>
@@ -57,7 +56,9 @@ Moving beyond traditional human-in-the-loop systems, EvoScientist adopts a human
       </video>
     </td>
     <td align="center">
-      <video src="VIDEO_URL_MOBILE" width="240" autoplay loop muted playsinline></video>
+      <video src="https://github.com/user-attachments/assets/5b7dcd2c-f5ac-4c22-9c28-652b0148473e" width="240" autoplay loop muted playsinline>
+        <a href="https://github.com/user-attachments/assets/5b7dcd2c-f5ac-4c22-9c28-652b0148473e">View mobile demo</a>
+      </video>
     </td>
   </tr>
 </table>
