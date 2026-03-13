@@ -393,6 +393,7 @@ channel_enabled: "telegram,slack,feishu,qq"
 
 ## 🎯 ᯓ➤ 路线图
 
+即将推出：
 - [x] 🖥️ 全屏 TUI 和经典 CLI 双界面
 - [x] 📻 EvoMemory v1.0 已上线
 - [x] ⚒️ 200+ 预置技能已内置
@@ -404,6 +405,8 @@ channel_enabled: "telegram,slack,feishu,qq"
 - [ ] 📹 Demo 与教程正在制作中
 - [ ] 📊 基准测试套件即将推出
 - [ ] ⏰ 核心系统定时任务规划中
+
+敬请期待——更多功能正在路上！
 
 <p align="right"><a href="#top">🔝回到顶部</a></p>
 

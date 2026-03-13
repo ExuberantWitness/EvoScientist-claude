@@ -383,6 +383,8 @@ We thank the authors for their valuable contributions to the open-source communi
 <p align="right"><a href="#top">🔝Back to top</a></p>
 
 ## 🎯 ᯓ➤ Roadmap
+
+Coming soon:
 - [x] 🖥️ Full-screen TUI and classic CLI interfaces
 - [x] 📻 EvoMemory v1.0 shipped
 - [x] ⚒️ 200+ predefined skills built in
@@ -394,6 +396,8 @@ We thank the authors for their valuable contributions to the open-source communi
 - [ ] 📹 Demo and tutorial in the works
 - [ ] 📊 Benchmark suite to be released
 - [ ] ⏰ Scheduled tasks for the core system planned
+
+Stay tuned — more features are on the way!
 
 <p align="right"><a href="#top">🔝Back to top</a></p>
 
