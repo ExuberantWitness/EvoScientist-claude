@@ -42,6 +42,34 @@
 It is designed to be opinionated and ready to use out of the box, offering a living research system that grows alongside evolving agent skills, toolsets, and memory bases.
 Moving beyond traditional human-in-the-loop systems, EvoScientist adopts a human-on-the-loop paradigm, where AI acts as a research buddy that co-evolves with human researchers and internalizes scholarly taste and scientific judgment.**
 
+<h3>🏆 Awards & Recognition</h3>
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="33%">
+      <img src=".github/assets/ICAIS_awards.JPG" width="100%" style="max-height:200px; object-fit:cover;" alt="ICAIS 2025 Awards"/>
+      <br />
+      <sub><b>Best Paper & AI Reviewer's Appraisal Award</b></sub>
+      <br />
+      <sub>ICAIS 2025 · AI Scientist Track · 6/6 Accepted</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src=".github/assets/ICAIS_best_paper.png" width="100%" style="max-height:200px; object-fit:cover;" alt="Best Paper"/>
+      <br />
+      <sub><b>Best Paper — ICAIS 2025</b></sub>
+      <br />
+      <sub>Adaptive Evidential Meta-Learning with Hyper-Conditioned Priors</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src=".github/assets/deepresearch_bench_2.JPG" width="100%" style="max-height:200px; object-fit:cover;" alt="DeepResearch Bench II #1"/>
+      <br />
+      <sub><b>#1 on DeepResearch Bench II</b></sub>
+      <br />
+      <sub>Ranked first at time of submission</sub>
+    </td>
+  </tr>
+</table>
+
 <h3>⚡ Unified Control, Different Surfaces</h3>
 
 <table>
@@ -59,34 +87,6 @@ Moving beyond traditional human-in-the-loop systems, EvoScientist adopts a human
       <video src="https://github.com/user-attachments/assets/4919e6f4-e434-46c9-98c7-35d7482868a6" width="100%" autoplay loop muted playsinline>
         <a href="https://github.com/user-attachments/assets/4919e6f4-e434-46c9-98c7-35d7482868a6">View mobile demo</a>
       </video>
-    </td>
-  </tr>
-</table>
-
-<h3>🏆 Awards & Recognition</h3>
-
-<table>
-  <tr>
-    <td align="center" width="33%">
-      <img src=".github/assets/ICAIS_awards.JPG" width="100%" alt="ICAIS 2025 Awards"/>
-      <br />
-      <sub><b>Best Paper & AI Reviewer's Appraisal Award</b></sub>
-      <br />
-      <sub>ICAIS 2025 · AI Scientist Track · 6/6 Accepted</sub>
-    </td>
-    <td align="center" width="33%">
-      <img src=".github/assets/ICAIS_best_paper.png" width="100%" alt="Best Paper"/>
-      <br />
-      <sub><b>Best Paper — ICAIS 2025</b></sub>
-      <br />
-      <sub>Adaptive Evidential Meta-Learning with Hyper-Conditioned Priors</sub>
-    </td>
-    <td align="center" width="33%">
-      <img src=".github/assets/deepresearch_bench_2.JPG" width="100%" alt="DeepResearch Bench II #1"/>
-      <br />
-      <sub><b>#1 on DeepResearch Bench II</b></sub>
-      <br />
-      <sub>Ranked first at time of submission</sub>
     </td>
   </tr>
 </table>

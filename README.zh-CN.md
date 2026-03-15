@@ -49,6 +49,34 @@
 它以开箱即用为设计理念，提供一个伴随智能体技能、工具集和记忆库共同成长的活跃研究系统。
 EvoScientist 超越了传统的人在回路（Human-in-the-Loop）模式，采用人在环上（Human-on-the-Loop）范式——AI 作为研究伙伴，与人类研究者共同进化，逐步内化学术品味与科学判断力。**
 
+<h3>🏆 荣誉与认可</h3>
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="33%">
+      <img src=".github/assets/ICAIS_awards.JPG" width="100%" style="max-height:200px; object-fit:cover;" alt="ICAIS 2025 Awards"/>
+      <br />
+      <sub><b>Best Paper & AI Reviewer's Appraisal Award</b></sub>
+      <br />
+      <sub>ICAIS 2025 · AI Scientist Track · 6/6 全部中稿</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src=".github/assets/ICAIS_best_paper.png" width="100%" style="max-height:200px; object-fit:cover;" alt="Best Paper"/>
+      <br />
+      <sub><b>Best Paper — ICAIS 2025</b></sub>
+      <br />
+      <sub>Adaptive Evidential Meta-Learning with Hyper-Conditioned Priors</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src=".github/assets/deepresearch_bench_2.JPG" width="100%" style="max-height:200px; object-fit:cover;" alt="DeepResearch Bench II #1"/>
+      <br />
+      <sub><b>DeepResearch Bench II 第一名</b></sub>
+      <br />
+      <sub>提交时排名第一</sub>
+    </td>
+  </tr>
+</table>
+
 <h3>⚡ 统一入口，多端体验</h3>
 
 <table>
