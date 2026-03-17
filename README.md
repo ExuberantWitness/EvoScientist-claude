@@ -143,7 +143,7 @@ uv pip install EvoScientist
 
 ### Latest from GitHub
 
-Install the latest version directly from GitHub to get the most recent patches (useful before a new PyPI release):
+To get the latest patches before a [PyPI](https://pypi.org/project/EvoScientist/) release:
 
 ```bash
 uv pip install git+https://github.com/EvoScientist/EvoScientist.git

@@ -152,7 +152,7 @@ uv pip install EvoScientist
 
 ### 从 GitHub 安装最新版本
 
-直接从 GitHub 安装最新版本，获取最新补丁（适用于 PyPI 发布前的版本）：
+获取 [PyPI](https://pypi.org/project/EvoScientist/) 发布前的最新补丁：
 
 ```bash
 uv pip install git+https://github.com/EvoScientist/EvoScientist.git
