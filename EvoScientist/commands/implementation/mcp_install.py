@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 from ..base import Argument, Command, CommandContext
 
 
@@ -8,7 +10,7 @@ class InstallMCPCommand(Command):
 
     name = "/install-mcp"
     description = "Browse and install MCP servers"
-    arguments = [
+    arguments: ClassVar[list[Argument]] = [
         Argument(
             name="source",
             type=str,

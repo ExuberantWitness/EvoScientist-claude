@@ -77,7 +77,7 @@ def print_banner(
     ui_backend: str | None = None,
 ):
     """Print welcome banner with ASCII art logo, info line, and hint."""
-    for line, color in zip(LOGO_LINES, LOGO_GRADIENT):
+    for line, color in zip(LOGO_LINES, LOGO_GRADIENT, strict=False):
         console.print(Text(line, style=f"{color} bold"))
     info = Text()
     info.append("  ", style="dim")
@@ -401,7 +401,7 @@ def cmd_interactive(
 
             lefts = [t.get("preview", "") or t["thread_id"] for t in threads]
             col_width = max(_display_width(s) for s in lefts) + 4
-            for t, left_text in zip(threads, lefts):
+            for t, left_text in zip(threads, lefts, strict=False):
                 tid = t["thread_id"]
                 when = _format_relative_time(t.get("updated_at"))
                 label = f"{_pad_to_width(left_text, col_width)}({tid} {when})"
@@ -912,7 +912,7 @@ def cmd_run(
             console.print(
                 "[dim]Run [bold]EvoSci onboard[/bold] to set up your API key.[/dim]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         else:
             console.print(f"[red]Error: {e}[/red]")
             raise

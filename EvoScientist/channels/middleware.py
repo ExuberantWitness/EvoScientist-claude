@@ -122,7 +122,7 @@ class DedupCache:
         cutoff = time.monotonic() - self._ttl
         # OrderedDict is insertion-ordered; oldest entries are first.
         while self._seen:
-            key, ts = next(iter(self._seen.items()))
+            _key, ts = next(iter(self._seen.items()))
             if ts > cutoff:
                 break
             self._seen.popitem(last=False)

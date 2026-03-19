@@ -6,7 +6,7 @@ adapted for deepagents tool names.
 """
 
 import sys
-from enum import Enum
+from enum import StrEnum
 from pathlib import PurePath
 
 # === Status marker constants ===
@@ -15,7 +15,7 @@ FAILURE_PREFIX = "[FAILED]"
 
 
 # === Tool status indicators ===
-class ToolStatus(str, Enum):
+class ToolStatus(StrEnum):
     """Tool execution status indicators."""
 
     RUNNING = "\u25cf"  # Running - yellow

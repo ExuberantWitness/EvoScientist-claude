@@ -116,7 +116,7 @@ class EmailChannel(Channel, PollingMixin):
             self._imap.login(cfg.imap_username, cfg.imap_password)
             self._imap.select(cfg.imap_mailbox)
         except Exception as e:
-            raise ChannelError(f"IMAP failed: {e}")
+            raise ChannelError(f"IMAP failed: {e}") from e
 
     def _reconnect_imap(self) -> None:
         try:

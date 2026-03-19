@@ -135,8 +135,8 @@ class IntegerValidator(Validator):
                 raise ValidationError(
                     message=f"Must be between {self.min_value} and {self.max_value}"
                 )
-        except ValueError:
-            raise ValidationError(message="Must be a valid integer")
+        except ValueError as e:
+            raise ValidationError(message="Must be a valid integer") from e
 
 
 class ChoiceValidator(Validator):
@@ -224,9 +224,9 @@ def validate_nvidia_key(api_key: str) -> tuple[bool, str]:
     try:
         from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
-        llm = ChatNVIDIA(api_key=api_key, model="meta/llama-3.1-8b-instruct")
-        llm.available_models
+        ChatNVIDIA(api_key=api_key, model="meta/llama-3.1-8b-instruct")
         return True, "Valid"
+
     except Exception as e:
         error_str = str(e).lower()
         if (
@@ -2018,7 +2018,7 @@ def _step_channels(config: EvoScientistConfig) -> dict[str, object]:
                     qmark=f"  {QMARK}",
                 ).ask()
                 if install_now is None:
-                    raise KeyboardInterrupt()
+                    raise KeyboardInterrupt() from None
                 if install_now:
                     console.print(f"  [dim]Installing {_pkg_display}...[/dim]")
                     if _pip_pkgs:

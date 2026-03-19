@@ -23,20 +23,20 @@ from .settings import (
 )
 
 __all__ = [
+    "EvoScientistConfig",
+    "apply_config_to_env",
     # settings
     "get_config_dir",
     "get_config_path",
-    "EvoScientistConfig",
-    "load_config",
-    "save_config",
-    "reset_config",
     "get_config_value",
-    "set_config_value",
-    "list_config",
     "get_effective_config",
-    "apply_config_to_env",
+    "list_config",
+    "load_config",
+    "reset_config",
     # onboard (lazy)
     "run_onboard",
+    "save_config",
+    "set_config_value",
 ]
 
 

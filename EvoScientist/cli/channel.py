@@ -495,6 +495,7 @@ async def _bus_inbound_consumer(bus, manager) -> None:
     Task-based: each inbound message is handled in its own asyncio task
     so the consumer loop stays responsive for HITL approval replies.
     """
+    _tasks: set[asyncio.Task] = set()
     while True:
         try:
             msg = await asyncio.wait_for(bus.consume_inbound(), timeout=1.0)
@@ -512,7 +513,9 @@ async def _bus_inbound_consumer(bus, manager) -> None:
             continue
 
         # Regular message — handle in a separate task
-        asyncio.create_task(_handle_bus_message(bus, manager, msg))
+        _task = asyncio.create_task(_handle_bus_message(bus, manager, msg))
+        _tasks.add(_task)
+        _task.add_done_callback(_tasks.discard)
 
 
 async def _handle_bus_message(bus, manager, msg) -> None:

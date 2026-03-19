@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -284,7 +284,7 @@ class FeishuChannel(Channel, WebhookMixin, TokenMixin):
             resp = await self._http_client.post(url, json=body)
             data = resp.json()
         except Exception as e:
-            raise ChannelError(f"Failed to get Feishu access token: {e}")
+            raise ChannelError(f"Failed to get Feishu access token: {e}") from e
 
         if data.get("code") != 0:
             raise ChannelError(f"Feishu auth error: {data.get('msg', 'unknown')}")
@@ -300,7 +300,7 @@ class FeishuChannel(Channel, WebhookMixin, TokenMixin):
             raise ChannelError(
                 "aiohttp or httpx not installed. "
                 "Install with: pip install aiohttp httpx"
-            )
+            ) from None
 
         if not self.config.app_id:
             raise ChannelError("Feishu app_id is required")
@@ -394,7 +394,14 @@ class FeishuChannel(Channel, WebhookMixin, TokenMixin):
 
     # ── Media helpers ──────────────────────────────────────────────
 
-    _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+    _IMAGE_EXTENSIONS: ClassVar[set[str]] = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".bmp",
+        ".webp",
+    }
 
     async def _download_media(
         self,

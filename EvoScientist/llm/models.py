@@ -42,7 +42,9 @@ def _patch_anthropic_proxy_compat() -> None:
                     if isinstance(val, dict):
                         d = val.copy()
                         setattr(
-                            obj, attr, _types.SimpleNamespace(model_dump=lambda **kw: d)
+                            obj,
+                            attr,
+                            _types.SimpleNamespace(model_dump=lambda d=d, **kw: d),
                         )
             return _orig(self, event, *args, **kwargs)
 

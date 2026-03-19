@@ -638,7 +638,7 @@ async def _load_tools(config: dict[str, Any]) -> dict[str, list]:
         raise ImportError(
             "MCP servers are configured but langchain-mcp-adapters is not installed.\n"
             "Install with: pip install langchain-mcp-adapters"
-        )
+        ) from None
 
     connections = _build_connections(config)
     if not connections:

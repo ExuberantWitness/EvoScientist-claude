@@ -16,7 +16,7 @@ class CommandManager:
 
     def register(self, command: Command) -> None:
         """Register a command and its aliases."""
-        names = [command.name] + command.alias
+        names = [command.name, *command.alias]
         for name in names:
             name = name.lower()
             if not name.startswith("/"):

@@ -167,16 +167,16 @@ def _build_base_kwargs(base_backend, base_middleware):
         prompt_refs=_build_prompt_refs(),
     )
     _inject_subagent_middleware(subs)
-    return dict(
-        name="EvoScientist",
-        model=_ensure_chat_model(),
-        tools=list(base_tools),
-        backend=base_backend,
-        subagents=subs,
-        middleware=base_middleware,
-        system_prompt=get_system_prompt(),
-        skills=["/skills/"],
-    )
+    return {
+        "name": "EvoScientist",
+        "model": _ensure_chat_model(),
+        "tools": list(base_tools),
+        "backend": base_backend,
+        "subagents": subs,
+        "middleware": base_middleware,
+        "system_prompt": get_system_prompt(),
+        "skills": ["/skills/"],
+    }
 
 
 def load_mcp_and_build_kwargs(base_backend, base_middleware):
@@ -218,16 +218,16 @@ def load_mcp_and_build_kwargs(base_backend, base_middleware):
         if sa_tools := mcp_by_agent.get(sa["name"], []):
             sa.setdefault("tools", []).extend(sa_tools)
 
-    return dict(
-        name="EvoScientist",
-        model=_ensure_chat_model(),
-        tools=base_tools + mcp_main,
-        backend=base_backend,
-        subagents=subs,
-        middleware=base_middleware,
-        system_prompt=get_system_prompt(),
-        skills=["/skills/"],
-    )
+    return {
+        "name": "EvoScientist",
+        "model": _ensure_chat_model(),
+        "tools": base_tools + mcp_main,
+        "backend": base_backend,
+        "subagents": subs,
+        "middleware": base_middleware,
+        "system_prompt": get_system_prompt(),
+        "skills": ["/skills/"],
+    }
 
 
 # =============================================================================

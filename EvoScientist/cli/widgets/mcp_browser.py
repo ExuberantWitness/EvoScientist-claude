@@ -122,7 +122,7 @@ class MCPBrowserWidget(Widget):
             for t in s.tags:
                 tag_counter[t.lower()] += 1
         sorted_tags = sorted(tag_counter.items(), key=lambda x: (-x[1], x[0]))
-        self._tag_items = [("all", len(self._servers))] + sorted_tags
+        self._tag_items = [("all", len(self._servers)), *sorted_tags]
 
         # If pre-filtered, skip to phase 2
         if self._pre_filter_tag:

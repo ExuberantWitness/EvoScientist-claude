@@ -5,6 +5,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from typing import ClassVar
 
 from ..base import Channel, ChannelError, RawIncoming
 from ..capabilities import QQ as QQ_CAPS
@@ -210,7 +211,7 @@ class QQChannel(Channel):
     # ── Media send ────────────────────────────────────────────────
 
     # qq-botpy file_type constants: 1=image, 2=video, 3=audio
-    _FILE_TYPE_MAP = {
+    _FILE_TYPE_MAP: ClassVar[dict[str, int]] = {
         ".jpg": 1,
         ".jpeg": 1,
         ".png": 1,

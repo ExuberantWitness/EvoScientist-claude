@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import typer  # type: ignore[import-untyped]
 from rich.markup import escape
@@ -521,7 +521,7 @@ def serve(
                 atexit.register(stop_ccproxy, _ccproxy_proc_serve)
         except RuntimeError as exc:
             console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from exc
 
     if not config.channel_enabled:
         console.print("[red]No channels configured.[/red]")
@@ -727,30 +727,41 @@ def mcp_config(
 
 @mcp_app.command("add")
 def mcp_add(
-    name: str = typer.Argument(..., help="Server name"),
-    target: str = typer.Argument(..., help="Command (stdio) or URL (http/sse)"),
-    args: list[str] | None = typer.Argument(None, help="Extra args for stdio command"),
-    transport: str | None = typer.Option(
-        None, "--transport", "-T", help="Transport type (default: auto-detect)"
-    ),
-    tools: str | None = typer.Option(
-        None,
-        "--tools",
-        "-t",
-        help="Comma-separated tool allowlist (supports wildcards: *_exa, read_*)",
-    ),
-    expose_to: str | None = typer.Option(
-        None, "--expose-to", "-e", help="Comma-separated target agents"
-    ),
-    header: list[str] | None = typer.Option(
-        None, "--header", "-H", help="HTTP header as Key:Value (repeatable)"
-    ),
-    env: list[str] | None = typer.Option(
-        None, "--env", help="Env var as KEY=VALUE for stdio (repeatable)"
-    ),
-    env_ref: list[str] | None = typer.Option(
-        None, "--env-ref", help="Env var name as ${NAME} runtime ref (repeatable)"
-    ),
+    name: Annotated[str, typer.Argument(help="Server name")],
+    target: Annotated[str, typer.Argument(help="Command (stdio) or URL (http/sse)")],
+    args: Annotated[
+        list[str] | None, typer.Argument(help="Extra args for stdio command")
+    ] = None,
+    transport: Annotated[
+        str | None,
+        typer.Option("--transport", "-T", help="Transport type (default: auto-detect)"),
+    ] = None,
+    tools: Annotated[
+        str | None,
+        typer.Option(
+            "--tools",
+            "-t",
+            help="Comma-separated tool allowlist (supports wildcards: *_exa, read_*)",
+        ),
+    ] = None,
+    expose_to: Annotated[
+        str | None,
+        typer.Option("--expose-to", "-e", help="Comma-separated target agents"),
+    ] = None,
+    header: Annotated[
+        list[str] | None,
+        typer.Option("--header", "-H", help="HTTP header as Key:Value (repeatable)"),
+    ] = None,
+    env: Annotated[
+        list[str] | None,
+        typer.Option("--env", help="Env var as KEY=VALUE for stdio (repeatable)"),
+    ] = None,
+    env_ref: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--env-ref", help="Env var name as ${NAME} runtime ref (repeatable)"
+        ),
+    ] = None,
 ):
     """Add an MCP server to user config
 
@@ -800,30 +811,40 @@ def mcp_add(
 
 @mcp_app.command("edit")
 def mcp_edit(
-    name: str = typer.Argument(..., help="Server name to edit"),
-    transport: str | None = typer.Option(
-        None, "--transport", help="New transport type"
-    ),
-    command: str | None = typer.Option(None, "--command", help="New command (stdio)"),
-    url: str | None = typer.Option(None, "--url", help="New URL (http/sse/websocket)"),
-    tools: str | None = typer.Option(
-        None,
-        "--tools",
-        "-t",
-        help="Comma-separated tool allowlist, supports wildcards ('none' to clear)",
-    ),
-    expose_to: str | None = typer.Option(
-        None,
-        "--expose-to",
-        "-e",
-        help="Comma-separated target agents ('none' to clear)",
-    ),
-    header: list[str] | None = typer.Option(
-        None, "--header", "-H", help="HTTP header as Key:Value (repeatable)"
-    ),
-    env: list[str] | None = typer.Option(
-        None, "--env", help="Env var as KEY=VALUE for stdio (repeatable)"
-    ),
+    name: Annotated[str, typer.Argument(help="Server name to edit")],
+    transport: Annotated[
+        str | None, typer.Option("--transport", help="New transport type")
+    ] = None,
+    command: Annotated[
+        str | None, typer.Option("--command", help="New command (stdio)")
+    ] = None,
+    url: Annotated[
+        str | None, typer.Option("--url", help="New URL (http/sse/websocket)")
+    ] = None,
+    tools: Annotated[
+        str | None,
+        typer.Option(
+            "--tools",
+            "-t",
+            help="Comma-separated tool allowlist, supports wildcards ('none' to clear)",
+        ),
+    ] = None,
+    expose_to: Annotated[
+        str | None,
+        typer.Option(
+            "--expose-to",
+            "-e",
+            help="Comma-separated target agents ('none' to clear)",
+        ),
+    ] = None,
+    header: Annotated[
+        list[str] | None,
+        typer.Option("--header", "-H", help="HTTP header as Key:Value (repeatable)"),
+    ] = None,
+    env: Annotated[
+        list[str] | None,
+        typer.Option("--env", help="Env var as KEY=VALUE for stdio (repeatable)"),
+    ] = None,
 ):
     """Edit an existing MCP server in user config
 
@@ -861,7 +882,9 @@ def mcp_remove(
 
 @mcp_app.command("install")
 def mcp_install(
-    source: Optional[str] = typer.Argument(None, help="Server name or tag filter"),
+    source: Annotated[
+        str | None, typer.Argument(help="Server name or tag filter")
+    ] = None,
 ):
     """Browse and install MCP servers from the registry and marketplace
 
@@ -990,7 +1013,7 @@ def _main_callback(
                 atexit.register(stop_ccproxy, _ccproxy_proc)
         except RuntimeError as exc:
             console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from exc
 
     show_thinking = config.show_thinking if not no_thinking else False
     effective_channel_thinking = config.channel_send_thinking and (not no_thinking)

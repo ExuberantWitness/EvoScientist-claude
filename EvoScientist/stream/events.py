@@ -214,7 +214,7 @@ async def stream_agent_events(
         """Stable key for tracker/mapping per sub-agent namespace."""
         if not namespace:
             return None
-        task_id, task_ns = _extract_task_id(namespace)
+        _task_id, task_ns = _extract_task_id(namespace)
         if task_ns:
             return task_ns
         meta_task_id = _find_task_id_from_metadata(metadata)

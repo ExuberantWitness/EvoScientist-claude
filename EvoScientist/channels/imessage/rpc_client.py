@@ -57,6 +57,7 @@ class ImsgRpcClient:
         self._next_id = 1
         self._pending: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
         self._closed = asyncio.Event()
 
     async def start(self) -> None:
@@ -76,7 +77,7 @@ class ImsgRpcClient:
         )
 
         self._reader_task = asyncio.create_task(self._read_loop())
-        asyncio.create_task(self._stderr_loop())
+        self._stderr_task = asyncio.create_task(self._stderr_loop())
         logger.info(f"Started imsg rpc (pid={self._process.pid})")
 
     async def stop(self) -> None:
@@ -91,6 +92,13 @@ class ImsgRpcClient:
             self._reader_task.cancel()
             try:
                 await self._reader_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            try:
+                await self._stderr_task
             except asyncio.CancelledError:
                 pass
 
@@ -153,7 +161,7 @@ class ImsgRpcClient:
             return await asyncio.wait_for(future, timeout=timeout)
         except TimeoutError:
             self._pending.pop(request_id, None)
-            raise Exception(f"RPC request timeout: {method}")
+            raise Exception(f"RPC request timeout: {method}") from None
 
     async def _read_loop(self) -> None:
         """Read and process responses from stdout."""

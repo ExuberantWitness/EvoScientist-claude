@@ -93,7 +93,7 @@ async def tavily_search(
 
         # Format results
         result_texts = []
-        for result, content in zip(results, contents):
+        for result, content in zip(results, contents, strict=False):
             result_text = f"""## {result["title"]}
 **URL:** {result["url"]}
 

@@ -71,6 +71,7 @@ class IMessageChannelRpc(Channel):
         super().__init__(config or IMessageConfig())
         self._client: ImsgRpcClient | None = None
         self._subscription_id: int | None = None
+        self._background_tasks: set[asyncio.Task] = set()
 
     # ── Pipeline overrides ────────────────────────────────────────
 
@@ -93,7 +94,9 @@ class IMessageChannelRpc(Channel):
     def _handle_notification(self, notification: RpcNotification) -> None:
         """Handle incoming RPC notifications."""
         if notification.method == "message":
-            asyncio.create_task(self._handle_message(notification.params))
+            _task = asyncio.create_task(self._handle_message(notification.params))
+            self._background_tasks.add(_task)
+            _task.add_done_callback(self._background_tasks.discard)
         elif notification.method == "error":
             logger.error(f"imsg error: {notification.params}")
 

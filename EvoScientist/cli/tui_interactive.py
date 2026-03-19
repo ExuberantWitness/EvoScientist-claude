@@ -11,7 +11,7 @@ import logging
 import queue
 import random
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
 from rich.console import Group
 from rich.text import Text
@@ -71,7 +71,7 @@ def _build_welcome_banner(
         channels: List of (name, ok, detail) tuples for the channels panel.
     """
     banner = Text()
-    for line, color in zip(LOGO_LINES, LOGO_GRADIENT):
+    for line, color in zip(LOGO_LINES, LOGO_GRADIENT, strict=False):
         banner.append(f"{line}\n", style=f"bold {color}")
 
     # Info line — matches CLI print_banner format
@@ -260,14 +260,14 @@ def run_textual_interactive(
             padding: 0 1;
             border-bottom: solid #0284c7;
         }
-        #status {
+        # status {
             height: 1;
             background: #171a20;
             color: #f59e0b;
             padding: 0 1;
         }
         """
-        BINDINGS = [
+        BINDINGS: ClassVar[list[Binding]] = [
             Binding("ctrl+c", "request_quit", "Quit", show=False),
             Binding("ctrl+v", "paste_clipboard", "Paste", show=False),
             Binding("up", "edit_queued", show=False, priority=True),
@@ -310,6 +310,7 @@ def run_textual_interactive(
             self._browser_future: asyncio.Future | None = None
             self._mcp_browser_future: asyncio.Future | None = None
             self._history_suggester = HistorySuggester(get_config_dir() / "history")
+            self._background_tasks: set[asyncio.Task] = set()
 
         # ── CommandUI implementation ─────────────────────────
 
@@ -1084,7 +1085,7 @@ def run_textual_interactive(
                                     )
                                     _ask_fn = channel_ask_user_fn
                                     result = await asyncio.to_thread(
-                                        lambda: _ask_fn(event),
+                                        lambda f=_ask_fn, e=event: f(e),
                                     )
                                 else:
                                     # Interactive TUI: display widget, collect via arrow keys
@@ -1531,7 +1532,9 @@ def run_textual_interactive(
                 # Launch as independent task to free the message pump.
                 # Commands like /resume mount interactive widgets that need
                 # the pump to process key events and message bubbling.
-                asyncio.ensure_future(self._handle_command(text))
+                _task = asyncio.create_task(self._handle_command(text))
+                self._background_tasks.add(_task)
+                _task.add_done_callback(self._background_tasks.discard)
                 return
 
             self._history_suggester.append_entry(text)

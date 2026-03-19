@@ -127,6 +127,7 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
         self._typing_message_ids: dict[
             str, list[str]
         ] = {}  # chat_id → [msgid, ...] for typing recall
+        self._background_tasks: set[asyncio.Task] = set()
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
             raise ChannelError(
                 "aiohttp or httpx not installed. "
                 "Install with: pip install aiohttp httpx"
-            )
+            ) from None
 
         self._validate_config()
 
@@ -248,8 +249,8 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
             data = resp.json()
         except Exception as e:
             if not self._running:
-                raise ChannelError(f"Failed to get WeChat access token: {e}")
-            raise RuntimeError(f"Failed to get WeChat access token: {e}")
+                raise ChannelError(f"Failed to get WeChat access token: {e}") from e
+            raise RuntimeError(f"Failed to get WeChat access token: {e}") from e
 
         if data.get("errcode", 0) != 0:
             err_msg = (
@@ -348,7 +349,7 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
                 return web.Response(status=403)
 
             try:
-                decrypted_xml, from_id = self._crypto.decrypt(encrypt)
+                decrypted_xml, _from_id = self._crypto.decrypt(encrypt)
                 xml_data = parse_xml(decrypted_xml)
             except Exception as e:
                 logger.error(f"WeChat decrypt failed: {e}")
@@ -357,7 +358,9 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
         # Process message asynchronously — WeCom requires a response within
         # 5 seconds, but media downloads can take much longer.  Return
         # "success" immediately and handle the message in the background.
-        asyncio.create_task(self._safe_process_message(xml_data))
+        _task = asyncio.create_task(self._safe_process_message(xml_data))
+        self._background_tasks.add(_task)
+        _task.add_done_callback(self._background_tasks.discard)
 
         return web.Response(text="success")
 
@@ -812,7 +815,7 @@ class WeChatChannel(Channel, WebhookMixin, TokenMixin):
             resp = await self._http_client.post(url, json=body)
             data = resp.json()
         except Exception as e:
-            raise RuntimeError(f"WeChat API error: {e}")
+            raise RuntimeError(f"WeChat API error: {e}") from e
 
         errcode = data.get("errcode", 0)
         if errcode != 0:

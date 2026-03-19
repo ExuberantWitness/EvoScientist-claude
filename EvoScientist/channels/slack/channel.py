@@ -51,7 +51,7 @@ class SlackChannel(Channel):
             raise ChannelError(
                 "slack-sdk or aiohttp not installed. "
                 "Install with: pip install evoscientist[slack]"
-            )
+            ) from None
 
         self._web_client = AsyncWebClient(
             token=self.config.bot_token,
@@ -68,9 +68,9 @@ class SlackChannel(Channel):
         except TimeoutError:
             raise ChannelError(
                 "Slack auth_test timed out — check network and bot token"
-            )
+            ) from None
         except Exception as e:
-            raise ChannelError(f"Failed to authenticate Slack bot: {e}")
+            raise ChannelError(f"Failed to authenticate Slack bot: {e}") from e
 
         self._socket_client = SocketModeClient(
             app_token=self.config.app_token,
@@ -115,7 +115,7 @@ class SlackChannel(Channel):
                 "Slack Socket Mode connection timed out — "
                 "check app token (must start with xapp-) and "
                 "ensure Socket Mode is enabled in your Slack app settings"
-            )
+            ) from None
         self._running = True
         logger.info("Slack channel started (Socket Mode)")
 
@@ -163,7 +163,7 @@ class SlackChannel(Channel):
     # ── Send (template method overrides) ──────────────────────────
 
     async def _send_chunk(self, chat_id, formatted_text, raw_text, reply_to, metadata):
-        kwargs = dict(channel=chat_id)
+        kwargs = {"channel": chat_id}
         # Always route to thread if thread_ts is present in metadata,
         # not just for the first chunk (reply_to is only set for chunk 0).
         if metadata:
