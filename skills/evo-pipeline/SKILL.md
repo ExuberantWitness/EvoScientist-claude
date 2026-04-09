@@ -1,11 +1,11 @@
 ---
 name: evo-pipeline
-description: "Full end-to-end scientific experiment pipeline. Orchestrates all EvoScientist skills: intake → plan → research → ideation → code → run → analyze → iterate → write → review. 全流程编排器。"
+description: "Full end-to-end scientific experiment pipeline. Orchestrates all EvoScientist skills with optional multi-agent discussion mode. 全流程编排器，支持多Agent讨论。"
 argument-hint: [research_proposal_or_question]
-allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, WebSearch, WebFetch, Agent, Skill, mcp__llm-review__chat, mcp__gemini-review__review
+allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, WebSearch, WebFetch, Agent, Skill, mcp__llm-review__chat, mcp__gemini-review__review, mcp__evo-agents__evo_create_session, mcp__evo-agents__evo_send, mcp__evo-agents__evo_discuss, mcp__evo-agents__evo_status, mcp__evo-agents__evo_list_sessions, mcp__evo-agents__evo_get_memory
 ---
 
-# EvoScientist Pipeline: End-to-End Scientific Discovery
+# EvoScientist Pipeline: End-to-End Scientific Discovery with Multi-Agent Support
 
 Run full experiment pipeline for: **$ARGUMENTS**
 
@@ -13,18 +13,22 @@ Run full experiment pipeline for: **$ARGUMENTS**
 
 This is the master orchestrator that chains all EvoScientist skills into a complete scientific discovery workflow. It manages state across phases, handles checkpoints, and supports recovery from interruptions.
 
+**NEW: Multi-Agent Mode** — When `USE_MULTI_AGENT = true`, key phases use the Agent Manager MCP to get multi-perspective analysis from 6 specialized agents (planner, researcher, coder, debugger, analyst, writer).
+
 ```
 W1: Intake → W2: Plan → W3: Research → W3.5: Ideation
-    ↓
+    ↓           ↓           ↓ (MA)        ↓ (MA)
 W4: Code → W4.5: Debug → W4.7: Run
     ↓
 W5: Analyze → W5.5: Iterate ←──────┐
-    ↓                                │
+    ↓ (MA)                           │
     ├── criteria NOT met ────────────┘
     │
     ├── criteria MET
     ↓
 W6: Write → W7: Review (optional) → W8: Memory
+
+(MA) = Multi-Agent discussion enabled
 ```
 
 ## Constants
@@ -38,7 +42,13 @@ W6: Write → W7: Review (optional) → W8: Memory
 - **REVIEWER = "llm-review"** — MCP for review: `llm-review`, `gemini-review`, or `none`
 - **STATE_FILE = "PIPELINE_STATE.json"** — Pipeline state for recovery
 
-> Override: `/evo-pipeline "proposal" — AUTO_PROCEED: true, SKIP_RESEARCH: true`
+### Multi-Agent Constants (NEW)
+
+- **USE_MULTI_AGENT = true** — Enable multi-agent discussion for key phases
+- **MULTI_AGENT_STAGES = ["research", "analyze", "ideation"]** — Phases to use multi-agent
+- **MULTI_AGENT_MODEL = "claude-sonnet-4-5"** — Model for multi-agent sessions
+
+> Override: `/evo-pipeline "proposal" — USE_MULTI_AGENT: false, AUTO_PROCEED: true`
 
 ## Inputs
 
@@ -51,10 +61,18 @@ W6: Write → W7: Review (optional) → W8: Memory
 1. Check `PIPELINE_STATE.json`. If exists with `status: in_progress` and timestamp < 24h:
    - Resume from the saved phase
    - Load all intermediate files
+   - If `session_id` exists and USE_MULTI_AGENT = true, verify session is still active
    - Print: "Resuming pipeline from Phase [N]..."
+
 2. Otherwise, start fresh:
    - Initialize: `mkdir -p artifacts/figures artifacts/tables memory`
    - If `memory/MEMORY.md` doesn't exist, run `/evo-memory init`
+
+3. **Multi-Agent Session Creation** (if USE_MULTI_AGENT = true):
+   - Use `mcp__evo-agents__evo_create_session` with:
+     - `workspace_dir`: current working directory
+     - `model`: MULTI_AGENT_MODEL
+   - Store the returned `session_id` in pipeline state
 
 Save state:
 ```json
@@ -63,7 +81,8 @@ Save state:
   "status": "in_progress",
   "iteration": 0,
   "timestamp": "2026-04-08T22:00:00",
-  "skipped": []
+  "skipped": [],
+  "session_id": "evo_xxx"  // if USE_MULTI_AGENT
 }
 ```
 
@@ -94,10 +113,21 @@ Update state: `"phase": 2`
 
 If SKIP_RESEARCH = true → skip to Phase 3.5
 
-Extract key research topics from `plan.md`. For each topic:
-Invoke: `/evo-research "[topic]"`
+Extract key research topics from `plan.md`.
 
-Output: `research_notes.md`
+**Multi-Agent Mode** (if "research" in MULTI_AGENT_STAGES and session_id exists):
+- Use `mcp__evo-agents__evo_discuss` with:
+  - `session_id`: from pipeline state
+  - `topic`: "Literature review and method survey for: [research topics from plan.md]"
+  - `agents`: ["researcher", "planner", "analyst"]
+- The researcher agent leads the literature search
+- The planner evaluates methodological fit
+- The analyst identifies gaps and opportunities
+- Save the discussion transcript to `research_notes.md`
+
+**Skills Mode** (fallback or single-agent preference):
+- For each topic: Invoke `/evo-research "[topic]"`
+- Output: `research_notes.md`
 
 Update state: `"phase": 3`
 
@@ -105,9 +135,21 @@ Update state: `"phase": 3`
 
 If SKIP_IDEATION = true → skip to Phase 4
 
-Invoke: `/evo-ideation "$ARGUMENTS"`
+**Multi-Agent Mode** (if "ideation" in MULTI_AGENT_STAGES and session_id exists):
+- Use `mcp__evo-agents__evo_discuss` with:
+  - `session_id`: from pipeline state
+  - `topic`: "Generate and evaluate research ideas for: $ARGUMENTS. Consider: feasibility, novelty, resources needed."
+  - `agents`: ["planner", "researcher", "coder", "analyst"]
+- The planner evaluates resource constraints
+- The researcher assesses novelty and related work
+- The coder evaluates implementation complexity
+- The analyst identifies success metrics
+- Each agent proposes ideas, then votes on the best ones
+- Save the discussion transcript to `idea_report.md`
 
-Output: `idea_report.md`
+**Skills Mode** (fallback):
+- Invoke: `/evo-ideation "$ARGUMENTS"`
+- Output: `idea_report.md`
 
 If AUTO_PROCEED = false:
 **🚦 Checkpoint 3:** Present ranked ideas. Ask user to select one.
@@ -129,13 +171,25 @@ For each stage in `plan.md` (in dependency order):
 4. **Run full**: Invoke `/evo-run "Stage N" — SANITY_FIRST: false`
 5. If full run fails: Invoke `/evo-debug "[error]"`, retry once
 
+**Multi-Agent Note**: For complex debugging, optionally use `evo_discuss` with agents: ["coder", "debugger", "analyst"]
+
 Update state: `"phase": 4, "current_stage": N`
 
 ### Phase 5 (W5): Analysis
 
-Invoke: `/evo-analyze "artifacts/"`
+**Multi-Agent Mode** (if "analyze" in MULTI_AGENT_STAGES and session_id exists):
+- Use `mcp__evo-agents__evo_discuss` with:
+  - `session_id`: from pipeline state
+  - `topic`: "Analyze experiment results from artifacts/. Compute metrics, identify patterns, assess statistical significance, compare with baselines. Results files: [list artifact files]"
+  - `agents`: ["analyst", "planner", "researcher"]
+- The analyst leads statistical analysis and visualization
+- The planner evaluates against success criteria
+- The researcher compares with literature baselines
+- Save the discussion transcript to `analysis_report.md`
 
-Output: `analysis_report.md`, `artifacts/figures/`
+**Skills Mode** (fallback):
+- Invoke: `/evo-analyze "artifacts/"`
+- Output: `analysis_report.md`, `artifacts/figures/`
 
 Update state: `"phase": 5`
 
@@ -181,8 +235,15 @@ Update state: `"phase": 7`
 ### Phase 8 (W8): Memory & Cleanup
 
 1. Invoke: `/evo-memory update`
-2. Update `PIPELINE_STATE.json` with `"status": "completed"`
-3. Present final summary:
+
+2. **Multi-Agent Session Cleanup** (if session_id exists):
+   - Use `mcp__evo-agents__evo_get_memory` to extract final agent memory
+   - Optionally save memory insights to `memory/agent_memory.md`
+   - Note: Session persists for potential future resume
+
+3. Update `PIPELINE_STATE.json` with `"status": "completed"`
+
+4. Present final summary:
 
 ```markdown
 ## Pipeline Complete
@@ -202,6 +263,11 @@ Update state: `"phase": 7`
 - Total iterations: N
 - Stages completed: N/M
 
+### Multi-Agent Usage
+- Session ID: evo_xxx (or "not used")
+- Agents consulted: planner, researcher, coder, debugger, analyst, writer
+- Key discussions: research, ideation, analysis
+
 ### Output Files
 - Report: final_report.md
 - Analysis: analysis_report.md
@@ -213,6 +279,47 @@ Update state: `"phase": 7`
 - [N] new entries added to experiment memory
 ```
 
+## Multi-Agent Integration Details
+
+### When to Use Multi-Agent
+
+| Phase | Multi-Agent Value | Agents Involved |
+|-------|-------------------|-----------------|
+| W3: Research | Cross-verify findings, identify gaps | researcher, planner, analyst |
+| W3.5: Ideation | Diverse perspectives, feasibility check | planner, researcher, coder, analyst |
+| W5: Analyze | Statistical rigor, baseline comparison | analyst, planner, researcher |
+| W4.5: Debug | Root cause analysis, fix strategies | coder, debugger, analyst |
+
+### MCP Tool Usage
+
+```
+# Create session (Phase 0)
+mcp__evo-agents__evo_create_session(
+  workspace_dir="/path/to/project",
+  model="claude-sonnet-4-5"
+)
+→ {"session_id": "evo_abc123", ...}
+
+# Trigger discussion (various phases)
+mcp__evo-agents__evo_discuss(
+  session_id="evo_abc123",
+  topic="Literature review for world models in robotics",
+  agents=["researcher", "planner", "analyst"]
+)
+→ {"transcript": "...", "agents_participated": [...]}
+
+# Check status
+mcp__evo-agents__evo_status(session_id="evo_abc123")
+→ {"status": "idle", "sub_agents_used": [...]}
+```
+
+### Graceful Degradation
+
+If MCP tools are unavailable:
+- Log a warning (not an error)
+- Fall back to Skills Mode (single-agent)
+- Continue pipeline execution
+
 ## Key Rules
 
 - **State persistence**: Write PIPELINE_STATE.json after every phase transition. Recovery is critical for long pipelines.
@@ -220,7 +327,7 @@ Update state: `"phase": 7`
 - **Fail forward**: If a non-critical skill fails (e.g., ideation, review), log the error and continue. Only stop for critical failures (code won't run, no data).
 - **One iteration at a time**: Do not try to change multiple things between iterations. Follow plan adjustments from `/evo-iterate`.
 - **Time awareness**: Log timestamps. The user should know how long each phase took.
-- **Graceful MCP degradation**: If review MCP is unavailable, skip review with a warning (not an error).
+- **Graceful MCP degradation**: If review MCP or multi-agent MCP is unavailable, skip with a warning (not an error).
 - **24h staleness**: Pipeline state older than 24h is considered stale. Start fresh.
 
 ## Composing with Individual Skills
@@ -243,7 +350,12 @@ Each phase can be run independently:
 /evo-memory update
 ```
 
-Or run end-to-end:
+Or run end-to-end with multi-agent:
 ```bash
-/evo-pipeline "Your research proposal" — AUTO_PROCEED: true
+/evo-pipeline "Your research proposal" — USE_MULTI_AGENT: true, AUTO_PROCEED: true
+```
+
+Or run single-agent (classic mode):
+```bash
+/evo-pipeline "Your research proposal" — USE_MULTI_AGENT: false
 ```
