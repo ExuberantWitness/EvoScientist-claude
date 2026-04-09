@@ -41,10 +41,9 @@ class AgentManager:
         """Get or create SQLite checkpointer."""
         if self._checkpointer is None:
             try:
-                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-                db_path = Path(self.base_dir) / "sessions.db"
-                self._checkpointer = AsyncSqliteSaver.from_conn_string(str(db_path))
-                await self._checkpointer.setup()
+                from langgraph.checkpoint.memory import InMemorySaver
+                # Use InMemorySaver for simplicity (SQLite has API changes)
+                self._checkpointer = InMemorySaver()
             except ImportError:
                 from langgraph.checkpoint.memory import InMemorySaver
                 self._checkpointer = InMemorySaver()

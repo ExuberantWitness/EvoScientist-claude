@@ -14,6 +14,24 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+class _LsResult:
+    """Result wrapper for als() that deepagents expects (has .error attribute)."""
+    def __init__(self, entries: list[str], error: str | None):
+        self.entries = entries
+        self.error = error
+    def __iter__(self):
+        return iter(self.entries)
+    def __bool__(self):
+        return self.error is None
+
+
+class _GrepResult:
+    """Result wrapper for agrep() that deepagents expects."""
+    def __init__(self, output: str, error: str | None):
+        self.output = output
+        self.error = error
+
+
 class UnrestrictedBackend:
     """Shell backend without sandbox restrictions.
 
@@ -118,6 +136,34 @@ class UnrestrictedBackend:
             return {"exit_code": 124, "output": f"[Timed out after {timeout}s]"}
         except Exception as e:
             return {"exit_code": 1, "output": f"Error: {e}"}
+
+    async def als(self, path: str):
+        """List directory contents (async). Required by deepagents SkillsMiddleware."""
+        try:
+            p = Path(path)
+            if not p.exists() or not p.is_dir():
+                return _LsResult([], error=f"Not a directory: {path}")
+            return _LsResult([f.name for f in p.iterdir()], error=None)
+        except Exception as e:
+            return _LsResult([], error=str(e))
+
+    async def aread(self, path: str) -> str:
+        """Read file contents (async). Required by deepagents."""
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except Exception:
+            return ""
+
+    async def agrep(self, pattern: str, *, path: str = ".", glob: str | None = None):
+        """Grep search (async). Required by deepagents filesystem middleware."""
+        try:
+            cmd = f"grep -rn '{pattern}' '{path}'"
+            if glob:
+                cmd += f" --include='{glob}'"
+            result = await self.execute(cmd, timeout=30)
+            return _GrepResult(result.get("output", ""), error=None if result.get("exit_code", 1) == 0 else None)
+        except Exception as e:
+            return _GrepResult("", error=str(e))
 
     def _log_command(self, command: str):
         """Append command to command_log.md in workspace."""

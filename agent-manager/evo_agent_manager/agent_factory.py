@@ -48,7 +48,8 @@ def create_agent(
     from EvoScientist.llm.models import get_chat_model
     from EvoScientist.prompts import get_system_prompt
     from EvoScientist.utils import load_subagents
-    from EvoScientist.paths import SKILLS_DIR
+    # SKILLS_DIR is defined in EvoScientist.py, not paths.py
+    SKILLS_DIR = str(Path(base_dir) / "evoscientist_core" / "EvoScientist" / "skills")
 
     # Load config
     cfg = get_effective_config()
@@ -93,7 +94,7 @@ def create_agent(
     subagents = []
     if subagent_config.exists():
         subagents = load_subagents(
-            str(subagent_config),
+            subagent_config,  # Pass Path object, not str
             tool_registry=tool_registry,
             prompt_refs=prompt_refs,
         )
