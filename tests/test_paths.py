@@ -14,6 +14,7 @@ def _restore_paths():
     orig = {
         "WORKSPACE_ROOT": paths.WORKSPACE_ROOT,
         "RUNS_DIR": paths.RUNS_DIR,
+        "MEMORIES_DIR": paths.MEMORIES_DIR,
         "MEMORY_DIR": paths.MEMORY_DIR,
         "USER_SKILLS_DIR": paths.USER_SKILLS_DIR,
         "_active_workspace": paths._active_workspace,
@@ -21,6 +22,7 @@ def _restore_paths():
     yield
     paths.WORKSPACE_ROOT = orig["WORKSPACE_ROOT"]
     paths.RUNS_DIR = orig["RUNS_DIR"]
+    paths.MEMORIES_DIR = orig["MEMORIES_DIR"]
     paths.MEMORY_DIR = orig["MEMORY_DIR"]
     paths.USER_SKILLS_DIR = orig["USER_SKILLS_DIR"]
     paths._active_workspace = orig["_active_workspace"]
@@ -29,8 +31,13 @@ def _restore_paths():
 class TestSetWorkspaceRoot:
     """Tests for set_workspace_root()."""
 
-    def test_updates_derived_dirs(self, tmp_path):
+    def test_updates_derived_dirs(self, tmp_path, monkeypatch):
         """set_workspace_root should update WORKSPACE_ROOT and all derived dirs."""
+        monkeypatch.delenv("EVOSCIENTIST_MEMORIES_DIR", raising=False)
+        monkeypatch.delenv("EVOSCIENTIST_MEMORY_DIR", raising=False)
+        monkeypatch.delenv("EVOSCIENTIST_RUNS_DIR", raising=False)
+        monkeypatch.delenv("EVOSCIENTIST_SKILLS_DIR", raising=False)
+
         new_root = tmp_path / "my_workspace"
         new_root.mkdir()
 
@@ -38,7 +45,8 @@ class TestSetWorkspaceRoot:
 
         assert paths.WORKSPACE_ROOT == new_root.resolve()
         assert paths.RUNS_DIR == new_root.resolve() / "runs"
-        assert paths.MEMORY_DIR == new_root.resolve() / "memory"
+        # MEMORIES_DIR is global — not derived from workspace root
+        assert paths.MEMORIES_DIR == paths.GLOBAL_MEMORIES_DIR
         assert paths.USER_SKILLS_DIR == new_root.resolve() / "skills"
 
     def test_resets_active_workspace(self, tmp_path):
@@ -60,7 +68,7 @@ class TestSetWorkspaceRoot:
         custom_runs = tmp_path / "custom_runs"
 
         env = {
-            "EVOSCIENTIST_MEMORY_DIR": str(custom_mem),
+            "EVOSCIENTIST_MEMORIES_DIR": str(custom_mem),
             "EVOSCIENTIST_SKILLS_DIR": str(custom_skills),
             "EVOSCIENTIST_RUNS_DIR": str(custom_runs),
         }
@@ -75,8 +83,8 @@ class TestSetWorkspaceRoot:
             assert paths.WORKSPACE_ROOT == new_root.resolve()
             assert paths._active_workspace == new_root.resolve()
 
-            # Derived dirs should reflect the env overrides, not the new root
-            assert paths.MEMORY_DIR == custom_mem.expanduser()
+            # MEMORIES_DIR respects env override
+            assert paths.MEMORIES_DIR == custom_mem.expanduser()
             assert paths.USER_SKILLS_DIR == custom_skills.expanduser()
             assert paths.RUNS_DIR == custom_runs.expanduser()
 
@@ -94,14 +102,21 @@ class TestEnsureDirsUsesUpdatedPaths:
     """ensure_dirs should create dirs at the currently set paths."""
 
     def test_ensure_dirs_uses_updated_paths(self, tmp_path):
-        """After set_workspace_root, ensure_dirs creates dirs at new location."""
+        """ensure_dirs creates the global memories dir (not workspace-local)."""
         new_root = tmp_path / "workspace"
         new_root.mkdir()
 
-        paths.set_workspace_root(new_root)
-        paths.ensure_dirs()
+        custom_mem = tmp_path / "memories"
 
-        assert (new_root / "memory").is_dir()
-        assert not (
-            new_root / "skills"
-        ).exists()  # skills created on demand by install_skill()
+        with mock.patch.dict(
+            os.environ, {"EVOSCIENTIST_MEMORIES_DIR": str(custom_mem)}
+        ):
+            paths.set_workspace_root(new_root)
+            paths.ensure_dirs()
+
+            assert custom_mem.is_dir()
+            assert not (new_root / "memory").exists()  # no longer workspace-local
+            assert not (new_root / "memories").exists()
+            assert not (
+                new_root / "skills"
+            ).exists()  # skills created on demand by install_skill()
