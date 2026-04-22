@@ -34,6 +34,7 @@ from ..sessions import (
 )
 from ..stream.events import stream_agent_events
 from ..stream.state import _INTERNAL_TOOLS, StreamState
+from ._agent_loader import BackgroundAgentLoader, MCPProgressTracker
 from ._constants import LOGO_GRADIENT, LOGO_LINES, WELCOME_SLOGANS, build_metadata
 from .channel import (
     ChannelMessage,
@@ -221,6 +222,7 @@ def run_textual_interactive(
             AssistantMessage,
             CompactingWidget,
             LoadingWidget,
+            MCPLoaderWidget,
             SubAgentWidget,
             SummarizationWidget,
             SystemMessage,
@@ -323,7 +325,6 @@ def run_textual_interactive(
         def __init__(
             self,
             *,
-            agent: Any,
             thread_id_value: str,
             workspace: str | None,
             checkpointer: Any,
@@ -332,7 +333,14 @@ def run_textual_interactive(
             resume_warning: str = "",
         ) -> None:
             super().__init__()
-            self._agent = agent
+            self._progress_tracker = MCPProgressTracker()
+            self._agent_loader = BackgroundAgentLoader(
+                load_agent,
+                on_progress=self._on_mcp_progress,
+                on_success=self._on_agent_load_success,
+                on_failure=self._on_agent_load_failure,
+            )
+            self._mcp_loader_widget: Any = None
             self._conversation_tid = thread_id_value
             self._workspace_dir = workspace
             self._checkpointer = checkpointer
@@ -368,6 +376,88 @@ def run_textual_interactive(
             self._status_streaming_text = ""
             self._status_last_input_tokens: int | None = None
             self._compacting_widget: CompactingWidget | None = None
+
+        # ── Background agent / MCP loading ───────────────────
+
+        def _on_mcp_progress(self, event: str, server: str, detail: str) -> None:
+            """Bridge worker-thread progress events to the Textual loop."""
+            if event not in {"start", "success", "error"}:
+                return
+            try:
+                self.call_from_thread(self._apply_mcp_progress, event, server, detail)
+            except Exception:
+                pass
+
+        def _apply_mcp_progress(self, event: str, server: str, detail: str) -> None:
+            """Update tracker + widget on the Textual thread."""
+            state = self._progress_tracker.record(event, server, detail)
+            if state is None:
+                return
+            widget = self._mcp_loader_widget
+            if widget is None or widget.dismissed:
+                self._mcp_loader_widget = None
+                return
+            widget.update_server(server, state, detail)
+
+        def _on_agent_load_success(self, agent: Any) -> None:
+            if _channels_is_running():
+                _ch_mod._cli_agent = agent
+                _ch_mod._cli_thread_id = self._conversation_tid
+            self._finish_loader_widget()
+            self._render_status()
+
+        def _on_agent_load_failure(self, exc: BaseException) -> None:
+            self._append_system(f"Agent failed to load: {exc}", style="red")
+            self._finish_loader_widget()
+
+        def _start_background_agent_load(self, workspace: str | None) -> None:
+            self._progress_tracker.prime()
+            self._mount_mcp_loader_widget()
+            self._agent_loader.start(
+                workspace_dir=workspace,
+                checkpointer=self._checkpointer,
+            )
+
+        def _mount_mcp_loader_widget(self) -> None:
+            if not self._progress_tracker.progress:
+                return
+            if self._mcp_loader_widget is not None:
+                try:
+                    self._mcp_loader_widget.remove()
+                except Exception:
+                    pass
+                self._mcp_loader_widget = None
+            widget = MCPLoaderWidget(list(self._progress_tracker.progress.keys()))
+            try:
+                shell = self.query_one("#input-shell", Container)
+                children = list(shell.children)
+                if children:
+                    shell.mount(widget, before=children[0])
+                else:
+                    shell.mount(widget)
+            except Exception:
+                # Compose hasn't happened yet — the mount will be retried
+                # from ``on_mount`` once the DOM is ready.
+                return
+            self._mcp_loader_widget = widget
+
+        def _finish_loader_widget(self) -> None:
+            """Call ``mark_finished`` and clear the ref if self-dismissed."""
+            widget = self._mcp_loader_widget
+            if widget is None:
+                return
+            try:
+                widget.mark_finished()
+            except Exception:
+                pass
+            if widget.dismissed:
+                self._mcp_loader_widget = None
+
+        async def _await_agent_ready(self) -> Any:
+            """Await the agent load, auto-retrying on cold-start or failure."""
+            if self._agent_loader.needs_restart:
+                self._start_background_agent_load(self._workspace_dir)
+            return await self._agent_loader.await_ready()
 
         # ── CommandUI implementation ─────────────────────────
 
@@ -471,18 +561,13 @@ def run_textual_interactive(
             if not workspace_fixed:
                 self._workspace_dir = create_session_workspace(run_name)
             self._conversation_tid = generate_thread_id()
-            self._agent = load_agent(
-                workspace_dir=self._workspace_dir,
-                checkpointer=self._checkpointer,
-            )
+            # Background reload: next user message awaits it.
+            self._start_background_agent_load(self._workspace_dir)
             self._status_started_at = datetime.now()
             self._status_base_snapshot = make_empty_status_snapshot(self._current_model)
             self._status_snapshot = self._status_base_snapshot
             self._status_streaming_text = ""
             self._status_last_input_tokens = None
-            if _channels_is_running():
-                _ch_mod._cli_agent = self._agent
-                _ch_mod._cli_thread_id = self._conversation_tid
             self._render_welcome()
             self._render_status()
             refresh_task = asyncio.create_task(self._refresh_status_snapshot())
@@ -497,18 +582,13 @@ def run_textual_interactive(
                 self._workspace_dir = workspace_dir
 
             self._conversation_tid = thread_id
-            self._agent = load_agent(
-                workspace_dir=self._workspace_dir,
-                checkpointer=self._checkpointer,
-            )
+            # Background reload: history renders immediately; next turn awaits.
+            self._start_background_agent_load(self._workspace_dir)
             self._status_started_at = datetime.now()
             self._status_base_snapshot = make_empty_status_snapshot(self._current_model)
             self._status_snapshot = self._status_base_snapshot
             self._status_streaming_text = ""
             self._status_last_input_tokens = None
-            if _channels_is_running():
-                _ch_mod._cli_agent = self._agent
-                _ch_mod._cli_thread_id = self._conversation_tid
             self._render_welcome()
             await self._refresh_status_snapshot()
             self._render_status()
@@ -543,6 +623,10 @@ def run_textual_interactive(
             self._render_welcome()
             self._render_status()
             self.set_interval(1.0, self._render_status)
+            # Kick off agent construction in the background so the TUI
+            # appears instantly; MCP progress shows up in the status bar.
+            if self._agent_loader.agent is None and self._agent_loader.task is None:
+                self._start_background_agent_load(self._workspace_dir)
             refresh_task = asyncio.create_task(self._refresh_status_snapshot())
             self._background_tasks.add(refresh_task)
             refresh_task.add_done_callback(self._background_tasks.discard)
@@ -572,8 +656,22 @@ def run_textual_interactive(
             self.run_worker(
                 self._check_for_updates, exclusive=True, group="update-check"
             )
-            # Auto-start channels
-            self._start_channels()
+
+            # Auto-start channels — needs the agent, so defer to after load
+            async def _deferred_start_channels():
+                try:
+                    await self._await_agent_ready()
+                except Exception:
+                    _channel_logger.debug(
+                        "Skipping channel auto-start because agent load failed",
+                        exc_info=True,
+                    )
+                    return
+                self._start_channels()
+
+            ch_task = asyncio.create_task(_deferred_start_channels())
+            self._background_tasks.add(ch_task)
+            ch_task.add_done_callback(self._background_tasks.discard)
 
         # ── Update check ──────────────────────────────────────
 
@@ -604,7 +702,7 @@ def run_textual_interactive(
                 cfg = load_config()
                 if cfg and cfg.channel_enabled and not _channels_is_running():
                     _auto_start_channel(
-                        self._agent,
+                        self._agent_loader.agent,
                         self._conversation_tid,
                         cfg,
                         send_thinking=self._channel_send_thinking,
@@ -1050,7 +1148,7 @@ def run_textual_interactive(
                     summarization_w = None
                 try:
                     async for event in stream_agent_events(
-                        self._agent,
+                        self._agent_loader.agent,
                         _stream_input,
                         self._conversation_tid,
                         metadata=metadata,
@@ -1597,6 +1695,14 @@ def run_textual_interactive(
                 )
                 await self._refresh_status_snapshot(message_to_send)
 
+                # Block the turn on MCP tools finishing, if still in flight.
+                # ``_on_agent_load_failure`` is the sole reporter for load
+                # errors; callers just return so the send is dropped.
+                try:
+                    await self._await_agent_ready()
+                except Exception:
+                    return
+
                 await self._stream_with_widgets(
                     message_to_send,
                     display_text=user_text,
@@ -1717,8 +1823,19 @@ def run_textual_interactive(
 
                 # Handle slash commands from channel
                 if msg.content.strip().startswith("/"):
+                    # Only wait for the agent if the command actually
+                    # needs it — otherwise ``/mcp add`` & friends would
+                    # hang behind a failing MCP load they're meant to fix.
+                    cmd, cmd_args = cmd_manager.resolve(msg.content) or (None, [])
+                    agent = None
+                    if cmd is not None and cmd.needs_agent(cmd_args):
+                        try:
+                            agent = await self._await_agent_ready()
+                        except Exception as exc:
+                            _set_channel_response(msg.msg_id, f"Error: {exc}")
+                            return
                     ctx = CommandContext(
-                        agent=self._agent,
+                        agent=agent,
                         thread_id=self._conversation_tid,
                         ui=ChannelCommandUI(
                             msg,
@@ -1750,6 +1867,14 @@ def run_textual_interactive(
                             msg.msg_id, f"Command executed: {msg.content}"
                         )
                         return  # outer finally handles _busy / widget cleanup
+
+                # Non-slash message — streams through the agent, so wait
+                # for readiness now.
+                try:
+                    await self._await_agent_ready()
+                except Exception as exc:
+                    _set_channel_response(msg.msg_id, f"Error: {exc}")
+                    return
 
                 response = ""
                 try:
@@ -2136,22 +2261,41 @@ def run_textual_interactive(
             prompt_widget.disabled = True
             self._render_status()
 
-            ctx = CommandContext(
-                agent=self._agent,
-                thread_id=self._conversation_tid,
-                ui=self,
-                workspace_dir=self._workspace_dir,
-                checkpointer=self._checkpointer,
-                input_tokens_hint=self._status_last_input_tokens,
-            )
-
             try:
+                # Only gate on agent readiness for commands that need it —
+                # recovery commands like ``/mcp add`` must run even when
+                # ``_await_agent_ready`` would hang on a broken MCP load.
+                cmd, cmd_args = cmd_manager.resolve(command) or (None, [])
+                agent = None
+                if cmd is not None and cmd.needs_agent(cmd_args):
+                    try:
+                        agent = await self._await_agent_ready()
+                    except Exception:
+                        # ``_on_agent_load_failure`` already surfaced the error.
+                        return
+                ctx = CommandContext(
+                    agent=agent,
+                    thread_id=self._conversation_tid,
+                    ui=self,
+                    workspace_dir=self._workspace_dir,
+                    checkpointer=self._checkpointer,
+                    input_tokens_hint=self._status_last_input_tokens,
+                )
+
                 if await cmd_manager.execute(command, ctx):
-                    # Sync agent back if command replaced it (e.g. /model)
-                    if ctx.agent is not self._agent:
-                        self._agent = ctx.agent
+                    # Sync agent back if command replaced it (e.g. /model).
+                    # ``is not None`` guard: non-agent commands (ctx.agent
+                    # starts None) must not clobber a valid loaded agent.
+                    if (
+                        ctx.agent is not None
+                        and ctx.agent is not self._agent_loader.agent
+                    ):
+                        # ``adopt`` also cancels/supersedes any in-flight
+                        # load so a late completion can't overwrite the
+                        # replacement agent (/model on a broken provider).
+                        self._agent_loader.adopt(ctx.agent)
                         if _channels_is_running():
-                            _ch_mod._cli_agent = self._agent
+                            _ch_mod._cli_agent = ctx.agent
                             _ch_mod._cli_thread_id = self._conversation_tid
                     # Do NOT invalidate the usage baseline after /compact.
                     # build_session_status_snapshot() only counts raw checkpoint
@@ -2445,6 +2589,8 @@ def run_textual_interactive(
                 or getattr(self.screen.size, "width", 0)
                 or 80
             )
+            # MCP load progress lives in the dedicated MCPLoaderWidget
+            # above the input bar — no need to duplicate it here.
             if self._busy:
                 hint_label = "vibe researching..."
                 hint_style = f"on {STATUS_BAR_BG} {STATUS_HINT_BUSY} bold"
@@ -2540,12 +2686,10 @@ def run_textual_interactive(
             if not effective_thread_id:
                 effective_thread_id = generate_thread_id()
 
-            initial_agent = load_agent(
-                workspace_dir=effective_workspace,
-                checkpointer=checkpointer,
-            )
+            # The TUI opens instantly and starts MCP loading in the
+            # background; ``on_mount`` in the app kicks off the real
+            # ``load_agent`` call and awaits it before the first turn.
             app = EvoTextualInteractiveApp(
-                agent=initial_agent,
                 thread_id_value=effective_thread_id,
                 workspace=effective_workspace,
                 checkpointer=checkpointer,
