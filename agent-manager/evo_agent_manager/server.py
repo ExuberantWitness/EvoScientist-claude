@@ -85,8 +85,10 @@ TOOLS = [
         name="evo_discuss",
         description=(
             "Trigger a multi-agent discussion on a topic. "
-            "Multiple sub-agents analyze the topic from their expertise (planning, research, code, analysis) "
-            "and produce a discussion transcript with synthesized conclusion."
+            "Multiple sub-agents analyze the topic from their expertise (planning, research, analysis) "
+            "and produce a discussion transcript with synthesized conclusion. "
+            "Code and debug agents are excluded by default — implementation proposals "
+            "are returned as 'code_proposals' for Claude Code to execute."
         ),
         inputSchema={
             "type": "object",
@@ -96,7 +98,12 @@ TOOLS = [
                 "agents": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Specific agents to involve (optional, default: all)",
+                    "description": "Specific agents to involve (optional, default: planner, researcher, analyst)",
+                },
+                "exclude_agents": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Agents to exclude (default: ['code-agent', 'debug-agent']). Proposals returned instead of executed.",
                 },
             },
             "required": ["session_id", "topic"],
@@ -153,6 +160,31 @@ TOOLS = [
             "required": ["session_id"],
         },
     ),
+    Tool(
+        name="evo_pipeline_control",
+        description=(
+            "Control the pipeline state from Claude Code. Actions: pause, resume, "
+            "switch_to_claude (mark phase as awaiting Claude Code), switch_to_agent "
+            "(return control to multi-agent pipeline), set_phase (jump to a specific phase). "
+            "Updates PIPELINE_STATE.json and notifies dashboard via SSE."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Session ID"},
+                "action": {
+                    "type": "string",
+                    "description": "Control action: pause, resume, switch_to_claude, switch_to_agent, set_phase",
+                    "enum": ["pause", "resume", "switch_to_claude", "switch_to_agent", "set_phase"],
+                },
+                "phase": {
+                    "type": "number",
+                    "description": "Target phase number (only for set_phase action)",
+                },
+            },
+            "required": ["session_id", "action"],
+        },
+    ),
 ]
 
 
@@ -180,6 +212,7 @@ async def handle_tool(name: str, arguments: dict) -> str:
             session_id=arguments["session_id"],
             topic=arguments["topic"],
             agents=arguments.get("agents"),
+            exclude_agents=arguments.get("exclude_agents"),
         )
     elif name == "evo_status":
         result = await mgr.get_status(session_id=arguments["session_id"])
@@ -196,6 +229,12 @@ async def handle_tool(name: str, arguments: dict) -> str:
         )
     elif name == "evo_get_memory":
         result = await mgr.get_memory(session_id=arguments["session_id"])
+    elif name == "evo_pipeline_control":
+        result = mgr.pipeline_control(
+            session_id=arguments["session_id"],
+            action=arguments["action"],
+            phase=arguments.get("phase"),
+        )
     else:
         result = {"error": f"Unknown tool: {name}"}
 
@@ -206,12 +245,16 @@ async def handle_tool(name: str, arguments: dict) -> str:
 # MCP Server setup
 # ---------------------------------------------------------------------------
 
-def create_server(base_dir: str | None = None) -> Server:
+def create_server(base_dir: str | None = None, dashboard_port: int = 8420) -> Server:
     """Create and configure the MCP server."""
     server = Server("evo-agent-manager")
 
     # Initialize manager with base_dir
-    get_manager(base_dir)
+    mgr = get_manager(base_dir)
+
+    # Wire manager to dashboard
+    from .dashboard import set_manager
+    set_manager(mgr)
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -225,9 +268,26 @@ def create_server(base_dir: str | None = None) -> Server:
     return server
 
 
-async def run_server(base_dir: str | None = None):
-    """Run the MCP server on stdio."""
+async def run_server(base_dir: str | None = None, dashboard_port: int = 8420):
+    """Run the MCP server on stdio with optional dashboard."""
+    # Ensure API keys are available (Claude Code may not inject -e vars at runtime)
+    _defaults = {
+        "OPENAI_API_KEY": "sk-a6224d667c474d47a6089a2e3530534c",
+        "OPENAI_API_BASE": "https://api.deepseek.com/v1",
+        "TAVILY_API_KEY": "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",
+    }
+    for k, v in _defaults.items():
+        os.environ.setdefault(k, v)
+
     server = create_server(base_dir)
+
+    # Start dashboard web server in background thread (shares AgentManager)
+    if dashboard_port and dashboard_port > 0:
+        try:
+            from .dashboard import start_dashboard
+            start_dashboard(port=dashboard_port)
+        except Exception as e:
+            logger.warning(f"Dashboard failed to start: {e}")
 
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
@@ -254,6 +314,7 @@ def main():
     parser = argparse.ArgumentParser(description="EvoScientist Agent Manager MCP Server")
     parser.add_argument("--test", action="store_true", help="Print tool list and exit")
     parser.add_argument("--base-dir", type=str, default=None, help="Base directory for agent-manager")
+    parser.add_argument("--dashboard-port", type=int, default=8420, help="Dashboard web server port (0 to disable)")
     args = parser.parse_args()
 
     if args.test:
@@ -268,7 +329,7 @@ def main():
         stream=sys.stderr,
     )
 
-    asyncio.run(run_server(base_dir))
+    asyncio.run(run_server(base_dir, dashboard_port=args.dashboard_port))
 
 
 if __name__ == "__main__":

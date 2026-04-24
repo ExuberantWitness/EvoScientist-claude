@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .event_bus import EventBus
 from .utils import generate_session_id, now_iso, truncate
 
 logger = logging.getLogger(__name__)
@@ -27,26 +28,97 @@ class AgentSession:
     last_response: str = ""
     sub_agents_used: list[str] = field(default_factory=list)
     pending_approvals: list[dict] = field(default_factory=list)
+    # Thread management for context overflow prevention
+    thread_count: int = 0
+    thread_summaries: list[str] = field(default_factory=list)
 
 
 class AgentManager:
     """Manages EvoScientist agent sessions."""
 
+    # Safety threshold: rotate thread before hitting model's context limit
+    MAX_CONTEXT_CHARS = 2_400_000  # ~800K tokens (80% of DeepSeek's 1M)
+
     def __init__(self, base_dir: str | None = None):
         self.base_dir = base_dir or str(Path(__file__).parent.parent)
         self.sessions: dict[str, AgentSession] = {}
         self._checkpointer = None
+        self._event_bus = EventBus()
+        self._stream_states: dict[str, Any] = {}
+        self._use_rich_streaming = True
+        # Pipeline pause gates: per-session asyncio.Event
+        self._pipeline_gates: dict[str, asyncio.Event] = {}
+
+    @property
+    def event_bus(self) -> EventBus:
+        return self._event_bus
+
+    # ── Pipeline pause gate ──
+
+    def _get_gate(self, session_id: str) -> asyncio.Event:
+        """Get or create the pipeline gate for a session."""
+        if session_id not in self._pipeline_gates:
+            self._pipeline_gates[session_id] = asyncio.Event()
+            self._pipeline_gates[session_id].set()  # default: not paused
+        return self._pipeline_gates[session_id]
+
+    async def _wait_if_paused(self, session_id: str):
+        """Block if pipeline is paused. Returns immediately if not."""
+        gate = self._get_gate(session_id)
+        if not gate.is_set():
+            logger.info(f"Pipeline paused for {session_id}, waiting...")
+            await gate.wait()
+            logger.info(f"Pipeline resumed for {session_id}")
+
+    # ── Thread rotation for context overflow prevention ──
+
+    def _rotate_thread(self, session: AgentSession, summary: str = "") -> str:
+        """Create a new thread to avoid context accumulation.
+
+        Each discuss()/send_message() call gets its own LangGraph thread
+        so message history doesn't grow unboundedly. Previous context is
+        passed via summaries injected into the first message.
+        """
+        if summary:
+            session.thread_summaries.append(summary)
+        session.thread_count += 1
+        new_thread = f"{session.session_id}_t{session.thread_count}"
+        session.thread_id = new_thread
+        logger.info(f"Rotated to thread {new_thread} (total: {session.thread_count})")
+        return new_thread
+
+    def _summarize_response(self, response: str, max_len: int = 2000) -> str:
+        """Extract a compact summary from an agent response."""
+        if not response:
+            return ""
+        if len(response) <= max_len:
+            return response
+        # Take beginning + look for conclusion section
+        parts = [response[:max_len // 2]]
+        lower = response.lower()
+        for marker in ["## synthesis", "## conclusion", "## summary", "## key findings", "## final"]:
+            idx = lower.find(marker)
+            if idx >= 0:
+                tail = response[idx:idx + max_len // 2]
+                parts.append(f"\n...[truncated]...\n{tail}")
+                break
+        return "\n".join(parts)
+
+    def _build_context_prefix(self, session: AgentSession) -> str:
+        """Build context from previous thread summaries."""
+        if not session.thread_summaries:
+            return ""
+        parts = ["## Previous Discussion Summaries\n"]
+        for i, s in enumerate(session.thread_summaries, 1):
+            parts.append(f"### Discussion {i}\n{s}\n")
+        parts.append("---\n\n")
+        return "\n".join(parts)
 
     async def _get_checkpointer(self):
-        """Get or create SQLite checkpointer."""
+        """Get or create checkpointer (InMemorySaver for simplicity)."""
         if self._checkpointer is None:
-            try:
-                from langgraph.checkpoint.memory import InMemorySaver
-                # Use InMemorySaver for simplicity (SQLite has API changes)
-                self._checkpointer = InMemorySaver()
-            except ImportError:
-                from langgraph.checkpoint.memory import InMemorySaver
-                self._checkpointer = InMemorySaver()
+            from langgraph.checkpoint.memory import InMemorySaver
+            self._checkpointer = InMemorySaver()
         return self._checkpointer
 
     async def create_session(
@@ -94,12 +166,23 @@ class AgentManager:
         if not session:
             return {"error": f"Session {session_id} not found"}
 
+        # Pipeline pause gate
+        await self._wait_if_paused(session_id)
+
+        # Rotate thread: new thread for each call, carry summaries
+        summary = self._summarize_response(session.last_response) if session.last_response else ""
+        self._rotate_thread(session, summary)
+
         session.status = "running"
         session.sub_agents_used = []
         session.events = []
 
         try:
-            response = await self._run_agent(session, message)
+            # Inject previous context
+            ctx_prefix = self._build_context_prefix(session)
+            full_message = ctx_prefix + message if ctx_prefix else message
+
+            response = await self._run_agent(session, full_message)
             session.last_response = response
             session.status = "idle"
 
@@ -108,6 +191,7 @@ class AgentManager:
                 "sub_agents_used": session.sub_agents_used,
                 "events_count": len(session.events),
                 "status": "completed",
+                "thread_id": session.thread_id,
             }
         except Exception as e:
             session.status = "error"
@@ -115,19 +199,29 @@ class AgentManager:
             return {"error": str(e), "status": "error"}
 
     async def discuss(
-        self, session_id: str, topic: str, agents: list[str] | None = None
+        self,
+        session_id: str,
+        topic: str,
+        agents: list[str] | None = None,
+        exclude_agents: list[str] | None = None,
     ) -> dict:
         """Trigger a multi-agent discussion on a topic.
 
-        The main agent orchestrates sub-agents to discuss the topic
-        from multiple perspectives.
+        Args:
+            exclude_agents: Sub-agents to exclude from delegation. If an
+                implementation need arises, it is returned as a proposal
+                instead of being executed. Default: ["code-agent", "debug-agent"].
         """
         session = self.sessions.get(session_id)
         if not session:
             return {"error": f"Session {session_id} not found"}
 
-        # Craft a discussion prompt that triggers multi-agent delegation
-        agent_list = ", ".join(agents) if agents else "planner, researcher, code expert, and analyst"
+        # Pipeline pause gate
+        await self._wait_if_paused(session_id)
+
+        excluded = set(exclude_agents or ["code-agent", "debug-agent"])
+
+        agent_list = ", ".join(agents) if agents else "planner, researcher, and analyst"
         discussion_prompt = (
             f"I need a multi-perspective discussion on this topic: {topic}\n\n"
             f"Please delegate to your sub-agents ({agent_list}) and have each one "
@@ -135,27 +229,80 @@ class AgentManager:
             f"1. Ask them to analyze the topic from their expertise\n"
             f"2. Collect their responses\n"
             f"3. Synthesize a conclusion\n\n"
-            f"Format the output as a discussion transcript showing each agent's contribution."
         )
+        if excluded:
+            names = ", ".join(sorted(excluded))
+            discussion_prompt += (
+                f"IMPORTANT: Do NOT delegate to {names}. "
+                f"If implementation or debugging work is needed, describe it as a "
+                f"proposal under a '## Code Proposals' section instead of executing it. "
+                f"Each proposal should have a clear title and description.\n\n"
+            )
+        discussion_prompt += "Format the output as a discussion transcript showing each agent's contribution."
 
         session.status = "running"
         session.sub_agents_used = []
         session.events = []
 
+        # Rotate thread: new thread for each discussion, carry summaries
+        summary = self._summarize_response(session.last_response) if session.last_response else ""
+        self._rotate_thread(session, summary)
+
         try:
-            response = await self._run_agent(session, discussion_prompt)
+            # Inject previous context into the discussion prompt
+            ctx_prefix = self._build_context_prefix(session)
+            full_prompt = ctx_prefix + discussion_prompt if ctx_prefix else discussion_prompt
+
+            response = await self._run_agent(session, full_prompt)
             session.last_response = response
             session.status = "idle"
 
+            # Extract code proposals from transcript
+            code_proposals = self._extract_code_proposals(response, excluded)
+
+            has_proposals = len(code_proposals) > 0
             return {
                 "transcript": truncate(response, 6000),
                 "agents_participated": session.sub_agents_used,
                 "events_count": len(session.events),
+                "code_proposals": code_proposals,
+                "has_code_proposals": has_proposals,
+                "requires_claude_code": has_proposals,
                 "status": "completed",
+                "thread_id": session.thread_id,
             }
         except Exception as e:
             session.status = "error"
             return {"error": str(e)}
+
+    def _extract_code_proposals(self, transcript: str, excluded: set[str]) -> list[str]:
+        """Extract code/debug proposals from transcript text."""
+        proposals = []
+        in_proposals_section = False
+        for line in transcript.split("\n"):
+            stripped = line.strip()
+            # Match "## Code Proposals" or "### Code Proposals" (any heading level)
+            is_proposal_heading = (
+                "code proposal" in stripped.lower()
+                and stripped.lstrip("#").strip().lower().startswith("code proposal")
+            )
+            if is_proposal_heading:
+                in_proposals_section = True
+                continue
+            # End of proposals section: next heading (## or ###) that is not a proposals heading
+            if in_proposals_section and stripped.startswith("#") and not is_proposal_heading:
+                in_proposals_section = False
+                continue
+            if in_proposals_section:
+                # Capture numbered or bullet items
+                if stripped and (stripped[0].isdigit() or stripped.startswith("-") or stripped.startswith("*")):
+                    proposals.append(stripped.lstrip("-*0123456789. "))
+                elif stripped.startswith("**"):
+                    # Bold-wrapped proposal title: **Proposal N: Title**
+                    clean = stripped.strip("*").strip()
+                    if clean:
+                        proposals.append(clean)
+        return proposals[:20]  # Cap at 20 proposals
 
     async def get_status(self, session_id: str) -> dict:
         """Get current session status."""
@@ -163,7 +310,6 @@ class AgentManager:
         if not session:
             return {"error": f"Session {session_id} not found"}
 
-        # Read memory if exists
         memory_summary = ""
         memory_path = Path(session.workspace_dir) / "memory" / "MEMORY.md"
         if memory_path.exists():
@@ -180,6 +326,104 @@ class AgentManager:
             "memory_summary": memory_summary,
             "pending_approvals": len(session.pending_approvals),
         }
+
+    def get_stream_state(self, session_id: str) -> dict:
+        """Get the rich stream state for dashboard."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+        state = self._stream_states.get(session_id)
+        if state is None:
+            return {"status": "no_stream_data"}
+        return {
+            "session_id": session_id,
+            "agent_status": session.status,
+            "thinking_text": getattr(state, "thinking_text", "")[:500],
+            "response_text": getattr(state, "response_text", "")[:2000],
+            "is_thinking": getattr(state, "is_thinking", False),
+            "is_responding": getattr(state, "is_responding", False),
+            "tool_calls": [
+                {"name": tc.get("name", ""), "id": tc.get("id", ""), "args_preview": str(tc.get("args", ""))[:100]}
+                for tc in getattr(state, "tool_calls", [])[-20:]
+            ],
+            "subagents": [
+                {"name": sa.name, "is_active": sa.is_active}
+                for sa in getattr(state, "subagents", [])
+            ],
+            "total_input_tokens": getattr(state, "total_input_tokens", 0),
+            "total_output_tokens": getattr(state, "total_output_tokens", 0),
+        }
+
+    def get_pipeline_state(self, session_id: str) -> dict:
+        """Read PIPELINE_STATE.json from session workspace."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+        state_path = Path(session.workspace_dir) / "PIPELINE_STATE.json"
+        if not state_path.exists():
+            return {"status": "no_pipeline"}
+        try:
+            return json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"status": "parse_error"}
+
+    def pipeline_control(self, session_id: str, action: str, **kwargs) -> dict:
+        """Control pipeline state from dashboard or Claude Code.
+
+        Actions: pause, resume, switch_to_claude, switch_to_agent, set_phase
+        """
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+
+        state_path = Path(session.workspace_dir) / "PIPELINE_STATE.json"
+        state = {}
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except Exception:
+                state = {}
+
+        action_map = {
+            "pause": ("paused", "pipeline"),
+            "resume": ("in_progress", "pipeline"),
+            "switch_to_claude": ("awaiting_claude_code", "claude_code"),
+            "switch_to_agent": ("in_progress", "pipeline"),
+        }
+
+        if action in action_map:
+            status, control = action_map[action]
+            state["status"] = status
+            state["control"] = control
+            state["timestamp"] = now_iso()
+
+            # Operate the asyncio gate
+            gate = self._get_gate(session_id)
+            if action == "pause":
+                gate.clear()  # block future calls
+            else:
+                gate.set()    # allow calls
+        elif action == "set_phase":
+            phase = kwargs.get("phase")
+            if phase is not None:
+                state["phase"] = phase
+                state["timestamp"] = now_iso()
+
+        # Write back
+        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        # Publish SSE event
+        self._event_bus.publish(session_id, {
+            "type": "pipeline_control_changed",
+            "timestamp": now_iso(),
+            "data": {"action": action, "status": state.get("status"), "phase": state.get("phase")},
+        })
+
+        return {"action": action, "status": state.get("status"), "phase": state.get("phase")}
+
+    def get_pipeline_control(self, session_id: str) -> dict:
+        """Read current pipeline control state."""
+        return self.get_pipeline_state(session_id)
 
     def list_sessions(self) -> list[dict]:
         """List all active sessions."""
@@ -202,7 +446,6 @@ class AgentManager:
         if not session.pending_approvals:
             return {"error": "No pending approvals"}
 
-        # Find and process the approval
         for i, approval in enumerate(session.pending_approvals):
             if approval.get("id") == action_id:
                 session.pending_approvals.pop(i)
@@ -229,12 +472,93 @@ class AgentManager:
                 result[name] = truncate(path.read_text(encoding="utf-8"), 2000)
 
         if not result:
-            result["status"] = "No memory files found. Run /evo-memory init first."
+            result["status"] = "No memory files found."
 
         return result
 
     async def _run_agent(self, session: AgentSession, message: str) -> str:
-        """Run the agent and collect response."""
+        """Run the agent with rich event streaming (fallback to simple)."""
+        if self._use_rich_streaming:
+            try:
+                return await self._run_agent_rich(session, message)
+            except Exception as e:
+                logger.warning(f"Rich streaming failed ({e}), falling back to simple")
+                self._use_rich_streaming = False
+        return await self._run_agent_simple(session, message)
+
+    async def _run_agent_rich(self, session: AgentSession, message: str) -> str:
+        """Run agent with full event streaming for dashboard."""
+        try:
+            from EvoScientist.stream.events import stream_agent_events
+            from EvoScientist.stream.state import StreamState
+        except ImportError:
+            raise RuntimeError("Rich streaming imports not available")
+
+        stream_state = StreamState()
+        self._stream_states[session.session_id] = stream_state
+
+        metadata = {
+            "agent_name": "EvoScientist",
+            "updated_at": now_iso(),
+            "workspace_dir": session.workspace_dir,
+        }
+        response_text = ""
+
+        try:
+            async for event in stream_agent_events(
+                session.agent,
+                message,
+                session.thread_id,
+                metadata=metadata,
+            ):
+                event_type = event.get("type", "unknown")
+
+                # Update stream state
+                if hasattr(stream_state, "handle_event"):
+                    stream_state.handle_event(event)
+
+                # Track sub-agents
+                if event_type == "subagent_start":
+                    name = event.get("name", "sub-agent")
+                    if name not in session.sub_agents_used:
+                        session.sub_agents_used.append(name)
+                elif event_type == "done":
+                    response_text = event.get("response", "")
+                    # Fix: done event's response is often just the main-agent's
+                    # initial announcement. Use stream_state's accumulated text
+                    # which includes all sub-agent output.
+                    final_text = getattr(stream_state, "response_text", "")
+                    if final_text and (not response_text or len(final_text) > len(response_text)):
+                        event = {**event, "response": final_text}
+                        response_text = final_text
+
+                # Store event
+                session.events.append({
+                    "type": event_type,
+                    "timestamp": now_iso(),
+                    "data": {k: str(v)[:200] for k, v in event.items() if k != "type"},
+                })
+
+                # Publish to SSE event bus
+                self._event_bus.publish(session.session_id, {
+                    "type": event_type,
+                    "timestamp": now_iso(),
+                    "data": event,
+                })
+        except Exception as e:
+            logger.error(f"Rich streaming error: {e}", exc_info=True)
+            # Publish error event
+            self._event_bus.publish(session.session_id, {
+                "type": "error",
+                "timestamp": now_iso(),
+                "data": {"message": str(e)},
+            })
+            raise
+
+        return response_text or stream_state.response_text or "(No response from agent)"
+
+    async def _run_agent_simple(self, session: AgentSession, message: str) -> str:
+        """Run the agent with simplified streaming (fallback)."""
         from langchain_core.messages import HumanMessage
 
         config = {
@@ -250,7 +574,6 @@ class AgentManager:
         response_text = ""
 
         try:
-            # Try streaming with event processing
             async for chunk in session.agent.astream(
                 {"messages": [human_msg]},
                 config=config,
@@ -259,18 +582,21 @@ class AgentManager:
                 messages = chunk.get("messages", [])
                 if messages:
                     last_msg = messages[-1]
-                    # Track sub-agent usage
                     if hasattr(last_msg, "name") and last_msg.name:
                         if last_msg.name not in session.sub_agents_used:
                             session.sub_agents_used.append(last_msg.name)
-                    # Collect AI response
                     if hasattr(last_msg, "content") and last_msg.type == "ai":
                         response_text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
 
-                    session.events.append({
+                    event = {
                         "type": last_msg.type,
-                        "content_preview": str(last_msg.content)[:100] if hasattr(last_msg, "content") else "",
-                    })
+                        "timestamp": now_iso(),
+                        "data": {"content_preview": str(last_msg.content)[:200] if hasattr(last_msg, "content") else ""},
+                    }
+                    session.events.append(event)
+
+                    # Still publish to event bus for dashboard
+                    self._event_bus.publish(session.session_id, event)
         except Exception as e:
             logger.error(f"Agent streaming error: {e}", exc_info=True)
             raise

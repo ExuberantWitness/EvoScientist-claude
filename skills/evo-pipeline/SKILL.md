@@ -45,10 +45,73 @@ W6: Write → W7: Review (optional) → W8: Memory
 ### Multi-Agent Constants (NEW)
 
 - **USE_MULTI_AGENT = true** — Enable multi-agent discussion for key phases
-- **MULTI_AGENT_STAGES = ["research", "analyze", "ideation"]** — Phases to use multi-agent
+- **MULTI_AGENT_STAGES = ["research", "analyze", "ideation"]** — Phases to use multi-agent (code/debug always in Claude Code)
+- **EXCLUDE_AGENTS = ["code-agent", "debug-agent"]** — Agents excluded from multi-agent; proposals returned to Claude Code
 - **MULTI_AGENT_MODEL = "claude-sonnet-4-5"** — Model for multi-agent sessions
 
 > Override: `/evo-pipeline "proposal" — USE_MULTI_AGENT: false, AUTO_PROCEED: true`
+
+## Code/Debug Handoff Protocol (CRITICAL)
+
+**Why**: code-agent and debug-agent are EXCLUDED from multi-agent discussions. DeepSeek's multi-agent cannot execute code — only Claude Code can. When multi-agent discussions identify implementation needs, Claude Code MUST take over.
+
+### Handoff Trigger
+
+After EVERY `mcp__evo-agents__evo_discuss()` call, check the return value:
+
+```
+result.code_proposals      → list of identified code/debug tasks
+result.has_code_proposals   → boolean flag
+result.requires_claude_code → boolean flag (same semantics)
+```
+
+### Handoff Flow (5 steps)
+
+**Step 1 — DETECT**: If `has_code_proposals` is `true` OR `code_proposals` is non-empty:
+- The multi-agent has identified concrete implementation tasks it cannot execute
+
+**Step 2 — NOTIFY DASHBOARD**:
+```
+mcp__evo-agents__evo_pipeline_control(session_id, action="switch_to_claude")
+```
+Dashboard shows purple "awaiting Claude Code" banner.
+
+**Step 3 — CONFIRM WITH USER** (unless AUTO_PROCEED = true):
+```
+AskUserQuestion:
+  "Multi-agent identified {N} code/debug task(s):\n{proposals}\n\nHand off to Claude Code for execution?"
+  Options: ["Execute all in Claude Code", "Skip code tasks, continue pipeline", "Show transcript first"]
+```
+
+**Step 4 — EXECUTE IN CLAUDE CODE**:
+- For implementation: `/evo-code "Stage N: [description]"`
+- For debugging: `/evo-debug "[error message]"`
+- For multi-stage plans: follow `plan.md` stages in dependency order
+- After each stage: `/evo-run` with SANITY_FIRST first, then full run
+- Max 2 debug-retry loops per stage
+
+**Step 5 — RETURN TO MULTI-AGENT**:
+```
+mcp__evo-agents__evo_pipeline_control(session_id, action="switch_to_agent")
+mcp__evo-agents__evo_send(session_id, message="[Code Execution Report]\nStages completed: N\nFiles changed: [list]\nResults: [summary]\nErrors: [any]")
+```
+Then AskUserQuestion: "Code execution done. Continue multi-agent analysis?"
+
+### Handoff Checks Per Phase
+
+| Phase | After | Check for proposals? | If yes → |
+|-------|-------|---------------------|----------|
+| W3: Research | evo_discuss (research) | YES | Execute proposals, THEN return to Phase 3 |
+| W3.5: Ideation | evo_discuss (ideation) | YES | Execute proposals, THEN checkpoint 3 |
+| W5: Analysis | evo_discuss (analysis) | YES | Execute proposals, THEN re-analyze |
+
+### Dashboard States During Handoff
+
+| State | Dashboard Color | Meaning |
+|-------|----------------|---------|
+| `control: "pipeline"` | Green | Multi-agent running |
+| `control: "claude_code"` | Purple | Claude Code executing |
+| `control: "paused"` | Red | System paused |
 
 ## Inputs
 
@@ -125,6 +188,8 @@ Extract key research topics from `plan.md`.
 - The analyst identifies gaps and opportunities
 - Save the discussion transcript to `research_notes.md`
 
+**Code Handoff Check**: After evo_discuss, check `result.requires_claude_code`. If true → execute [Code/Debug Handoff Protocol](#codedebug-handoff-protocol-critical) Steps 1-5, then return here to continue Phase 3.
+
 **Skills Mode** (fallback or single-agent preference):
 - For each topic: Invoke `/evo-research "[topic]"`
 - Output: `research_notes.md`
@@ -139,13 +204,22 @@ If SKIP_IDEATION = true → skip to Phase 4
 - Use `mcp__evo-agents__evo_discuss` with:
   - `session_id`: from pipeline state
   - `topic`: "Generate and evaluate research ideas for: $ARGUMENTS. Consider: feasibility, novelty, resources needed."
-  - `agents`: ["planner", "researcher", "coder", "analyst"]
+  - `agents`: ["planner", "researcher", "analyst"]
+  - `exclude_agents`: ["code-agent", "debug-agent"] (default — code/debug returned as proposals)
 - The planner evaluates resource constraints
 - The researcher assesses novelty and related work
-- The coder evaluates implementation complexity
-- The analyst identifies success metrics
+- The analyst identifies success metrics and implementation complexity
 - Each agent proposes ideas, then votes on the best ones
+- Implementation needs are returned as `code_proposals` (not executed by DeepSeek)
 - Save the discussion transcript to `idea_report.md`
+
+**Code Proposal Switch** (if code_proposals is non-empty):
+- Use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_claude" to notify dashboard
+- Use AskUserQuestion to ask: "多 agent 系统识别到 {N} 个实现建议：{proposals}。切换到 Claude Code 执行实现？"
+- If user confirms → execute `/evo-code` directly in Claude Code
+- After coding → use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_agent"
+- Use AskUserQuestion: "实现完成，切回多 agent 继续分析？"
+- If user confirms → advance to Phase 4 (or skip if code already done)
 
 **Skills Mode** (fallback):
 - Invoke: `/evo-ideation "$ARGUMENTS"`
@@ -162,6 +236,11 @@ Update state: `"phase": 3.5`
 
 ### Phase 4 (W4): Implementation
 
+**Before starting Phase 4:**
+- Use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_claude" to notify dashboard
+- Dashboard shows purple "awaiting Claude Code" status
+- AskUserQuestion: "即将进入代码实现阶段，切换到 Claude Code 直接执行。确认？"
+
 For each stage in `plan.md` (in dependency order):
 
 1. **Code**: Invoke `/evo-code "Stage N: [description]" — CODE_MODE: [CODE_MODE]`
@@ -171,7 +250,10 @@ For each stage in `plan.md` (in dependency order):
 4. **Run full**: Invoke `/evo-run "Stage N" — SANITY_FIRST: false`
 5. If full run fails: Invoke `/evo-debug "[error]"`, retry once
 
-**Multi-Agent Note**: For complex debugging, optionally use `evo_discuss` with agents: ["coder", "debugger", "analyst"]
+**After Phase 4 complete:**
+- Use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_agent" to notify dashboard
+- AskUserQuestion: "实现完成，切回多 agent 系统继续分析？"
+- If user confirms → advance to Phase 5
 
 Update state: `"phase": 4, "current_stage": N`
 
@@ -186,6 +268,8 @@ Update state: `"phase": 4, "current_stage": N`
 - The planner evaluates against success criteria
 - The researcher compares with literature baselines
 - Save the discussion transcript to `analysis_report.md`
+
+**Code Handoff Check**: After evo_discuss, check `result.requires_claude_code`. If true → execute [Code/Debug Handoff Protocol](#codedebug-handoff-protocol-critical) Steps 1-5, then re-run analysis to incorporate changes.
 
 **Skills Mode** (fallback):
 - Invoke: `/evo-analyze "artifacts/"`
