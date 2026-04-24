@@ -43,6 +43,7 @@ class AgentManager:
         self.base_dir = base_dir or str(Path(__file__).parent.parent)
         self.sessions: dict[str, AgentSession] = {}
         self._checkpointer = None
+        self._checkpoint_conn = None
         self._event_bus = EventBus()
         self._stream_states: dict[str, Any] = {}
         self._use_rich_streaming = True
@@ -119,10 +120,12 @@ class AgentManager:
     async def _get_checkpointer(self):
         """Get or create SqliteSaver (disk-persisted, survives restarts)."""
         if self._checkpointer is None:
+            import sqlite3
             from langgraph.checkpoint.sqlite import SqliteSaver
             db_path = Path(self.base_dir) / ".evo_checkpoints.db"
             db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._checkpointer = SqliteSaver.from_conn_string(str(db_path))
+            self._checkpoint_conn = sqlite3.connect(str(db_path), check_same_thread=False)
+            self._checkpointer = SqliteSaver(self._checkpoint_conn)
             logger.info(f"SqliteSaver initialized at {db_path}")
         return self._checkpointer
 
