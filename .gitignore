@@ -27,5 +27,7 @@ Thumbs.db
 
 # Project specific
 agent-manager/sessions.db
+agent-manager/.evo_checkpoints.db*
+agent-manager/.evo_session_registry.json
 *.log
 PIPELINE_STATE.json
