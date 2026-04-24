@@ -47,7 +47,8 @@ W6: Write → W7: Review (optional) → W8: Memory
 - **USE_MULTI_AGENT = true** — Enable multi-agent discussion for key phases
 - **MULTI_AGENT_STAGES = ["research", "analyze", "ideation"]** — Phases to use multi-agent (code/debug always in Claude Code)
 - **EXCLUDE_AGENTS = ["code-agent", "debug-agent"]** — Agents excluded from multi-agent; proposals returned to Claude Code
-- **MULTI_AGENT_MODEL = "claude-sonnet-4-5"** — Model for multi-agent sessions
+- **MULTI_AGENT_MODEL = "deepseek-chat"** — Model for multi-agent sessions (requires MULTI_AGENT_PROVIDER)
+- **MULTI_AGENT_PROVIDER = "deepseek"** — Provider for multi-agent model (deepseek API is OpenAI-compatible)
 
 > Override: `/evo-pipeline "proposal" — USE_MULTI_AGENT: false, AUTO_PROCEED: true`
 
@@ -135,6 +136,7 @@ Then AskUserQuestion: "Code execution done. Continue multi-agent analysis?"
    - Use `mcp__evo-agents__evo_create_session` with:
      - `workspace_dir`: current working directory
      - `model`: MULTI_AGENT_MODEL
+     - `provider`: MULTI_AGENT_PROVIDER
    - Store the returned `session_id` in pipeline state
 
 Save state:
@@ -380,7 +382,8 @@ Update state: `"phase": 7`
 # Create session (Phase 0)
 mcp__evo-agents__evo_create_session(
   workspace_dir="/path/to/project",
-  model="claude-sonnet-4-5"
+  model="deepseek-chat",
+  provider="deepseek"
 )
 → {"session_id": "evo_abc123", ...}
 

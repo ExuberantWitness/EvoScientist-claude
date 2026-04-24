@@ -273,7 +273,9 @@ async def run_server(base_dir: str | None = None, dashboard_port: int = 8420):
     # Ensure API keys are available (Claude Code may not inject -e vars at runtime)
     _defaults = {
         "OPENAI_API_KEY": "sk-a6224d667c474d47a6089a2e3530534c",
+        "OPENAI_BASE_URL": "https://api.deepseek.com/v1",
         "OPENAI_API_BASE": "https://api.deepseek.com/v1",
+        "DEEPSEEK_API_KEY": "sk-a6224d667c474d47a6089a2e3530534c",
         "TAVILY_API_KEY": "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",
     }
     for k, v in _defaults.items():

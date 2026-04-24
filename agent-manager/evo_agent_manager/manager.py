@@ -278,6 +278,10 @@ class AgentManager:
     def _extract_code_proposals(self, transcript: str, excluded: set[str]) -> list[str]:
         """Extract code/debug proposals from transcript text."""
         proposals = []
+        no_code_markers = [
+            "no code needed", "no implementation needed", "no code required",
+            "none required", "no code change", "no coding", "nothing to implement",
+        ]
         in_proposals_section = False
         for line in transcript.split("\n"):
             stripped = line.strip()
@@ -290,19 +294,36 @@ class AgentManager:
                 in_proposals_section = True
                 continue
             # End of proposals section: next heading (## or ###) that is not a proposals heading
+            # Also end on horizontal rules (---) that start a new section
             if in_proposals_section and stripped.startswith("#") and not is_proposal_heading:
+                in_proposals_section = False
+                continue
+            # Horizontal rule within proposals section = end of proposals
+            if in_proposals_section and stripped == "---":
                 in_proposals_section = False
                 continue
             if in_proposals_section:
                 # Capture numbered or bullet items
                 if stripped and (stripped[0].isdigit() or stripped.startswith("-") or stripped.startswith("*")):
-                    proposals.append(stripped.lstrip("-*0123456789. "))
+                    text = stripped.lstrip("-*0123456789. ")
+                    if self._is_valid_proposal(text, no_code_markers):
+                        proposals.append(text)
                 elif stripped.startswith("**"):
                     # Bold-wrapped proposal title: **Proposal N: Title**
                     clean = stripped.strip("*").strip()
-                    if clean:
+                    if clean and self._is_valid_proposal(clean, no_code_markers):
                         proposals.append(clean)
         return proposals[:20]  # Cap at 20 proposals
+
+    @staticmethod
+    def _is_valid_proposal(text: str, no_code_markers: list[str]) -> bool:
+        """Filter out non-proposal text like 'No code needed'."""
+        text_lower = text.lower()
+        if any(marker in text_lower for marker in no_code_markers):
+            return False
+        if len(text) < 5:
+            return False
+        return True
 
     async def get_status(self, session_id: str) -> dict:
         """Get current session status."""

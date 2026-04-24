@@ -161,9 +161,13 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("qwen3-235b", "qwen3-235b-a22b", "dashscope"),
     ("qwen-max", "qwen-max", "dashscope"),
     ("qwq-plus", "qwq-plus", "dashscope"),
-    # DeepSeek
+    # DeepSeek (OpenAI-compatible)
+    ("deepseek-v4-pro", "deepseek-v4-pro", "deepseek"),
+    ("deepseek-v4-flash", "deepseek-v4-flash", "deepseek"),
     ("deepseek-r1", "deepseek-reasoner", "deepseek"),
     ("deepseek-v3", "deepseek-chat", "deepseek"),
+    ("deepseek-chat", "deepseek-chat", "deepseek"),
+    ("deepseek-reasoner", "deepseek-reasoner", "deepseek"),
     # Moonshot (OpenAI-compatible)
     ("kimi-k2.5", "kimi-k2.5", "moonshot"),
     ("kimi-k2-thinking", "kimi-k2-thinking", "moonshot"),
@@ -281,7 +285,13 @@ def get_chat_model(
                 break
     if model_id is None and model in MODELS:
         model_id, default_provider = MODELS[model]
-        provider = provider or default_provider
+        # When user specifies "openai" but model resolves to an OpenAI-compatible
+        # provider (deepseek, siliconflow, etc.), route through the native provider
+        # which sets the correct base_url. Otherwise OpenAI's API returns 404.
+        if provider and provider == "openai" and default_provider in _OPENAI_ROUTED_PROVIDERS:
+            provider = default_provider
+        else:
+            provider = provider or default_provider
 
     if model_id is None:
         # Assume it's a full model ID
