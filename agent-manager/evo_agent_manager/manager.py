@@ -48,6 +48,8 @@ class AgentManager:
         self._use_rich_streaming = True
         # Pipeline pause gates: per-session asyncio.Event
         self._pipeline_gates: dict[str, asyncio.Event] = {}
+        # Recover sessions from disk on startup
+        self._load_sessions_from_disk()
 
     @property
     def event_bus(self) -> EventBus:
@@ -115,11 +117,120 @@ class AgentManager:
         return "\n".join(parts)
 
     async def _get_checkpointer(self):
-        """Get or create checkpointer (InMemorySaver for simplicity)."""
+        """Get or create SqliteSaver (disk-persisted, survives restarts)."""
         if self._checkpointer is None:
-            from langgraph.checkpoint.memory import InMemorySaver
-            self._checkpointer = InMemorySaver()
+            from langgraph.checkpoint.sqlite import SqliteSaver
+            db_path = Path(self.base_dir) / ".evo_checkpoints.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._checkpointer = SqliteSaver.from_conn_string(str(db_path))
+            logger.info(f"SqliteSaver initialized at {db_path}")
         return self._checkpointer
+
+    # ── Session persistence ──
+
+    def _sessions_dir(self, workspace_dir: str) -> Path:
+        return Path(workspace_dir) / ".evo_sessions"
+
+    def _session_registry_path(self) -> Path:
+        return Path(self.base_dir) / ".evo_session_registry.json"
+
+    def _save_session_meta(self, session: AgentSession):
+        """Persist session metadata to disk (not the agent object)."""
+        try:
+            sdir = self._sessions_dir(session.workspace_dir)
+            sdir.mkdir(parents=True, exist_ok=True)
+            data = {
+                "session_id": session.session_id,
+                "workspace_dir": session.workspace_dir,
+                "thread_id": session.thread_id,
+                "created_at": session.created_at,
+                "status": session.status,
+                "sub_agents_used": session.sub_agents_used,
+                "thread_count": session.thread_count,
+                "thread_summaries": session.thread_summaries,
+                "last_response": session.last_response[:8000] if session.last_response else "",
+            }
+            (sdir / f"{session.session_id}.json").write_text(
+                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            # Update global registry: session_id → workspace_dir
+            registry = {}
+            rpath = self._session_registry_path()
+            if rpath.exists():
+                try:
+                    registry = json.loads(rpath.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            registry[session.session_id] = session.workspace_dir
+            rpath.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to save session meta: {e}")
+
+    def _load_sessions_from_disk(self):
+        """Scan workspace for saved sessions and rebuild AgentSession objects.
+        Called on server startup to recover from crashes."""
+        # First try global registry
+        workspaces_to_check = set()
+        rpath = self._session_registry_path()
+        if rpath.exists():
+            try:
+                registry = json.loads(rpath.read_text(encoding="utf-8"))
+                workspaces_to_check.update(registry.values())
+            except Exception:
+                pass
+        # Also check default locations
+        cwd = Path.cwd()
+        if (cwd / ".evo_sessions").exists():
+            workspaces_to_check.add(str(cwd))
+        for p in [Path(self.base_dir).parent, Path(self.base_dir).parent.parent]:
+            if (p / ".evo_sessions").exists():
+                workspaces_to_check.add(str(p))
+
+        recovered = 0
+        for ws in workspaces_to_check:
+            sdir = self._sessions_dir(ws)
+            if not sdir.exists():
+                continue
+            for sf in sorted(sdir.glob("*.json")):
+                try:
+                    data = json.loads(sf.read_text(encoding="utf-8"))
+                    sid = data["session_id"]
+                    if sid in self.sessions:
+                        continue  # already loaded
+                    session = AgentSession(
+                        session_id=sid,
+                        agent=None,  # will be rebuilt on first use
+                        thread_id=data.get("thread_id", sid),
+                        workspace_dir=data["workspace_dir"],
+                        created_at=data["created_at"],
+                        status="recovered",
+                        sub_agents_used=data.get("sub_agents_used", []),
+                        thread_count=data.get("thread_count", 0),
+                        thread_summaries=data.get("thread_summaries", []),
+                    )
+                    session.last_response = data.get("last_response", "")
+                    self.sessions[sid] = session
+                    recovered += 1
+                except Exception as e:
+                    logger.warning(f"Failed to load session {sf}: {e}")
+
+        if recovered:
+            logger.info(f"Recovered {recovered} session(s) from disk")
+
+    async def _ensure_agent(self, session: AgentSession):
+        """Rebuild agent for a recovered session if needed."""
+        if session.agent is not None:
+            return
+        from .agent_factory import create_agent
+        checkpointer = await self._get_checkpointer()
+        session.agent = create_agent(
+            workspace_dir=session.workspace_dir,
+            base_dir=self.base_dir,
+            model=None,
+            provider=None,
+            checkpointer=checkpointer,
+        )
+        logger.info(f"Agent rebuilt for recovered session {session.session_id}")
 
     async def create_session(
         self,
@@ -152,6 +263,7 @@ class AgentManager:
             created_at=now_iso(),
         )
         self.sessions[session_id] = session
+        self._save_session_meta(session)
 
         return {
             "session_id": session_id,
@@ -177,6 +289,9 @@ class AgentManager:
         session.sub_agents_used = []
         session.events = []
 
+        # Rebuild agent for recovered sessions
+        await self._ensure_agent(session)
+
         try:
             # Inject previous context
             ctx_prefix = self._build_context_prefix(session)
@@ -185,6 +300,7 @@ class AgentManager:
             response = await self._run_agent(session, full_message)
             session.last_response = response
             session.status = "idle"
+            self._save_session_meta(session)
 
             return {
                 "response": truncate(response, 4000),
@@ -248,6 +364,9 @@ class AgentManager:
         summary = self._summarize_response(session.last_response) if session.last_response else ""
         self._rotate_thread(session, summary)
 
+        # Rebuild agent for recovered sessions
+        await self._ensure_agent(session)
+
         try:
             # Inject previous context into the discussion prompt
             ctx_prefix = self._build_context_prefix(session)
@@ -256,6 +375,7 @@ class AgentManager:
             response = await self._run_agent(session, full_prompt)
             session.last_response = response
             session.status = "idle"
+            self._save_session_meta(session)
 
             # Extract code proposals from transcript
             code_proposals = self._extract_code_proposals(response, excluded)

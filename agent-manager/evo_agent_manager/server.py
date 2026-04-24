@@ -219,8 +219,17 @@ async def handle_tool(name: str, arguments: dict) -> str:
     elif name == "evo_list_sessions":
         result = mgr.list_sessions()
     elif name == "evo_resume":
-        # Resume = get status (session is already in memory if created)
-        result = await mgr.get_status(session_id=arguments["session_id"])
+        # Resume: check if session exists, reload from disk if needed
+        sid = arguments["session_id"]
+        if sid not in mgr.sessions:
+            # Session lost from memory but may be on disk
+            mgr._load_sessions_from_disk()
+        if sid in mgr.sessions:
+            session = mgr.sessions[sid]
+            await mgr._ensure_agent(session)
+            result = await mgr.get_status(session_id=sid)
+        else:
+            result = {"error": f"Session {sid} not found (no disk backup available)"}
     elif name == "evo_approve":
         result = await mgr.approve(
             session_id=arguments["session_id"],
