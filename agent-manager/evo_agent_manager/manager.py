@@ -118,15 +118,15 @@ class AgentManager:
         return "\n".join(parts)
 
     async def _get_checkpointer(self):
-        """Get or create SqliteSaver (disk-persisted, survives restarts)."""
+        """Get or create AsyncSqliteSaver (disk-persisted, survives restarts)."""
         if self._checkpointer is None:
-            import sqlite3
-            from langgraph.checkpoint.sqlite import SqliteSaver
+            import aiosqlite
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             db_path = Path(self.base_dir) / ".evo_checkpoints.db"
             db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._checkpoint_conn = sqlite3.connect(str(db_path), check_same_thread=False)
-            self._checkpointer = SqliteSaver(self._checkpoint_conn)
-            logger.info(f"SqliteSaver initialized at {db_path}")
+            self._checkpoint_conn = await aiosqlite.connect(str(db_path))
+            self._checkpointer = AsyncSqliteSaver(self._checkpoint_conn)
+            logger.info(f"AsyncSqliteSaver initialized at {db_path}")
         return self._checkpointer
 
     # ── Session persistence ──
