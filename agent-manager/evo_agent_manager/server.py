@@ -222,12 +222,20 @@ async def handle_tool(name: str, arguments: dict) -> str:
         # Resume: check if session exists, reload from disk if needed
         sid = arguments["session_id"]
         if sid not in mgr.sessions:
-            # Session lost from memory but may be on disk
             mgr._load_sessions_from_disk()
         if sid in mgr.sessions:
             session = mgr.sessions[sid]
-            await mgr._ensure_agent(session)
+            agent_ok = True
+            if session.agent is None:
+                try:
+                    await mgr._ensure_agent(session)
+                except Exception as e:
+                    agent_ok = False
+                    logger.warning(f"Agent rebuild failed for {sid}: {e}")
             result = await mgr.get_status(session_id=sid)
+            if not agent_ok:
+                result["agent_status"] = "rebuild_failed — use evo_create_session for fresh session"
+                result["agent_error"] = str(e)[:500]
         else:
             result = {"error": f"Session {sid} not found (no disk backup available)"}
     elif name == "evo_approve":
