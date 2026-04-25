@@ -27,7 +27,10 @@ from .agent import (
 )
 from .channel import (
     ChannelMessage,
+    _channel_message_cancel_scope,
     _channels_stop,
+    _claim_or_complete_channel_request,
+    _complete_channel_request,
     _message_queue,
     _set_channel_response,
     _start_channels_bus_mode,
@@ -530,9 +533,9 @@ def _make_serve_start_new_session_cb(agent_holder: dict[str, Any]):
 def _make_serve_cmd_completed_hook(agent_holder: dict[str, Any]):
     """Build the ``on_cmd_completed`` hook used by serve mode.
 
-    Adopts ``/model`` agent swaps and ``/resume`` thread swaps back
-    into ``agent_holder`` so the outer poll loop picks up the new
-    handles on subsequent messages.  Also keeps
+    Adopts ``/model`` agent swaps and ``/resume`` thread/workspace
+    swaps back into ``agent_holder`` so the outer poll loop picks up
+    the new handles on subsequent messages.  Also keeps
     ``EvoScientist.cli.channel`` globals in sync so other readers
     (e.g. the bus) see the new values.
 
@@ -574,6 +577,10 @@ def _make_serve_cmd_completed_hook(agent_holder: dict[str, Any]):
             except Exception:  # pragma: no cover — defensive
                 pass
 
+        new_workspace = getattr(ctx, "workspace_dir", None)
+        if new_workspace and new_workspace != agent_holder.get("workspace_dir"):
+            agent_holder["workspace_dir"] = new_workspace
+
         # Surface the in-memory-state limitation to the channel user
         # for ``/resume`` so the missing history isn't silent.  Flush
         # is required because ``cmd_manager.execute`` already flushed
@@ -607,18 +614,24 @@ def _serve_process_message(
     Headless equivalent of interactive.py's ``_process_channel_message``.
     No CLI prompt manipulation — just log lines for monitoring.
 
-    ``agent_holder`` is a mutable dict (keys: ``agent``, ``thread_id``)
-    shared with the outer ``serve()`` loop.  ``on_cmd_completed`` (the
-    agent-swap / thread-swap adoption hook) and ``start_new_session_cb``
-    (thread rotation for ``/new``) are constructed once in ``serve()``
-    — if omitted, they're rebuilt per message (backward compat for
-    existing tests).  ``/resume`` lands via the ``on_cmd_completed``
-    hook because the command mutates ``ctx.thread_id`` directly.
+    ``agent_holder`` is a mutable dict (keys: ``agent``, ``thread_id``,
+    ``workspace_dir``) shared with the outer ``serve()`` loop.
+    ``on_cmd_completed`` (the agent-swap / session-adoption hook) and
+    ``start_new_session_cb`` (thread rotation for ``/new``) are
+    constructed once in ``serve()`` — if omitted, they're rebuilt per
+    message (backward compat for existing tests).  ``/resume`` lands
+    via the ``on_cmd_completed`` hook because the command mutates
+    ``ctx.thread_id`` / ``ctx.workspace_dir`` directly.
     """
     import asyncio
 
     from .channel import _bus_loop
     from .tui_runtime import run_streaming
+
+    if not _claim_or_complete_channel_request(msg):
+        return
+
+    runtime_workspace = agent_holder.get("workspace_dir") or workspace_dir
 
     console.print(
         f"[dim][{msg.channel_type}] {msg.sender}: {escape(msg.content[:80])}[/dim]"
@@ -694,70 +707,76 @@ def _serve_process_message(
     # the ``finally`` below so subsequent messages start from a clean
     # slate.  Loop creation lives inside the try so an exception between
     # creation and ``set_event_loop`` still closes the loop.
-    _prev_loop: asyncio.AbstractEventLoop | None
     try:
-        _prev_loop = asyncio.get_event_loop_policy().get_event_loop()
-    except RuntimeError:
-        _prev_loop = None
-    _slash_loop: asyncio.AbstractEventLoop | None = None
-    _slash_handled = False
-    _slash_error: Exception | None = None
-    try:
-        _slash_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_slash_loop)
-        _slash_handled = _slash_loop.run_until_complete(
-            dispatch_channel_slash_command(
-                msg,
-                agent=agent_holder["agent"],
-                thread_id=agent_holder["thread_id"],
-                workspace_dir=workspace_dir,
-                checkpointer=None,
-                append_system=lambda t, s="dim": console.print(t, style=s),
-                start_new_session_cb=start_new_session_cb
-                or _make_serve_start_new_session_cb(agent_holder),
-                on_cmd_completed=on_cmd_completed
-                or _make_serve_cmd_completed_hook(agent_holder),
+        _prev_loop: asyncio.AbstractEventLoop | None
+        try:
+            _prev_loop = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError:
+            _prev_loop = None
+        _slash_loop: asyncio.AbstractEventLoop | None = None
+        _slash_handled = False
+        _slash_error: Exception | None = None
+        try:
+            _slash_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(_slash_loop)
+            _slash_handled = _slash_loop.run_until_complete(
+                dispatch_channel_slash_command(
+                    msg,
+                    agent=agent_holder["agent"],
+                    thread_id=agent_holder["thread_id"],
+                    workspace_dir=runtime_workspace,
+                    checkpointer=None,
+                    append_system=lambda t, s="dim": console.print(t, style=s),
+                    start_new_session_cb=start_new_session_cb
+                    or _make_serve_start_new_session_cb(agent_holder),
+                    on_cmd_completed=on_cmd_completed
+                    or _make_serve_cmd_completed_hook(agent_holder),
+                )
             )
-        )
-    except Exception as exc:
-        _slash_error = exc
-        _serve_logger.exception("Slash dispatch failed for %s", msg.channel_type)
-    finally:
-        if _slash_loop is not None:
-            _slash_loop.close()
-        asyncio.set_event_loop(_prev_loop)
+        except Exception as exc:
+            _slash_error = exc
+            _serve_logger.exception("Slash dispatch failed for %s", msg.channel_type)
+        finally:
+            if _slash_loop is not None:
+                _slash_loop.close()
+            asyncio.set_event_loop(_prev_loop)
 
-    if _slash_error is not None:
-        _set_channel_response(msg.msg_id, f"Command error: {_slash_error}")
-        console.print(f"[red]Slash command error: {escape(str(_slash_error))}[/red]")
-        return
+        if _slash_error is not None:
+            _set_channel_response(msg.msg_id, f"Command error: {_slash_error}")
+            console.print(
+                f"[red]Slash command error: {escape(str(_slash_error))}[/red]"
+            )
+            return
 
-    if _slash_handled:
+        if _slash_handled:
+            console.print(f"[dim][{msg.channel_type}] Replied to {msg.sender}[/dim]")
+            return
+
+        meta = build_metadata(runtime_workspace, model)
+        try:
+            response = run_streaming(
+                ui_backend="cli",
+                agent=agent_holder["agent"],
+                message=msg.content,
+                thread_id=agent_holder["thread_id"],
+                show_thinking=show_thinking,
+                interactive=True,
+                metadata=meta,
+                on_thinking=_send_thinking,
+                on_todo=_send_todo,
+                on_file_write=_send_media,
+                hitl_prompt_fn=_hitl_prompt,
+                ask_user_prompt_fn=_ask_user_prompt,
+                cancel_scope=_channel_message_cancel_scope(msg),
+            )
+        except Exception as e:
+            response = f"Error: {e}"
+            console.print(f"[red]Serve error: {e}[/red]")
+
+        _set_channel_response(msg.msg_id, response)
         console.print(f"[dim][{msg.channel_type}] Replied to {msg.sender}[/dim]")
-        return
-
-    meta = build_metadata(workspace_dir, model)
-    try:
-        response = run_streaming(
-            ui_backend="cli",
-            agent=agent_holder["agent"],
-            message=msg.content,
-            thread_id=agent_holder["thread_id"],
-            show_thinking=show_thinking,
-            interactive=True,
-            metadata=meta,
-            on_thinking=_send_thinking,
-            on_todo=_send_todo,
-            on_file_write=_send_media,
-            hitl_prompt_fn=_hitl_prompt,
-            ask_user_prompt_fn=_ask_user_prompt,
-        )
-    except Exception as e:
-        response = f"Error: {e}"
-        console.print(f"[red]Serve error: {e}[/red]")
-
-    _set_channel_response(msg.msg_id, response)
-    console.print(f"[dim][{msg.channel_type}] Replied to {msg.sender}[/dim]")
+    finally:
+        _complete_channel_request(msg.msg_id)
 
 
 # =============================================================================
@@ -862,7 +881,11 @@ def serve(
     # invoked over a channel can hot-swap the agent for subsequent
     # messages.  A pass-by-value parameter gets captured once at startup
     # and never updated.
-    agent_holder: dict[str, Any] = {"agent": agent, "thread_id": tid}
+    agent_holder: dict[str, Any] = {
+        "agent": agent,
+        "thread_id": tid,
+        "workspace_dir": ws,
+    }
 
     # Build the slash-dispatch callbacks once; the poll loop reuses
     # them for every inbound message.  Without this hoist each message

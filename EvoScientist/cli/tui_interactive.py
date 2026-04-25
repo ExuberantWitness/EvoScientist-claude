@@ -191,6 +191,29 @@ _SUMMARY_CONTINUATION_EVENTS = {
 }
 
 
+async def _sync_tui_command_completion(
+    app: Any,
+    ctx: CommandContext,
+    original_agent: Any,
+    cmd: Any,
+) -> None:
+    """Adopt successful command-side state changes back into the TUI app."""
+    agent_swapped = ctx.agent is not None and ctx.agent is not original_agent
+    if agent_swapped:
+        from ..EvoScientist import _ensure_config
+
+        app._agent_loader.adopt(ctx.agent)
+        cfg = _ensure_config()
+        update_model = getattr(app, "update_status_after_model_change", None)
+        if callable(update_model):
+            update_model(cfg.model, cfg.provider)
+        if _channels_is_running():
+            _ch_mod._cli_agent = ctx.agent
+            _ch_mod._cli_thread_id = app._conversation_tid
+
+    await app._refresh_status_snapshot(reset_streaming_text=True)
+
+
 def _should_finalize_active_summarization(event_type: str) -> bool:
     """Return whether an active summary panel should stop for this event."""
     return bool(event_type) and event_type not in _SUMMARY_CONTINUATION_EVENTS
@@ -730,6 +753,14 @@ def run_textual_interactive(
                 lambda m=msg: asyncio.ensure_future(self._process_channel_message(m))
             )
 
+        async def _on_channel_cmd_completed(
+            self,
+            ctx: CommandContext,
+            original_agent: Any,
+            cmd: Any,
+        ) -> None:
+            await _sync_tui_command_completion(self, ctx, original_agent, cmd)
+
         # ── Widget helpers ─────────────────────────────────────
 
         def _schedule_scroll_to_bottom(
@@ -975,6 +1006,7 @@ def run_textual_interactive(
             file_warnings: list[str] | None = None,
             channel_hitl_fn: Callable[[list], list[dict] | None] | None = None,
             channel_ask_user_fn: Callable[[dict], dict] | None = None,
+            cancel_scope: str | None = None,
         ) -> str:
             """Stream agent events and mount widgets.  Returns response text.
 
@@ -996,6 +1028,11 @@ def run_textual_interactive(
                     When provided (channel messages), this is called instead
                     of mounting the AskUserWidget.
             """
+            from ..stream.display import (
+                build_stopped_response_text,
+                is_stream_cancel_requested,
+            )
+
             container = self.query_one("#chat", VerticalScroll)
 
             # 1. Mount user message + loading spinner
@@ -1064,6 +1101,30 @@ def run_textual_interactive(
                         await w.remove()
                     except Exception:
                         pass
+
+            async def _mark_cancelled_response() -> str:
+                nonlocal assistant_w
+                previous_text = state.response_text or ""
+                current, final_text = build_stopped_response_text(previous_text)
+
+                state.response_text = final_text
+                self._set_status_streaming_text(final_text)
+
+                if assistant_w is None:
+                    if final_text:
+                        assistant_w = AssistantMessage(final_text)
+                        await container.mount(assistant_w)
+                else:
+                    if previous_text != current:
+                        assistant_w._content = final_text
+                        await assistant_w.stop_stream()
+                    else:
+                        suffix = final_text[len(current) :]
+                        if suffix:
+                            await assistant_w.append_content(suffix)
+
+                _schedule_scroll()
+                return final_text
 
             def _finalize_active_summarization() -> None:
                 """Stop the active summary timer once the stream moves on."""
@@ -1140,6 +1201,9 @@ def run_textual_interactive(
             _stream_input: Any = user_text  # str or Command for HITL resume
 
             for _hitl_round in range(_MAX_HITL_ROUNDS):
+                if is_stream_cancel_requested(cancel_scope):
+                    response = await _mark_cancelled_response()
+                    break
                 state.pending_interrupt = None
                 state.pending_ask_user = None
                 _hitl_resuming = False
@@ -1154,6 +1218,9 @@ def run_textual_interactive(
                         self._conversation_tid,
                         metadata=metadata,
                     ):
+                        if is_stream_cancel_requested(cancel_scope):
+                            response = await _mark_cancelled_response()
+                            break
                         event_type = state.handle_event(event)
 
                         if event_type == "usage_stats":
@@ -1457,6 +1524,10 @@ def run_textual_interactive(
                                     result = await asyncio.to_thread(
                                         lambda f=_ask_fn, e=event: f(e),
                                     )
+                                    if is_stream_cancel_requested(cancel_scope):
+                                        state.pending_ask_user = None
+                                        response = await _mark_cancelled_response()
+                                        break
                                 else:
                                     # Interactive TUI: display widget, collect via arrow keys
                                     from .widgets.ask_user_widget import AskUserWidget
@@ -1511,6 +1582,10 @@ def run_textual_interactive(
                                     channel_hitl_fn,
                                     action_reqs,
                                 )
+                                if is_stream_cancel_requested(cancel_scope):
+                                    state.pending_interrupt = None
+                                    response = await _mark_cancelled_response()
+                                    break
                                 if decisions is not None:
                                     from langgraph.types import (
                                         Command,  # type: ignore[import-untyped]
@@ -1674,6 +1749,9 @@ def run_textual_interactive(
                     self._schedule_scroll_to_bottom(container)
 
                 # HITL / ask_user: if interrupt was handled, loop back to resume stream
+                if is_stream_cancel_requested(cancel_scope):
+                    response = await _mark_cancelled_response()
+                    break
                 if state.pending_interrupt is None and state.pending_ask_user is None:
                     break  # normal completion or rejection — exit HITL loop
                 # Otherwise _stream_input was set to Command(resume=...)
@@ -1735,6 +1813,8 @@ def run_textual_interactive(
               [channel: Replied to sender]
             """
             prompt_widget = None
+            if not _ch_mod._claim_or_complete_channel_request(msg):
+                return
             try:
                 self._busy = True
                 await self._refresh_status_snapshot(msg.content)
@@ -1834,6 +1914,7 @@ def run_textual_interactive(
                     start_new_session_cb=self.start_new_session,
                     handle_session_resume_cb=self.handle_session_resume,
                     await_agent_ready=self._await_agent_ready,
+                    on_cmd_completed=self._on_channel_cmd_completed,
                 )
                 if _slash_handled:
                     return  # outer finally handles _busy / widget cleanup
@@ -1858,6 +1939,7 @@ def run_textual_interactive(
                         skip_user_message=True,
                         channel_hitl_fn=_channel_hitl_prompt,
                         channel_ask_user_fn=_channel_ask_user,
+                        cancel_scope=_ch_mod._channel_message_cancel_scope(msg),
                     )
                 except Exception as exc:
                     response = f"Error: {exc}"
@@ -1876,6 +1958,7 @@ def run_textual_interactive(
                 if prompt_widget is not None:
                     prompt_widget.disabled = False
                     prompt_widget.focus()
+                _ch_mod._complete_channel_request(msg.msg_id)
 
         # ── Clipboard (copy on mouse select) ─────────────────
 
@@ -2292,27 +2375,11 @@ def run_textual_interactive(
                 )
 
                 if await cmd_manager.execute(command, ctx):
-                    # Sync agent back if command replaced it (e.g. /model).
-                    # ``is not None`` guard: non-agent commands (ctx.agent
-                    # starts None) must not clobber a valid loaded agent.
-                    if (
-                        ctx.agent is not None
-                        and ctx.agent is not self._agent_loader.agent
-                    ):
-                        # ``adopt`` also cancels/supersedes any in-flight
-                        # load so a late completion can't overwrite the
-                        # replacement agent (/model on a broken provider).
-                        self._agent_loader.adopt(ctx.agent)
-                        if _channels_is_running():
-                            _ch_mod._cli_agent = ctx.agent
-                            _ch_mod._cli_thread_id = self._conversation_tid
-                    # Do NOT invalidate the usage baseline after /compact.
-                    # build_session_status_snapshot() only counts raw checkpoint
-                    # messages (~46 tokens) and misses system prompt + tool
-                    # definitions (~50K overhead). The stale pre-compact count
-                    # is far more accurate; the next LLM call will correct it.
-                    await self._refresh_status_snapshot(
-                        reset_streaming_text=True,
+                    await _sync_tui_command_completion(
+                        self,
+                        ctx,
+                        self._agent_loader.agent,
+                        cmd,
                     )
                     return
 

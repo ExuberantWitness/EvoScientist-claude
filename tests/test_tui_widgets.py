@@ -151,6 +151,26 @@ class TestSummarizationStateMachine(unittest.TestCase):
             assert _should_finalize_active_summarization(event_type) is True
 
 
+class TestStoppedResponseText(unittest.TestCase):
+    """Stopped-response text normalization."""
+
+    def test_trims_before_appending_marker(self):
+        from EvoScientist.stream.display import build_stopped_response_text
+
+        current, final_text = build_stopped_response_text("partial answer  \n")
+
+        assert current == "partial answer"
+        assert final_text == "partial answer\n[Stopped.]"
+
+    def test_does_not_duplicate_marker(self):
+        from EvoScientist.stream.display import build_stopped_response_text
+
+        current, final_text = build_stopped_response_text("partial\n[Stopped.]")
+
+        assert current == "partial\n[Stopped.]"
+        assert final_text == "partial\n[Stopped.]"
+
+
 @unittest.skipUnless(_has_textual, "textual not installed")
 class TestAssistantMessage(unittest.TestCase):
     """AssistantMessage construction."""
