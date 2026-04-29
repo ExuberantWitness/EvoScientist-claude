@@ -203,6 +203,48 @@ MODELS: dict[str, tuple[str, str]] = {
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
+_sanitize_proxy_applied = False
+
+
+def _sanitize_proxy_env() -> None:
+    """Strip socks proxy schemes before httpx reads them.
+
+    httpx uses ``urllib.request.getproxies()`` which picks up GNOME / system
+    proxy settings (``gsettings`` socks proxy) in addition to env vars.  The
+    socks proxy can surface as ``socks://`` (no ``5``) which httpx rejects.
+    We strip the ``all`` entry when it is a socks URL so httpx falls back to
+    the ``http_proxy``/``https_proxy`` env vars.
+    """
+    global _sanitize_proxy_applied
+    if _sanitize_proxy_applied:
+        return
+    _sanitize_proxy_applied = True
+
+    # 1. Remove socks-prefixed all_proxy from process environment
+    for name in ("all_proxy", "ALL_PROXY"):
+        val = os.environ.get(name, "")
+        if val and val.startswith(("socks4://", "socks5://", "socks4a://", "socks://")):
+            del os.environ[name]
+
+    # 2. Patch urllib.request.getproxies so system-level socks proxies
+    #    (GNOME gsettings, etc.) don't leak into httpx mounts.
+    import urllib.request as _urllib_request
+
+    _original_getproxies = _urllib_request.getproxies
+
+    def _patched_getproxies():
+        proxies = _original_getproxies()
+        all_val = proxies.get("all", "")
+        if all_val and (
+            all_val.startswith(("socks4://", "socks5://", "socks4a://", "socks://"))
+            or "socks" in all_val.split("://")[0]
+        ):
+            del proxies["all"]
+        return proxies
+
+    _urllib_request.getproxies = _patched_getproxies
+
+
 def get_models_for_provider(provider: str) -> list[tuple[str, str]]:
     """Get all models for a specific provider.
 
@@ -447,6 +489,7 @@ def get_chat_model(
         elif _responses_api_setting == "true":
             kwargs["use_responses_api"] = True
 
+    _sanitize_proxy_env()
     chat_model = init_chat_model(model=model_id, model_provider=provider, **kwargs)
 
     # Flatten list content to strings for strict OpenAI-compatible providers

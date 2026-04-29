@@ -63,10 +63,44 @@ def __getattr__(name: str):
     return value
 
 
+_sanitize_proxy_applied = False
+
+
+def _sanitize_proxy_env() -> None:
+    """Strip socks proxy schemes before httpx reads them."""
+    global _sanitize_proxy_applied
+    if _sanitize_proxy_applied:
+        return
+    _sanitize_proxy_applied = True
+
+    import os
+    from urllib.request import getproxies as _original_getproxies
+
+    for name in ("all_proxy", "ALL_PROXY"):
+        val = os.environ.get(name, "")
+        if val and val.startswith(("socks4://", "socks5://", "socks4a://", "socks://")):
+            del os.environ[name]
+
+    def _patched_getproxies():
+        proxies = _original_getproxies()
+        all_val = proxies.get("all", "")
+        if all_val and (
+            all_val.startswith(("socks4://", "socks5://", "socks4a://", "socks://"))
+            or "socks" in all_val.split("://")[0]
+        ):
+            del proxies["all"]
+        return proxies
+
+    import urllib.request
+    urllib.request.getproxies = _patched_getproxies
+
+
 def main():
     """CLI entry point."""
     import os
     import warnings
+
+    _sanitize_proxy_env()
 
     warnings.filterwarnings("ignore", message=".*not known to support tools.*")
     warnings.filterwarnings(
