@@ -1,138 +1,162 @@
 ---
 name: evo-ideation
-description: "Generate, rank, and validate research ideas. Combines brainstorming with Elo-style tournament ranking and feasibility checks. 创意发现与排名。"
+description: "Generate, rank, and validate research ideas. Uses Idea Tree Search (K-way explore → branch → Elo prune → expand) with literature grounding from research_notes.md. 创意发现与排名。"
 argument-hint: [research_direction]
-allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, WebSearch, WebFetch, Agent, mcp__llm-review__chat
+allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, WebSearch, WebFetch, Agent, mcp__llm-review__chat, mcp__evo-agents__evo_run_tournament, mcp__evo-agents__evo_distill, mcp__evo-agents__evo_get_evolution_memory
 ---
 
-# EvoScientist Ideation: Idea Generation & Tournament
+# EvoScientist Ideation: Idea Tree Search + Elo Tournament
 
 Explore ideas for: **$ARGUMENTS**
 
 ## Overview
 
-This skill generates research ideas for a given direction, then ranks them through a tournament process. Ideas are scored on novelty, feasibility, and impact. The top ideas get quick feasibility checks before a final recommendation.
+This skill implements the **Idea Tree Search** algorithm (paper §3.2): K parallel directions → branch into variants → Elo tournament prune → expand winner into full proposal. All ideas must be grounded in literature from `research_notes.md`.
 
-Combines EvoScientist's research-ideation workflow with an Elo-style ranking mechanism.
+```
+EXPLORE (K directions) → BRANCH (N variants each) → PRUNE (Elo top-K) → EXPAND (top-1 full proposal)
+```
 
 ## Constants
 
-- **NUM_IDEAS = 8** — Number of initial ideas to generate
-- **TOP_K = 3** — Number of top ideas to carry forward for feasibility check
-- **CROSS_MODEL = false** — Use external LLM (via MCP) for independent idea scoring
-- **MEMORY_CHECK = true** — Read memory to avoid re-proposing failed ideas
-- **OUTPUT_FILE = "idea_report.md"** — Output file
+- **K_DIRECTIONS = 3** — Number of distinct research directions to explore
+- **N_BRANCHES = 3** — Number of refined variants per direction
+- **TOP_K = 3** — Number of ideas to keep after Elo pruning
+- **CROSS_MODEL = false** — Use external LLM for independent idea scoring
+- **OUTPUT_FILE = "idea_report.md"**
 
-## Inputs
+## Prerequisites
 
-- `$ARGUMENTS`: Research direction or problem area
-- (Optional) `research_notes.md`: Literature survey for context
-- (Optional) `memory/ideation-memory.md`: Prior ideas (to avoid repetition)
-- (Optional) `memory/experiment-memory.md`: Past successes and failures
+**MANDATORY**: `research_notes.md` must exist with academic paper findings. If missing, run `/evo-research "$ARGUMENTS"` first. Ideas without literature grounding are not accepted.
 
 ## Workflow
 
-### Phase 0: Context Loading
+### Phase 0: Load Context & Memory
 
-1. If MEMORY_CHECK = true, read `memory/ideation-memory.md` and `memory/experiment-memory.md`
-   - Note failed ideas to avoid
-   - Note successful patterns to build upon
-2. If `research_notes.md` exists, read it for landscape context
-3. Identify gaps, trends, and opportunities from the literature
+1. **Load literature**: Read `research_notes.md`. Extract:
+   - The **Challenge-Insight Tree** (challenges → insights → papers mapping)
+   - **Unsolved challenges** (challenges with few insights → highest potential)
+   - **Key papers** with their findings
+   
+2. **Load evolution memory**: Call `evo_get_evolution_memory(session_id, "all", limit=10)` to retrieve:
+   - IDE PROMISING directions — use as seeds for explore
+   - IVE FAILED directions — actively avoid these
+   - ESE SUCCESS strategies — incorporate into method sketches
 
-### Phase 1: Brainstorm
+3. **Identify gaps**: From the challenge-insight tree, find challenges with few or no insights. These are the primary targets for idea generation.
 
-Generate NUM_IDEAS ideas. For each idea, specify:
+### Phase 1: EXPLORE — K Parallel Directions
 
-```markdown
-### Idea N: [Short Title]
-- **Core Insight**: [One sentence: what is the key idea?]
-- **Approach**: [2-3 sentences: how would this work?]
-- **Novelty**: [What is new compared to existing work?]
-- **Feasibility**: [Can this be done with available resources?]
-- **Expected Impact**: [What would success look like?]
-- **Risks**: [What could go wrong?]
+Generate **K_DIRECTIONS** distinct research directions. Each direction must be fundamentally different in approach, methodology, or problem framing.
+
+For each direction, specify:
+- **Title**: concise, descriptive
+- **Hypothesis**: one-paragraph core claim
+- **Method Sketch**: datasets, baselines, evaluation approach
+- **Literature Gap**: which unsolved challenge from the tree does this address? **Cite specific papers** from research_notes.md (use the numbered references)
+
+**Diversity rules**:
+- At least 1 direction should target an "unsolved challenge" from the tree
+- At least 1 direction should be a "cross-domain transfer" (apply insight from field A to challenge in field B)
+- No direction should match a known IVE FAILED pattern from evolution memory
+
+### Phase 2: BRANCH — N Variants Per Direction
+
+For each direction from Phase 1, generate **N_BRANCHES** refined variants using different evolution strategies:
+
+| Strategy | What it does |
+|-----------------------|
+| **Enhancement** | Strengthen with additional literature citations and technical detail |
+| **Simplification** | Strip to the cleanest, most testable hypothesis |
+| **Cross-domain** | Import an insight from a different field to solve the problem differently |
+| **Combination** | Merge the core mechanism with a complementary technique from literature |
+| **Pivot** | Abandon the core mechanism; propose an alternative approach to the same problem |
+
+Each variant must:
+- Cite at least 1 paper from research_notes.md
+- Be concretely testable (have a clear minimum viable experiment)
+
+### Phase 3: PRUNE — Elo Tournament
+
+Format all candidates (K seeds + K×N branches) as proposals:
+
+```json
+{"id": "unique_id", "title": "...", "hypothesis": "...", "method_sketch": "..."}
 ```
 
-Rules for brainstorming:
-- At least 2 ideas should be "safe" (incremental improvements)
-- At least 2 ideas should be "bold" (higher risk, higher reward)
-- No idea should duplicate a known failed approach from memory
-- Each idea must be distinct (not variations of the same thing)
+Run the Elo tournament:
 
-### Phase 2: Tournament Ranking
-
-Score each idea on three dimensions (1-10):
-
-| Idea | Novelty | Feasibility | Impact | Total |
-|------|---------|-------------|--------|-------|
-| Idea 1 | X | X | X | XX |
-| ... | ... | ... | ... | ... |
-
-Scoring criteria:
-- **Novelty (1-10)**: 1=well-known, 5=minor twist, 10=paradigm shift
-- **Feasibility (1-10)**: 1=needs massive resources, 5=doable with effort, 10=trivial
-- **Impact (1-10)**: 1=marginal improvement, 5=solid contribution, 10=field-changing
-
-If CROSS_MODEL = true, also send ideas to external reviewer via MCP for independent scoring. Average the two scores.
-
-Rank by total score. Select TOP_K ideas.
-
-### Phase 3: Feasibility Deep-Dive
-
-For each of the TOP_K ideas:
-
-1. **Resource check**: Can it be done with available hardware/data/time?
-2. **Quick literature check**: Has this been done before? (WebSearch)
-3. **Minimum viable experiment**: What is the smallest experiment that would test this idea?
-4. **Estimated effort**: Hours of compute, days of implementation
-
-### Phase 4: Final Recommendation
-
-**🚦 Checkpoint:** Present ranked ideas to the user.
-
-```markdown
-## Recommended Ideas (Ranked)
-
-### #1: [Title] (Score: XX/30)
-[Summary + why this is the top pick]
-**Minimum Viable Experiment**: [1-2 sentences]
-**Estimated Effort**: [X days implementation, Y GPU-hours]
-
-### #2: [Title] (Score: XX/30)
-...
-
-### #3: [Title] (Score: XX/30)
-...
-
-## Ideas Not Recommended
-- Idea N: [reason for exclusion]
+```
+evo_run_tournament(session_id, proposals, judge_model="deepseek-chat")
 ```
 
-- **User selects an idea** → Write to OUTPUT_FILE with full details
-- **User wants more ideas** → Return to Phase 1 with refined direction
-- **User wants to refine an idea** → Deep-dive on that specific idea
+The tournament evaluates on 4 dimensions (novelty, feasibility, relevance, clarity) via full round-robin pairwise comparison.
+
+After ranking, **distill the results**:
+
+```
+evo_distill(session_id, "ide", proposals=ranked_proposals)
+```
+
+This persists:
+- Top-half (above median Elo) → PROMISING directions in IDE memory
+- Bottom-third → FAILED directions (avoid in future cycles)
+
+### Phase 4: EXPAND — Top-1 Full Proposal
+
+Take the #1 ranked idea from the tournament and expand it into a full research proposal:
+
+1. **Abstract**: 150-250 word summary
+2. **Problem Definition**: formal statement, scope, assumptions
+3. **Related Work**: how this builds on and differs from existing work (cite specific papers from research_notes.md)
+4. **Proposed Method**: detailed description with architecture/algorithm sketch
+5. **Experimental Design**: datasets, baselines, metrics, ablation plan
+6. **Expected Contributions**: what new knowledge this creates
+7. **Limitations & Risks**: honest assessment
 
 ### Phase 5: Output
 
-Write full idea report to OUTPUT_FILE. Update `memory/ideation-memory.md` with:
-- All generated ideas (for future reference)
-- Which idea was selected
-- Which ideas were rejected and why
+Write to `idea_report.md`:
+
+```markdown
+# Idea Report: [$ARGUMENTS]
+Date: [YYYY-MM-DD]
+Method: Idea Tree Search (K=3, N=3) + Elo Tournament
+
+## Tournament Results
+
+| Rank | Title | Elo | Novelty | Feasibility | Relevance | Clarity |
+|------|-------|-----|---------|-------------|-----------|---------|
+| 1 | ... | 1580 | 8.2 | 7.5 | 8.0 | 8.5 |
+| 2 | ... | 1540 | 7.8 | 8.0 | 7.5 | 7.0 |
+| 3 | ... | 1510 | 6.5 | 8.5 | 7.0 | 7.5 |
+
+## #1 Expanded Proposal: [Title]
+
+[Full expanded proposal from Phase 4]
+
+## Runner-Up Summaries
+[Brief summaries of #2 and #3]
+
+## Literature Grounding
+[Papers cited, with links to research_notes.md references]
+```
+
+**🚦 Checkpoint:** Present top-3 to user for selection. Proceed with chosen idea.
 
 ## Key Rules
 
-- **Diversity**: Ideas must span different approaches, not variations of one theme.
-- **Memory-aware**: Never re-propose ideas that failed before (check memory).
-- **Honest scoring**: Don't inflate scores to make ideas look better.
-- **Kill bad ideas early**: Better to discard 5 weak ideas than polish 1 mediocre idea.
+- **Literature grounding is MANDATORY**: Every idea must cite at least 1 paper from research_notes.md. No floating ideas.
+- **Diversity over volume**: 3 genuinely different directions > 8 variations of the same idea.
+- **Evolution memory prevents repetition**: IVE FAILED patterns are hard blocks. IDE PROMISING patterns are seeds.
 - **Feasibility > novelty**: A feasible good idea beats an infeasible great idea.
-- **Empirical signal**: If a quick pilot can validate an idea in <2 hours, that's better than theoretical argument.
+- **Kill bad ideas early**: Elo tournament with honest pairwise comparison.
+- **IDE distillation after every run**: Build the memory so future tasks benefit.
 
 ## Composing with Other Skills
 
 ```
-/evo-research "direction"     ← literature survey (do this first)
-/evo-ideation "direction"     ← you are here
-/evo-planner "selected idea"  ← plan experiments for the selected idea
+/evo-research "direction"     ← literature survey (MANDATORY prerequisite)
+/evo-ideation "direction"     ← you are here (Idea Tree Search + Elo)
+/evo-planner "selected idea"  ← plan experiments for the chosen idea
 ```

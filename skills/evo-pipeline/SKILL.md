@@ -16,19 +16,21 @@ This is the master orchestrator that chains all EvoScientist skills into a compl
 **NEW: Multi-Agent Mode** — When `USE_MULTI_AGENT = true`, key phases use the Agent Manager MCP to get multi-perspective analysis from 6 specialized agents (planner, researcher, coder, debugger, analyst, writer).
 
 ```
-W1: Intake → W2: Plan → W3: Research → W3.5: Ideation
-    ↓           ↓           ↓ (MA)        ↓ (MA)
+W1: Intake → W2: Plan → W3: Research → W3.5: Ideation → W3.6: Refine
+    ↓           ↓           ↓ (MA)        ↓ (MA)         ↓ (ext review)
 W4: Code → W4.5: Debug → W4.7: Run
     ↓
-W5: Analyze → W5.5: Iterate ←──────┐
-    ↓ (MA)                           │
-    ├── criteria NOT met ────────────┘
+W5: Analyze → W5.6: Claim Gate → W5.5: Iterate ←──────┐
+    ↓ (MA)    ↓ (ext judge)                             │
+    ├── criteria NOT met ──────────────────────────────┘
     │
-    ├── criteria MET
+    ├── criteria MET + claims supported
     ↓
 W6: Write → W7: Review (optional) → W8: Memory
 
 (MA) = Multi-Agent discussion enabled
+(ext review) = External LLM iterative review
+(ext judge) = External LLM claim evaluation
 ```
 
 ## Constants
@@ -180,21 +182,36 @@ If SKIP_RESEARCH = true → skip to Phase 3.5
 
 Extract key research topics from `plan.md`.
 
+**CRITICAL: evo_discuss 优先，paper-navigator 补充。** Multi-agent 先讨论研究方向、识别关键概念和搜索策略，Claude Code 补充收集具体论文。
+
 **Multi-Agent Mode** (if "research" in MULTI_AGENT_STAGES and session_id exists):
+
+**Phase 3a — 多 Agent 讨论（先）**:
 - Use `mcp__evo-agents__evo_discuss` with:
   - `session_id`: from pipeline state
-  - `topic`: "Literature review and method survey for: [research topics from plan.md]"
+  - `topic`: "文献调研与研究方向分析：[research topics from plan.md]。请 research-agent 使用 paper-navigator skill 检索相关论文（通过 execute 工具执行 scripts/），planner-agent 评估方法与研究问题的适配性，analyst 识别文献中的空缺和机会。"
   - `agents`: ["researcher", "planner", "analyst"]
-- The researcher agent leads the literature search
-- The planner evaluates methodological fit
+- The researcher agent uses paper-navigator SKILL.md for search strategies and executes `python scripts/scholar_search.py` via execute tool
+- The planner evaluates methodological fit with the research question
 - The analyst identifies gaps and opportunities
-- Save the discussion transcript to `research_notes.md`
+- Collect all agent outputs as `initial_findings`
 
-**Code Handoff Check**: After evo_discuss, check `result.requires_claude_code`. If true → execute [Code/Debug Handoff Protocol](#codedebug-handoff-protocol-critical) Steps 1-5, then return here to continue Phase 3.
+**Phase 3b — Claude Code 补充论文收集（后）**:
+- Based on multi-agent discussion, Claude Code runs paper-navigator scripts to supplement:
+  - `python scripts/scholar_search.py --query "<refined queries from discussion>" --limit 15 --json`
+  - `python scripts/arxiv_monitor.py --keywords "<keywords>" --limit 10 --json`
+- Merge results into `research_notes.md` with challenge-insight tree and numbered paper references
+
+**Phase 3c — 深化讨论（补充后）**:
+- Use `mcp__evo-agents__evo_discuss` with:
+  - `topic`: "基于收集的论文深化分析：[paste paper summaries]. 识别：(1) 关键技术趋势 (2) 未解决的挑战 (3) 可复用的方法组件 (4) 与本研究的关联度"
+- Merge final multi-agent insights into `research_notes.md`
+
+**Code Handoff Check**: After each evo_discuss, check `result.requires_claude_code`. If true → execute [Code/Debug Handoff Protocol](#codedebug-handoff-protocol-critical) Steps 1-5, then return here.
 
 **Skills Mode** (fallback or single-agent preference):
-- For each topic: Invoke `/evo-research "[topic]"`
-- Output: `research_notes.md`
+- For each topic: run paper-navigator scripts via Bash
+- Output: `research_notes.md` with challenge-insight tree
 
 Update state: `"phase": 3`
 
@@ -202,26 +219,34 @@ Update state: `"phase": 3`
 
 If SKIP_IDEATION = true → skip to Phase 4
 
+Uses **Idea Tree Search**: K parallel directions → branch variants → Elo tournament prune → expand top-1 into full proposal. Literature grounding from `research_notes.md` is mandatory.
+
 **Multi-Agent Mode** (if "ideation" in MULTI_AGENT_STAGES and session_id exists):
+
+**Phase 3.5a — 多 Agent 构思（先）**:
 - Use `mcp__evo-agents__evo_discuss` with:
-  - `session_id`: from pipeline state
-  - `topic`: "Generate and evaluate research ideas for: $ARGUMENTS. Consider: feasibility, novelty, resources needed."
+  - `topic`: "基于文献调研的 gaps 和 challenge-insight tree，生成 3-5 个研究方向。每个方向需包含：问题陈述、核心假设、预期贡献、所需资源。参考文献中的具体论文。"
   - `agents`: ["planner", "researcher", "analyst"]
-  - `exclude_agents`: ["code-agent", "debug-agent"] (default — code/debug returned as proposals)
-- The planner evaluates resource constraints
-- The researcher assesses novelty and related work
-- The analyst identifies success metrics and implementation complexity
-- Each agent proposes ideas, then votes on the best ones
-- Implementation needs are returned as `code_proposals` (not executed by DeepSeek)
+  - `exclude_agents`: ["code-agent", "debug-agent"]
+- Each agent proposes ideas from their perspective
+- Collect proposals for Elo ranking
+
+**Phase 3.5b — Elo 排名（Claude Code）**:
+- Use `mcp__evo-agents__evo_run_tournament` with collected proposals
+- Elo tournament produces ranked proposals
+
+**Phase 3.5c — 多 Agent 评审（后）**:
+- Use `mcp__evo-agents__evo_discuss` with:
+  - `topic`: "评审以下 Elo 排名靠前的方案并给出改进意见：[paste top-3 proposals with Elo scores]。从可行性、新颖性、资源需求三个角度评估。"
+  - `agents`: ["planner", "researcher", "analyst"]
 - Save the discussion transcript to `idea_report.md`
+- Use `mcp__evo-agents__evo_distill` with type "ide" to record ranked proposals in evolution memory
 
 **Code Proposal Switch** (if code_proposals is non-empty):
 - Use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_claude" to notify dashboard
-- Use AskUserQuestion to ask: "多 agent 系统识别到 {N} 个实现建议：{proposals}。切换到 Claude Code 执行实现？"
+- AskUserQuestion: "多 agent 系统识别到 {N} 个实现建议：{proposals}。切换到 Claude Code 执行实现？"
 - If user confirms → execute `/evo-code` directly in Claude Code
 - After coding → use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_agent"
-- Use AskUserQuestion: "实现完成，切回多 agent 继续分析？"
-- If user confirms → advance to Phase 4 (or skip if code already done)
 
 **Skills Mode** (fallback):
 - Invoke: `/evo-ideation "$ARGUMENTS"`
@@ -235,6 +260,19 @@ If user selects an idea different from the current plan:
 - Update `plan.md` and `success_criteria.md`
 
 Update state: `"phase": 3.5`
+
+### Phase 3.6 (W3.6): Method Refinement (NEW)
+
+If the user selected an idea from Phase 3.5 checkpoint, run method refinement before implementation.
+
+**Skills Mode**:
+- Invoke: `/evo-refine "PROBLEM: [from plan.md] | APPROACH: [selected idea title + hypothesis from idea_report.md]"`
+- This runs iterative external review (up to 5 rounds, score ≥ 9 target)
+- Output: `refine-logs/FINAL_PROPOSAL.md` with sharpened method
+
+**Skip if**: the idea is already concrete enough, or this is a research-only run (no implementation planned).
+
+Update state: `"phase": 3.6`
 
 ### Phase 4 (W4): Implementation
 
@@ -286,7 +324,20 @@ Invoke: `/evo-iterate`
 Reads: `plan.md`, `success_criteria.md`, `analysis_report.md`
 
 **Decision tree:**
-- **All criteria met** → advance to Phase 6
+- **All criteria met** → advance to Phase 5.6
+
+### Phase 5.6 (W5.6): Claim Gate (NEW)
+
+After experiments pass evaluation criteria, run result-to-claim analysis:
+
+- Invoke: `/evo-claim "[experiment description from analysis_report.md]"`
+- External LLM evaluates results against intended claims
+- Routes: yes (advance to writing) / partial (supplement) / no (pivot)
+- Updates `memory/experiment-memory.md` with ESE/IVE records
+- Updates `research-wiki/` if active
+
+Update state: `"phase": 5.6`
+
 - **Criteria not met, iteration < MAX_PIPELINE_ITERATIONS** →
   - Apply suggested adjustments
   - Return to Phase 4 (Code → Run → Analyze → Iterate)

@@ -27,6 +27,7 @@ def create_agent(
     model: str | None = None,
     provider: str | None = None,
     checkpointer=None,
+    role_models: dict[str, str] | None = None,
 ):
     """Create an EvoScientist agent with unrestricted backend.
 
@@ -36,6 +37,9 @@ def create_agent(
         model: LLM model name (default from config).
         provider: LLM provider (default from config).
         checkpointer: LangGraph checkpointer for session persistence.
+        role_models: Per-role model overrides.
+            {"planner": "claude-sonnet-4-5", "writer": "claude-opus-4-5",
+             "analyst": "gemini/gemini-2.5-pro"}
 
     Returns:
         Compiled LangGraph agent with full multi-agent capabilities.
@@ -82,6 +86,13 @@ def create_agent(
     except ImportError:
         pass
 
+    try:
+        from EvoScientist.tools import execute_tool
+        tools.append(execute_tool)
+        logger.info("execute_tool registered for sub-agents")
+    except ImportError:
+        logger.warning("execute_tool not available (EvoScientist.tools.execute_tool)")
+
     tool_registry = {t.name: t for t in tools}
 
     # Load sub-agents
@@ -101,9 +112,40 @@ def create_agent(
         # Inject middleware into sub-agents
         _inject_subagent_middleware(subagents, chat_model)
 
-    # Build backend (UNRESTRICTED — no sandbox)
+        # Apply per-role model overrides
+        if role_models:
+            for sub in subagents:
+                sa_name = sub.get("name", "")
+                if sa_name in role_models:
+                    sub["model"] = role_models[sa_name]
+                    logger.info(f"Role model override: {sa_name} → {role_models[sa_name]}")
+
+    # Build backend: UnrestrictedBackend for execution, wrapped in CompositeBackend
+    # so that /skills/ routes to the skills directory (matching upstream EvoScientist)
     from .backend import UnrestrictedBackend
     workspace_backend = UnrestrictedBackend(root_dir=workspace_dir, timeout=300)
+
+    try:
+        from deepagents.backends.composite import CompositeBackend
+        from deepagents.backends.filesystem import FilesystemBackend
+
+        # Skills directory: user skills (primary) + system skills (secondary)
+        # Upstream uses MergedReadOnlyBackend; we merge by checking user dir first
+        USER_SKILLS_DIR = str(Path(workspace_dir) / "skills")
+        skills_root = USER_SKILLS_DIR if Path(USER_SKILLS_DIR).exists() else SKILLS_DIR
+
+        skills_backend = FilesystemBackend(root_dir=skills_root, virtual_mode=True)
+
+        backend = CompositeBackend(
+            default=workspace_backend,
+            routes={
+                "/skills/": skills_backend,
+            },
+        )
+        logger.info(f"CompositeBackend active: /skills/ → {skills_root}")
+    except ImportError:
+        logger.warning("CompositeBackend unavailable, using raw UnrestrictedBackend")
+        backend = workspace_backend
 
     # Build middleware
     middleware = _build_middleware(cfg, chat_model, workspace_dir)
@@ -130,7 +172,7 @@ def create_agent(
         "name": "EvoScientist",
         "model": chat_model,
         "tools": tools,
-        "backend": workspace_backend,
+        "backend": backend,
         "subagents": subagents,
         "middleware": middleware,
         "system_prompt": system_prompt,

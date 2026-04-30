@@ -31,6 +31,11 @@ class AgentSession:
     # Thread management for context overflow prevention
     thread_count: int = 0
     thread_summaries: list[str] = field(default_factory=list)
+    # Background task reference for async discuss/send_message
+    _task: Any = field(default=None)
+    # Evolution memory (lazy init)
+    evolution_memory: Any = field(default=None)
+    fitness_history: list[dict] = field(default_factory=list)
 
 
 class AgentManager:
@@ -284,6 +289,10 @@ class AgentManager:
         # Pipeline pause gate
         await self._wait_if_paused(session_id)
 
+        # Prevent overlapping tasks
+        if session._task is not None and not session._task.done():
+            return {"error": "Session is busy processing a previous request. Poll evo_status.", "status": "busy"}
+
         # Rotate thread: new thread for each call, carry summaries
         summary = self._summarize_response(session.last_response) if session.last_response else ""
         self._rotate_thread(session, summary)
@@ -295,27 +304,26 @@ class AgentManager:
         # Rebuild agent for recovered sessions
         await self._ensure_agent(session)
 
-        try:
-            # Inject previous context
-            ctx_prefix = self._build_context_prefix(session)
-            full_message = ctx_prefix + message if ctx_prefix else message
+        # Inject evolution memory priors
+        mem = await self._get_evolution_memory(session)
+        priors = await mem.inject_priors(message, max_chars=2000)
 
-            response = await self._run_agent(session, full_message)
-            session.last_response = response
-            session.status = "idle"
-            self._save_session_meta(session)
+        # Inject previous context
+        ctx_prefix = self._build_context_prefix(session)
+        full_message = ctx_prefix + message if ctx_prefix else message
+        if priors:
+            full_message = priors + "\n\n---\n\n" + full_message
 
-            return {
-                "response": truncate(response, 4000),
-                "sub_agents_used": session.sub_agents_used,
-                "events_count": len(session.events),
-                "status": "completed",
-                "thread_id": session.thread_id,
-            }
-        except Exception as e:
-            session.status = "error"
-            logger.error(f"Agent error in session {session_id}: {e}")
-            return {"error": str(e), "status": "error"}
+        # Launch background task
+        session._task = asyncio.create_task(
+            self._execute_discuss_background(session, full_message, set())
+        )
+
+        return {
+            "status": "processing",
+            "thread_id": session.thread_id,
+            "message": "Message processing started in background. Poll evo_status for completion.",
+        }
 
     async def discuss(
         self,
@@ -337,6 +345,10 @@ class AgentManager:
 
         # Pipeline pause gate
         await self._wait_if_paused(session_id)
+
+        # Prevent overlapping tasks
+        if session._task is not None and not session._task.done():
+            return {"error": "Session is busy processing a previous request. Poll evo_status.", "status": "busy"}
 
         excluded = set(exclude_agents or ["code-agent", "debug-agent"])
 
@@ -370,33 +382,51 @@ class AgentManager:
         # Rebuild agent for recovered sessions
         await self._ensure_agent(session)
 
-        try:
-            # Inject previous context into the discussion prompt
-            ctx_prefix = self._build_context_prefix(session)
-            full_prompt = ctx_prefix + discussion_prompt if ctx_prefix else discussion_prompt
+        # Inject evolution memory priors
+        mem = await self._get_evolution_memory(session)
+        priors = await mem.inject_priors(topic, max_chars=2000)
 
+        # Inject previous context into the discussion prompt
+        ctx_prefix = self._build_context_prefix(session)
+        full_prompt = ctx_prefix + discussion_prompt if ctx_prefix else discussion_prompt
+        if priors:
+            full_prompt = priors + "\n\n---\n\n" + full_prompt
+
+        # Launch background task to avoid MCP client timeout on long discussions
+        session._task = asyncio.create_task(
+            self._execute_discuss_background(session, full_prompt, excluded)
+        )
+
+        return {
+            "status": "processing",
+            "thread_id": session.thread_id,
+            "message": "Discussion started in background. Poll evo_status for completion.",
+        }
+
+    async def _execute_discuss_background(
+        self, session: AgentSession, full_prompt: str, excluded: set[str]
+    ) -> None:
+        """Execute discussion in background, storing results in session when done."""
+        try:
             response = await self._run_agent(session, full_prompt)
             session.last_response = response
-            session.status = "idle"
+            session.status = "completed"
             self._save_session_meta(session)
 
-            # Extract code proposals from transcript
+            # Extract code proposals
             code_proposals = self._extract_code_proposals(response, excluded)
-
-            has_proposals = len(code_proposals) > 0
-            return {
-                "transcript": truncate(response, 6000),
-                "agents_participated": session.sub_agents_used,
-                "events_count": len(session.events),
-                "code_proposals": code_proposals,
-                "has_code_proposals": has_proposals,
-                "requires_claude_code": has_proposals,
-                "status": "completed",
-                "thread_id": session.thread_id,
-            }
+            session._task = None  # cleared when done
+            logger.info(
+                f"Background discuss completed for {session.session_id}: "
+                f"{len(response)} chars, {len(session.sub_agents_used)} agents, "
+                f"{len(code_proposals)} proposals"
+            )
         except Exception as e:
             session.status = "error"
-            return {"error": str(e)}
+            session.last_response = f"Error: {e}"
+            session._task = None
+            self._save_session_meta(session)
+            logger.error(f"Background discuss failed for {session.session_id}: {e}", exc_info=True)
 
     def _extract_code_proposals(self, transcript: str, excluded: set[str]) -> list[str]:
         """Extract code/debug proposals from transcript text."""
@@ -459,7 +489,7 @@ class AgentManager:
         if memory_path.exists():
             memory_summary = memory_path.read_text(encoding="utf-8")[:500]
 
-        return {
+        result = {
             "session_id": session_id,
             "status": session.status,
             "workspace_dir": session.workspace_dir,
@@ -470,6 +500,16 @@ class AgentManager:
             "memory_summary": memory_summary,
             "pending_approvals": len(session.pending_approvals),
         }
+
+        # Background task status for async discuss/send_message
+        if session._task is not None:
+            result["background_task"] = "running" if not session._task.done() else "completed"
+            if session._task.done():
+                exc = session._task.exception()
+                if exc:
+                    result["background_task"] = f"failed: {exc}"
+
+        return result
 
     def get_stream_state(self, session_id: str) -> dict:
         """Get the rich stream state for dashboard."""
@@ -617,6 +657,117 @@ class AgentManager:
 
         if not result:
             result["status"] = "No memory files found."
+
+        return result
+
+    async def _get_evolution_memory(self, session: AgentSession):
+        """Lazy-init evolution memory for a session."""
+        if session.evolution_memory is None:
+            from .evolution.memory import EvolutionMemory
+            session.evolution_memory = EvolutionMemory(session.workspace_dir)
+        return session.evolution_memory
+
+    async def run_tournament(
+        self, session_id: str, proposals: list[dict],
+        judge_model: str = "deepseek-chat",
+    ) -> dict:
+        """Run Elo tournament on proposals."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+
+        from .evolution.elo import EloTournament
+        tournament = EloTournament(judge_model=judge_model)
+        ranked = await tournament.rank(proposals)
+
+        return {
+            "status": "completed",
+            "num_proposals": len(ranked),
+            "winner": ranked[0]["title"] if ranked else "",
+            "winner_elo": ranked[0]["elo_rating"] if ranked else 0,
+            "ranked": [
+                {
+                    "id": p.get("id", ""),
+                    "title": p.get("title", "")[:120],
+                    "elo_rating": p.get("elo_rating", 1500),
+                    "novelty": p.get("novelty", 0),
+                    "feasibility": p.get("feasibility", 0),
+                    "relevance": p.get("relevance", 0),
+                    "clarity": p.get("clarity", 0),
+                }
+                for p in ranked
+            ],
+        }
+
+    async def distill(
+        self, session_id: str, distill_type: str,
+        proposals: list[dict] | None = None,
+        failure_info: dict | None = None,
+        strategy_info: dict | None = None,
+    ) -> dict:
+        """Manually trigger evolution memory distillation."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+
+        mem = await self._get_evolution_memory(session)
+        result = {"status": "completed", "actions": []}
+
+        if distill_type in ("ide", "all") and proposals:
+            ide_result = await mem.distill_ideation(proposals)
+            result["actions"].append({"type": "IDE", "result": ide_result})
+
+        if distill_type in ("ive", "all") and failure_info:
+            await mem.record_failure(
+                direction=failure_info.get("direction", ""),
+                reason=failure_info.get("reason", ""),
+                score=failure_info.get("score", 0.0),
+            )
+            result["actions"].append({"type": "IVE", "status": "recorded"})
+
+        if distill_type in ("ese", "all") and strategy_info:
+            await mem.distill_experiment(
+                strategy=strategy_info.get("strategy", ""),
+                outcome=strategy_info.get("outcome", "SUCCESS"),
+                details=strategy_info.get("details", ""),
+                score=strategy_info.get("score", 0.0),
+            )
+            result["actions"].append({"type": "ESE", "status": "recorded"})
+
+        result["stats"] = mem.get_stats()
+        return result
+
+    async def get_evolution_memory(
+        self, session_id: str, memory_type: str = "all", limit: int = 20,
+    ) -> dict:
+        """Read evolution memory entries."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+
+        mem = await self._get_evolution_memory(session)
+
+        result = {"stats": mem.get_stats()}
+        if memory_type in ("ideation", "all"):
+            result["ideation"] = [
+                {
+                    "direction": e.get("direction", "")[:120],
+                    "status": e.get("status", ""),
+                    "score": e.get("score", 0),
+                    "source_task": e.get("source_task", ""),
+                }
+                for e in mem._read_ideation(limit=limit)
+            ]
+        if memory_type in ("experiment", "all"):
+            result["experiment"] = [
+                {
+                    "strategy": e.get("strategy", "")[:120],
+                    "outcome": e.get("outcome", ""),
+                    "score": e.get("score", 0),
+                    "applicability": e.get("applicability", []),
+                }
+                for e in mem._read_experiments(limit=limit)
+            ]
 
         return result
 

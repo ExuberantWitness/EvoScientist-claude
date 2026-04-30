@@ -147,7 +147,7 @@ class UnrestrictedBackend:
     async def als(self, path: str):
         """List directory contents (async). Required by deepagents SkillsMiddleware."""
         try:
-            p = Path(path)
+            p = self._resolve_path(path)
             if not p.exists() or not p.is_dir():
                 return _LsResult([], error=f"Not a directory: {path}")
             return _LsResult([f.name for f in p.iterdir()], error=None)
@@ -157,7 +157,7 @@ class UnrestrictedBackend:
     async def aread(self, path: str) -> str:
         """Read file contents (async). Required by deepagents."""
         try:
-            return Path(path).read_text(encoding="utf-8")
+            return self._resolve_path(path).read_text(encoding="utf-8")
         except Exception:
             return ""
 

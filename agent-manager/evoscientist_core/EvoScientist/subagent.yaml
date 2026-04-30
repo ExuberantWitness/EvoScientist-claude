@@ -1,7 +1,7 @@
 planner-agent:
   description: "Plan experiments: stages, success signals, and dependencies (no web search, no implementation)."
   tools: [think_tool]
-  skills: ["/skills/"]
+  skills: ["/skills/paper-navigator"]
   system_prompt: |
     You are the planner-agent. You do NOT implement code. You create and update experimental plans
     that are practical to run locally.
@@ -59,15 +59,15 @@ planner-agent:
     <=7B-class models and lightweight baselines.
 
 research-agent:
-  description: "Web research for methods/baselines/datasets (one topic at a time, return actionable notes + sources)."
-  tools: [tavily_search, think_tool]
-  skills: ["/skills/"]
+  description: "Academic literature search and web research. Use paper-navigator for scholarly papers, tavily for web sources."
+  tools: [tavily_search, think_tool, execute]
+  skills: ["/skills/paper-navigator"]
   system_prompt_ref: RESEARCHER_INSTRUCTIONS
 
 code-agent:
   description: "Implement experiment code and runnable scripts; keep changes minimal and reproducible."
-  tools: [think_tool]
-  skills: ["/skills/"]
+  tools: [think_tool, execute]
+  skills: []
   system_prompt: |
     You are the code-agent. Implement experiment code in the workspace and keep changes minimal,
     reproducible, and easy to run.
@@ -93,8 +93,8 @@ code-agent:
 
 debug-agent:
   description: "Debug runtime failures and fix bugs with minimal, verifiable patches."
-  tools: [think_tool]
-  skills: ["/skills/"]
+  tools: [think_tool, execute]
+  skills: []
   system_prompt: |
     You are the debug-agent. Reproduce failures, identify root causes, apply minimal fixes, and provide
     concise diagnostics.
@@ -114,8 +114,8 @@ debug-agent:
 
 data-analysis-agent:
   description: "Analyze experiment outputs: compute metrics, make plots, summarize insights."
-  tools: [think_tool]
-  skills: ["/skills/"]
+  tools: [think_tool, execute]
+  skills: []
   system_prompt: |
     You are the data-analysis-agent. Analyze experiment outputs, compute metrics, and create
     publication-friendly plots.
@@ -137,7 +137,7 @@ data-analysis-agent:
 writing-agent:
   description: "Draft a paper-ready Markdown experiment report (no fabricated results/citations)."
   tools: [think_tool]
-  skills: ["/skills/"]
+  skills: []
   system_prompt: |
     You are the writing-agent. Draft a clear Markdown experimental report suitable for later paper writing.
 

@@ -21,19 +21,22 @@ claude
 
 | Skill | Phase | Purpose |
 |---|---|---|
-| `/evo-pipeline` | Orchestrator | Full W1-W6 end-to-end |
+| `/evo-pipeline` | Orchestrator | Full W1-W8 end-to-end |
 | `/evo-intake` | W1 | Parse proposal, extract scope |
 | `/evo-planner` | W2 | Experiment plan + success signals |
-| `/evo-research` | W3 | Literature & method survey |
-| `/evo-ideation` | W3.5 | Idea generation + Elo ranking |
+| `/evo-research` | W3 | Literature survey via paper-navigator |
+| `/evo-ideation` | W3.5 | Idea Tree Search + Elo tournament |
+| `/evo-refine` | W3.6 | Iterative method refinement (external review) |
 | `/evo-code` | W4 | Implement experiment code |
 | `/evo-debug` | W4.5 | Debug runtime failures |
 | `/evo-run` | W4.7 | Execute experiments |
 | `/evo-analyze` | W5 | Metrics, plots, statistical analysis |
+| `/evo-claim` | W5.6 | Result-to-claim judgment gate |
 | `/evo-iterate` | W5.5 | Evaluate vs success signals, loop |
 | `/evo-write` | W6 | Paper-ready report |
 | `/evo-review` | W7 | Cross-model review via MCP |
 | `/evo-memory` | Utility | Persistent memory management |
+| `/research-wiki` | Utility | Persistent knowledge base (papers/ideas/claims)
 
 ## File Conventions
 

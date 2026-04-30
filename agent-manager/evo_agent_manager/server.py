@@ -1,9 +1,10 @@
 """
 EvoScientist Agent Manager — MCP Server.
 
-Exposes 8 tools to Claude Code for controlling the multi-agent system:
+Exposes 12 tools to Claude Code for controlling the multi-agent system:
   evo_create_session, evo_send, evo_discuss, evo_status,
-  evo_list_sessions, evo_resume, evo_approve, evo_get_memory
+  evo_list_sessions, evo_resume, evo_approve, evo_get_memory,
+  evo_pipeline_control, evo_run_tournament, evo_distill, evo_get_evolution_memory
 """
 
 import argparse
@@ -185,6 +186,105 @@ TOOLS = [
             "required": ["session_id", "action"],
         },
     ),
+    Tool(
+        name="evo_run_tournament",
+        description=(
+            "Run an Elo-based tournament to rank research proposals via pairwise comparison. "
+            "Uses an LLM judge to compare proposals on 4 dimensions: "
+            "novelty, feasibility, relevance, and clarity. "
+            "Full round-robin: N*(N-1)/2 comparisons. Returns proposals sorted by Elo rating."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Session ID"},
+                "proposals": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "hypothesis": {"type": "string"},
+                            "method_sketch": {"type": "string"},
+                        },
+                    },
+                    "description": "List of proposal dicts with id, title, hypothesis, method_sketch",
+                },
+                "judge_model": {
+                    "type": "string",
+                    "description": "LLM model for pairwise judging (default: deepseek-chat)",
+                },
+            },
+            "required": ["session_id", "proposals"],
+        },
+    ),
+    Tool(
+        name="evo_distill",
+        description=(
+            "Manually trigger evolution memory distillation. "
+            "IDE: distill ideation directions from ranked proposals. "
+            "IVE: record a validation failure. "
+            "ESE: record an effective experiment strategy. "
+            "Use after ideation/research phases to persist learnings."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Session ID"},
+                "distill_type": {
+                    "type": "string",
+                    "description": "Type of distillation: ide, ive, ese, all",
+                    "enum": ["ide", "ive", "ese", "all"],
+                },
+                "proposals": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "For IDE: ranked proposal list [{title, hypothesis, elo_rating}, ...]",
+                },
+                "failure_info": {
+                    "type": "object",
+                    "properties": {
+                        "direction": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "score": {"type": "number"},
+                    },
+                    "description": "For IVE: {direction, reason, score}",
+                },
+                "strategy_info": {
+                    "type": "object",
+                    "properties": {
+                        "strategy": {"type": "string"},
+                        "outcome": {"type": "string"},
+                        "details": {"type": "string"},
+                        "score": {"type": "number"},
+                    },
+                    "description": "For ESE: {strategy, outcome, details, score}",
+                },
+            },
+            "required": ["session_id", "distill_type"],
+        },
+    ),
+    Tool(
+        name="evo_get_evolution_memory",
+        description=(
+            "Read evolution memory entries (IDE/IVE/ESE). "
+            "Returns ideation directions and experiment strategies from previous tasks."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Session ID"},
+                "memory_type": {
+                    "type": "string",
+                    "description": "Which memory to read: ideation, experiment, all",
+                    "enum": ["ideation", "experiment", "all"],
+                },
+                "limit": {"type": "number", "description": "Max entries to return (default 20)"},
+            },
+            "required": ["session_id"],
+        },
+    ),
 ]
 
 
@@ -253,6 +353,26 @@ async def handle_tool(name: str, arguments: dict) -> str:
             session_id=arguments["session_id"],
             action=arguments["action"],
             phase=arguments.get("phase"),
+        )
+    elif name == "evo_run_tournament":
+        result = await mgr.run_tournament(
+            session_id=arguments["session_id"],
+            proposals=arguments["proposals"],
+            judge_model=arguments.get("judge_model", "deepseek-chat"),
+        )
+    elif name == "evo_distill":
+        result = await mgr.distill(
+            session_id=arguments["session_id"],
+            distill_type=arguments["distill_type"],
+            proposals=arguments.get("proposals"),
+            failure_info=arguments.get("failure_info"),
+            strategy_info=arguments.get("strategy_info"),
+        )
+    elif name == "evo_get_evolution_memory":
+        result = await mgr.get_evolution_memory(
+            session_id=arguments["session_id"],
+            memory_type=arguments.get("memory_type", "all"),
+            limit=arguments.get("limit", 20),
         )
     else:
         result = {"error": f"Unknown tool: {name}"}
