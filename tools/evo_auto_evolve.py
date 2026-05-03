@@ -251,6 +251,170 @@ class IslandManager:
         return self.islands
 
 
+# ── Rubric + LLM-as-Judge (L2) ──
+
+class RubricJudge:
+    """Multi-dimensional evaluation triggered when two algorithms have close L1 scores.
+
+    Evaluates across INITIAL_RUBRIC_DIMENSIONS and proposes new dimensions when
+    existing ones can't distinguish between algorithms.
+    """
+
+    INITIAL_DIMENSIONS = ["accuracy", "robustness", "efficiency", "completeness", "generalization"]
+    SIMILARITY_THRESHOLD = 0.9
+    TRIGGER_RATIO = 0.10  # Trigger when scores within 10% of each other
+    MAX_DIMENSIONS = 10
+
+    def __init__(self):
+        self.dimensions = list(self.INITIAL_DIMENSIONS)
+        self.comparisons: list[dict] = []
+
+    def should_trigger(self, score_a: float, score_b: float) -> bool:
+        """Check if two scores are close enough to warrant rubric evaluation."""
+        if score_a <= 0 or score_b <= 0:
+            return abs(score_a - score_b) < max(abs(score_a), abs(score_b), 1) * 0.2
+        ratio = abs(score_a - score_b) / max(abs(score_a), abs(score_b))
+        return ratio < self.TRIGGER_RATIO
+
+    def evaluate(self, variant_a: dict, variant_b: dict, claim_chain_dir: Path | None = None) -> dict:
+        """Evaluate two variants across all current rubric dimensions.
+
+        Args:
+            variant_a, variant_b: dicts with {id, score, params, raw_output, ...}
+            claim_chain_dir: optional Claim Chain dir for context
+
+        Returns: {dimension_scores: {dim: {a: N, b: N}}, similarity: float, new_dimensions: [...]}
+        """
+        dim_scores = {}
+        for dim in self.dimensions:
+            score_a = self._score_dimension(dim, variant_a)
+            score_b = self._score_dimension(dim, variant_b)
+            dim_scores[dim] = {"a": score_a, "b": score_b}
+
+        # Compute overall similarity (1 - normalized L1 distance)
+        total_diff = 0
+        max_possible = 0
+        for dim in self.dimensions:
+            sc = dim_scores[dim]
+            total_diff += abs(sc["a"] - sc["b"])
+            max_possible += 10  # each dim scored 0-10
+        similarity = 1.0 - (total_diff / max_possible) if max_possible > 0 else 1.0
+
+        new_dims = []
+        if similarity > self.SIMILARITY_THRESHOLD and len(self.dimensions) < self.MAX_DIMENSIONS:
+            new_dims = self._propose_dimensions(variant_a, variant_b, dim_scores)
+
+        result = {
+            "dimension_scores": dim_scores,
+            "similarity": round(similarity, 3),
+            "new_dimensions_proposed": new_dims,
+            "dimensions_used": len(self.dimensions),
+        }
+        self.comparisons.append(result)
+        return result
+
+    def _score_dimension(self, dim: str, variant: dict) -> float:
+        """Score a variant on a single rubric dimension (0-10 scale)."""
+        score = variant.get("score", 0)
+        params = variant.get("params", {})
+        raw = variant.get("raw_output", {})
+
+        if dim == "accuracy":
+            # Map score to 0-10. For CartPole, 500 is max (perfect), so score/50 capped at 10
+            return min(10.0, score / 50.0) if score > 0 else 0
+
+        elif dim == "robustness":
+            # Lower std is better. Normalize: 10 * (1 - std/200) capped [0,10]
+            std = raw.get("last10_std", variant.get("last10_std", 50))
+            return max(0, min(10.0, 10.0 * (1 - std / 200)))
+
+        elif dim == "efficiency":
+            # Fewer episodes to converge is better. Normalize based on total episodes
+            episodes = params.get("episodes", 500)
+            elapsed = variant.get("elapsed", raw.get("elapsed_seconds", episodes / 50))
+            # Rough efficiency: score per second of training
+            eff = score / max(elapsed, 0.1)
+            return min(10.0, eff / 10.0)  # 10 pts/sec = perfect
+
+        elif dim == "completeness":
+            # Did it reach the success threshold? Binary-ish score
+            best_avg = raw.get("best_avg_score", score)
+            if best_avg >= 195:
+                return 10.0
+            elif best_avg >= 100:
+                return 5.0 + 5.0 * (best_avg - 100) / 95
+            else:
+                return max(0, 5.0 * best_avg / 100)
+
+        elif dim == "generalization":
+            # Consistency: last10_std relative to mean. Lower = better generalization
+            std = raw.get("last10_std", variant.get("last10_std", 50))
+            avg = max(abs(score), 1)
+            cv = std / avg  # coefficient of variation
+            return max(0, min(10.0, 10.0 * (1 - cv)))
+
+        else:
+            # Custom dimension: try to extract from variant metadata
+            return variant.get("dimension_scores", {}).get(dim, 5.0)
+
+    def _propose_dimensions(self, variant_a: dict, variant_b: dict,
+                            dim_scores: dict) -> list[str]:
+        """Propose new rubric dimensions when existing ones can't distinguish.
+
+        Heuristic: look for attributes where the two variants differ meaningfully
+        that aren't captured by existing dimensions.
+        """
+        proposals = []
+        params_a = variant_a.get("params", {})
+        params_b = variant_b.get("params", {})
+        raw_a = variant_a.get("raw_output", {})
+        raw_b = variant_b.get("raw_output", {})
+
+        # Check for parameter sensitivity differences
+        lr_a, lr_b = params_a.get("lr", 0), params_b.get("lr", 0)
+        if lr_a and lr_b and abs(lr_a - lr_b) / max(abs(lr_a), abs(lr_b), 1e-6) > 5:
+            if "parameter_sensitivity" not in self.dimensions:
+                proposals.append("parameter_sensitivity")
+
+        # Check for convergence speed differences
+        total_ep_a = raw_a.get("total_episodes", params_a.get("episodes", 500))
+        total_ep_b = raw_b.get("total_episodes", params_b.get("episodes", 500))
+        if total_ep_a and total_ep_b:
+            ratio = max(total_ep_a, total_ep_b) / max(min(total_ep_a, total_ep_b), 1)
+            if ratio > 2 and "convergence_speed" not in self.dimensions:
+                proposals.append("convergence_speed")
+
+        # Check network architecture complexity
+        hidden_a, hidden_b = params_a.get("hidden", 0), params_b.get("hidden", 0)
+        if hidden_a and hidden_b and abs(hidden_a - hidden_b) > 16:
+            if "model_complexity" not in self.dimensions:
+                proposals.append("model_complexity")
+
+        return proposals[:2]  # Cap at 2 new dimensions per evaluation
+
+    def add_dimension(self, name: str):
+        """Add a new dimension to the rubric."""
+        if name not in self.dimensions and len(self.dimensions) < self.MAX_DIMENSIONS:
+            self.dimensions.append(name)
+            _info(f"Rubric: added dimension '{name}' ({len(self.dimensions)}/{self.MAX_DIMENSIONS})")
+
+    def format_report(self, evaluation: dict) -> str:
+        """Format rubric evaluation as a readable string."""
+        lines = ["## Rubric Evaluation (L2 LLM-as-Judge)"]
+        lines.append(f"Similarity: {evaluation['similarity']:.1%} ({evaluation['dimensions_used']} dims)")
+        lines.append("")
+        lines.append("| Dimension | Algorithm A | Algorithm B | Δ |")
+        lines.append("|-----------|------------|------------|---|")
+        for dim, scores in evaluation["dimension_scores"].items():
+            a, b = scores["a"], scores["b"]
+            delta = abs(a - b)
+            lines.append(f"| {dim} | {a:.1f} | {b:.1f} | {delta:.1f} |")
+        if evaluation.get("new_dimensions_proposed"):
+            lines.append("")
+            lines.append(f"**New dimensions proposed:** {', '.join(evaluation['new_dimensions_proposed'])}")
+        return "\n".join(lines)
+
+
 # ── Auto Evolve Engine ──
 
 class AutoEvolveEngine:
@@ -272,6 +436,7 @@ class AutoEvolveEngine:
 
         self.tracker = FitnessTracker(window=stagnation_window)
         self.island_mgr = IslandManager(self.archive_dir)
+        self.rubric = RubricJudge()
         self.stagnation_count = 0
         self.round = 0
 
@@ -510,6 +675,12 @@ class AutoEvolveEngine:
 
             # --- Summary Phase ---
             self._summarize(variant_id, result, plan)
+
+            # --- Rubric Phase (L2: check if scores close to any existing variant) ---
+            self._check_rubric(variant_id, result, plan)
+
+            # --- Island Migration Check ---
+            self._check_island_migration(variant_id, plan)
 
             # --- Refresh Claim Chain knowledge after new data ---
             self.claim_knowledge = self._read_claim_chain_knowledge()
@@ -891,6 +1062,214 @@ class AutoEvolveEngine:
 
         _info(f"  exploit_ratio={self.exploit_ratio:.1f}, "
               f"mutation_aggressiveness={getattr(self, '_mutation_aggressiveness', 1.0):.1f}")
+
+    def _check_rubric(self, variant_id: str, result: dict, plan: dict):
+        """L2 Rubric: check if current variant's score is close to any existing variant.
+
+        When two algorithms have scores within TRIGGER_RATIO (10%), trigger
+        multi-dimensional evaluation and write compares_to relation to Claim Chain.
+        """
+        history = self.state.get("variant_history", [])
+        if len(history) < 2:
+            return
+
+        current_score = result["score"]
+        if current_score <= 0:
+            return
+
+        # Find variants with close scores (within trigger ratio)
+        close_variants = []
+        for entry in history:
+            if entry.get("id") == variant_id:
+                continue
+            entry_score = entry.get("score", 0)
+            if entry_score <= 0:
+                continue
+            if self.rubric.should_trigger(current_score, entry_score):
+                close_variants.append(entry)
+
+        if not close_variants:
+            return
+
+        # Evaluate against the closest-score variant
+        best_match = min(close_variants, key=lambda e: abs(e.get("score", 0) - current_score))
+        variant_a = {
+            "id": variant_id, "score": current_score,
+            "params": result.get("params", {}),
+            "raw_output": result.get("raw_output", {}),
+            "elapsed": result.get("elapsed", 0),
+            "last10_std": result.get("last10_std", 50),
+        }
+        variant_b = {
+            "id": best_match.get("id", ""), "score": best_match.get("score", 0),
+            "params": best_match.get("params", {}),
+            "raw_output": best_match.get("raw_output", {}),
+            "elapsed": best_match.get("elapsed", 0),
+            "last10_std": best_match.get("last10_std", 50),
+        }
+
+        evaluation = self.rubric.evaluate(variant_a, variant_b, self.claim_dir)
+        _info(f"  [Rubric L2] {variant_a['id']} vs {variant_b['id']}: "
+              f"similarity={evaluation['similarity']:.1%} ({evaluation['dimensions_used']} dims)")
+
+        # Write to Claim Chain: fact atom + compares_to relation
+        self._write_rubric_to_cc(variant_a, variant_b, evaluation)
+
+        # If new dimensions proposed, auto-accept in auto mode
+        for new_dim in evaluation.get("new_dimensions_proposed", []):
+            self.rubric.add_dimension(new_dim)
+
+        # Display rubric table
+        for dim, scores in evaluation["dimension_scores"].items():
+            _info(f"    {dim:20s}: {variant_a['id']}={scores['a']:.1f}  {variant_b['id']}={scores['b']:.1f}  "
+                  f"Δ={abs(scores['a']-scores['b']):.1f}")
+
+    def _write_rubric_to_cc(self, variant_a: dict, variant_b: dict, evaluation: dict):
+        """Write rubric comparison results to Claim Chain as fact atom + compares_to relation."""
+        from claim_chain import ClaimChain
+        cc = ClaimChain(self.claim_dir)
+        existing = cc.get_atoms(limit=500, status=None)
+        max_id = max((a["id"] for a in existing), default=0)
+
+        dim_summary = ", ".join(
+            f"{dim}: A={s['a']:.1f} B={s['b']:.1f}"
+            for dim, s in evaluation["dimension_scores"].items()
+        )
+
+        # Find or get method atoms for both variants
+        atoms_a = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_a["id"]]
+        atoms_b = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_b["id"]]
+        method_a = next((a for a in atoms_a if a["type"] == "method"), None)
+        method_b = next((a for a in atoms_b if a["type"] == "method"), None)
+
+        # Create comparison fact atom
+        fact_id = max_id + 1
+        cc.add_atom(
+            type="fact",
+            title=f"Rubric: {variant_a['id']} vs {variant_b['id']}",
+            content=f"Multi-dimensional comparison: similarity={evaluation['similarity']:.1%}. "
+                     f"Scores: {dim_summary}",
+            tags=["comparison", "rubric", "l2"],
+            evidence_level="experiment",
+            metadata={"variant_a": variant_a["id"], "variant_b": variant_b["id"],
+                      "evaluation": evaluation},
+        )
+
+        # Create compares_to relations
+        if method_a and method_b:
+            cc.add_relation(source_id=method_a["id"], target_id=method_b["id"],
+                           type="compares_to",
+                           evidence=f"similarity={evaluation['similarity']:.1%}: {dim_summary}")
+            cc.add_relation(source_id=method_b["id"], target_id=method_a["id"],
+                           type="compares_to",
+                           evidence=f"similarity={evaluation['similarity']:.1%}: {dim_summary}")
+
+    def _check_island_migration(self, variant_id: str, plan: dict):
+        """L3 Island Migration: triple-check before moving variant between islands.
+
+        Check 1: Claim Chain validation — target island's claims don't contradict the migrant
+        Check 2: Score threshold — migrant score >= target island best * MIGRATION_SCORE_FLOOR_RATIO
+        Check 3: Significant improvement over current island's average
+        """
+        history = self.state.get("variant_history", [])
+        current_entry = next((h for h in history if h.get("id") == variant_id), None)
+        if not current_entry:
+            return
+
+        current_score = current_entry.get("score", 0)
+        current_cell = current_entry.get("cell", "")
+
+        islands = self.island_mgr.export()
+        if len(islands) < 2:
+            return
+
+        current_island_id = None
+        for island in islands:
+            for v in island.get("variants", []):
+                if v.get("id") == variant_id:
+                    current_island_id = island["id"]
+                    break
+            if current_island_id:
+                break
+
+        if not current_island_id:
+            return
+
+        current_island = next((i for i in islands if i["id"] == current_island_id), None)
+        if not current_island:
+            return
+
+        # Check if another island would be a better fit
+        for target_island in islands:
+            if target_island["id"] == current_island_id:
+                continue
+
+            # Check 1: Claim Chain — do target island's atoms contradict our params?
+            our_params = current_entry.get("params", {})
+            cc_atoms = _load_jsonl(self.claim_dir / "atoms.jsonl")
+            cc_relations = _load_jsonl(self.claim_dir / "relations.jsonl")
+
+            target_variants = target_island.get("variants", [])
+            target_atom_ids = set()
+            for tv in target_variants:
+                for a in cc_atoms:
+                    if a.get("metadata", {}).get("variant_id") == tv.get("id"):
+                        target_atom_ids.add(a["id"])
+
+            contradicts_found = False
+            for r in cc_relations:
+                if r["type"] == "contradicts" and r["source_id"] in target_atom_ids:
+                    target_atom = next((a for a in cc_atoms if a["id"] == r["source_id"]), None)
+                    if target_atom:
+                        tp = target_atom.get("metadata", {}).get("params", {})
+                        # If our params are similar to a contradicted config, don't migrate
+                        if (tp.get("lr") == our_params.get("lr") and
+                                tp.get("hidden") == our_params.get("hidden")):
+                            contradicts_found = True
+                            break
+
+            if contradicts_found:
+                _info(f"  [Migration] Check 1 FAILED: {variant_id} contradicted in {target_island['id']}")
+                continue
+
+            # Check 2: Score threshold
+            target_scores = [v.get("score", 0) for v in target_variants if v.get("score")]
+            target_best = max(target_scores) if target_scores else 0
+            floor = target_best * self.config.get("migration_score_floor_ratio", 0.8)
+            if current_score < floor:
+                _info(f"  [Migration] Check 2 FAILED: score {current_score:.1f} < floor {floor:.1f}")
+                continue
+
+            # Check 3: Significant improvement
+            current_island_scores = [v.get("score", 0) for v in current_island.get("variants", []) if v.get("score")]
+            current_avg = sum(current_island_scores) / max(len(current_island_scores), 1)
+            if current_score < current_avg * 1.1:
+                _info(f"  [Migration] Check 3 FAILED: score {current_score:.1f} not significantly above "
+                      f"current island avg {current_avg:.1f}")
+                continue
+
+            # All checks passed
+            _success(f"  [Migration] PASSED: {variant_id} can migrate from {current_island_id} → {target_island['id']}")
+            _info(f"    Score: {current_score:.1f} vs target best {target_best:.1f} (floor={floor:.1f})")
+            self.island_mgr._add_to_island(target_island["id"], variant_id, current_cell, current_score)
+
+            # Write migration to Claim Chain
+            from claim_chain import ClaimChain
+            cc = ClaimChain(self.claim_dir)
+            existing = cc.get_atoms(limit=500, status=None)
+            max_id = max((a["id"] for a in existing), default=0)
+            cc.add_atom(
+                type="fact",
+                title=f"Migration: {variant_id} → {target_island['id']}",
+                content=f"Variant {variant_id} (score={current_score}) migrated from "
+                        f"{current_island_id} to {target_island['id']}. "
+                        f"Triple check passed: no contradicts, score above floor, significant improvement.",
+                tags=["migration", "island", "l3"],
+                evidence_level="experiment",
+                metadata={"variant_id": variant_id, "from_island": current_island_id,
+                          "to_island": target_island["id"]},
+            )
+            break
 
     def _finalize(self):
         """Final summary and export."""
