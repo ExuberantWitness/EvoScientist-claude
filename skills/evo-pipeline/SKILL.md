@@ -53,43 +53,44 @@ W6: Write → W7: Review (optional) → W8: Memory
 - **MULTI_AGENT_MODEL = "deepseek-chat"** — Model for multi-agent sessions (requires MULTI_AGENT_PROVIDER)
 - **MULTI_AGENT_PROVIDER = "deepseek"** — Provider for multi-agent model (deepseek API is OpenAI-compatible)
 
-### Multi-Agent Discussion Timeout Protocol (CRITICAL)
+### Multi-Agent Discussion Polling Protocol (CRITICAL)
 
-**Why**: `evo_discuss` runs background tasks that can hang due to API rate limits, provider outages, or agent-loop bugs. Without timeouts, the entire pipeline deadlocks — a single stuck discussion blocks ALL subsequent multi-agent phases because the session stays "busy".
+**Why**: `evo_discuss` runs background tasks that can hang due to API rate limits, provider outages, or agent-loop bugs. A stuck discussion blocks ALL subsequent multi-agent phases because the session stays "busy". However, discussions that are still producing events MUST be allowed to continue — multi-agent reasoning is inherently variable in duration and imposing hard time limits wastes useful work.
 
-**Timeout Constants**:
-- **MA_DISCUSS_TIMEOUT = 300** — Maximum seconds (5 min) to wait for an `evo_discuss` to complete
+**Design principle**: Progress-based, not time-based. As long as the discussion produces new events, it is alive and working. Only genuine stalls (zero progress) trigger recovery.
+
+**Polling Constants**:
 - **MA_POLL_INTERVAL = 15** — Seconds between `evo_status` polls
-- **MA_MAX_POLLS = 20** — Maximum number of polls (20 × 15s = 300s = 5 min)
-- **MA_STUCK_THRESHOLD = 3** — Consecutive polls with zero new events → treat as stuck
+- **MA_STUCK_THRESHOLD = 3** — Consecutive polls with zero new events → treat as stuck (45s of silence)
+- **MA_SLOW_THRESHOLD = 6** — Consecutive polls with very slow progress (< 10 new events/poll) → warn user but continue polling (90s of near-stall)
 
 **Polling Protocol** (MUST follow this, not ad-hoc polling):
 
 1. After `evo_discuss` returns `{"status": "processing"}`:
-   - Set `poll_count = 0`, `last_events = 0`, `stuck_count = 0`
+   - Set `last_events = 0`, `stuck_count = 0`, `slow_count = 0`
 2. Loop:
    - Wait `MA_POLL_INTERVAL` seconds
    - Call `evo_status(session_id)`
    - If `background_task` is absent or `"idle"` → **discussion complete**, proceed
-   - If `events_count > last_events` → `stuck_count = 0` (still making progress)
-   - If `events_count == last_events` → `stuck_count += 1`
+   - If `events_count > last_events + 10` → `stuck_count = 0`, `slow_count = 0` (healthy progress)
+   - If `0 < events_count - last_events <= 10` → `stuck_count = 0`, `slow_count += 1` (slow but alive)
+   - If `events_count == last_events` → `stuck_count += 1`, `slow_count += 1`
    - `last_events = events_count`
-   - `poll_count += 1`
-3. **Stuck detection**: If `stuck_count >= MA_STUCK_THRESHOLD` (no new events for 3 consecutive polls = 45s):
-   - Discussion is likely hung. **Do NOT keep waiting.**
-   - Go to [Session Recovery Strategy](#session-recovery-strategy)
-4. **Timeout**: If `poll_count >= MA_MAX_POLLS` (5 minutes total):
-   - Discussion exceeded timeout. **Do NOT keep waiting.**
-   - Go to [Session Recovery Strategy](#session-recovery-strategy)
+3. **Slow progress warning**: If `slow_count >= MA_SLOW_THRESHOLD` (90s of near-stall):
+   - Log: `"⚠️ Discussion slow (≤10 events/poll for 90s). Continuing to wait — {N} total events so far."`
+   - `slow_count = 0` (reset to avoid repeated warnings)
+4. **Stuck detection**: If `stuck_count >= MA_STUCK_THRESHOLD` (no new events for 3 consecutive polls = 45s):
+   - Discussion is genuinely hung. Go to [Session Recovery Strategy](#session-recovery-strategy)
+5. **No hard timeout**: There is NO maximum poll limit. Discussions that continue producing events continue running. The user may interrupt manually at any time.
 
-**Session Recovery Strategy**:
+**Session Recovery Strategy** (ONLY for genuine stuck/hung discussions):
 
-When a discussion is stuck or timed out, DO NOT retry on the same session — it's permanently blocked. Instead:
+When a discussion is confirmed stuck (zero events for STUCK_THRESHOLD consecutive polls):
 
 1. **Mark session as blocked**: Record in PIPELINE_STATE.json
    ```json
    "blocked_sessions": ["8c134b10"],
-   "block_reason": "discussion timeout at events=1212, phase=3"
+   "block_reason": "discussion stuck at events=1212, phase=3 — zero events for 45s"
    ```
 2. **Create a fresh session**: `mcp__evo-agents__evo_create_session(workspace_dir, model, provider)`
 3. **Skip to Skills Mode for current phase**: Complete the phase without multi-agent
@@ -97,10 +98,9 @@ When a discussion is stuck or timed out, DO NOT retry on the same session — it
 
 **User notification** (critical — user must know what happened):
 ```
-⚠️ Multi-agent discussion timed out after {N} seconds at {events} events.
+⚠️ Multi-agent discussion stuck after {N} seconds at {events} events — zero new events for 45s.
    Phase {X} completed in Skills Mode instead.
    New session {id} created for subsequent phases.
-   Reason: likely API rate limit or provider-side hang.
 ```
 
 > Override: `/evo-pipeline "proposal" — USE_MULTI_AGENT: false, AUTO_PROCEED: true`
