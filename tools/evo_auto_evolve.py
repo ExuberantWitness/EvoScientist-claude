@@ -320,12 +320,174 @@ class AutoEvolveEngine:
         for entry in self.state.get("variant_history", []):
             self.tracker.record(entry["score"])
 
+    def _read_claim_chain_knowledge(self) -> dict:
+        """Read Claim Chain to build a structured knowledge map.
+
+        Returns:
+            {
+              "validated_params": [{param_name: value_range, ...}],  # what worked
+              "contradicted_params": [{param_name: value_range, ...}],  # what failed
+              "boundaries": [{param: [min, max], ...}],  # known constraints
+              "score_by_param": {lr_level: {value: best_score}},  # param performance map
+              "total_validates": N, "total_contradicts": N,
+            }
+        """
+        atoms = _load_jsonl(self.claim_dir / "atoms.jsonl")
+        relations = _load_jsonl(self.claim_dir / "relations.jsonl")
+        atom_map = {a["id"]: a for a in atoms}
+
+        knowledge = {
+            "validated_params": [],
+            "contradicted_params": [],
+            "boundaries": [],
+            "score_by_param": {},
+            "total_validates": 0,
+            "total_contradicts": 0,
+        }
+
+        for r in relations:
+            rtype = r["type"]
+            src = atom_map.get(r["source_id"])
+            tgt = atom_map.get(r["target_id"])
+            if not src or not tgt:
+                continue
+
+            tgt_meta = tgt.get("metadata", {})
+            tgt_params = tgt_meta.get("params", {})
+
+            if rtype == "validates":
+                knowledge["total_validates"] += 1
+                if tgt_params:
+                    knowledge["validated_params"].append({
+                        "params": tgt_params,
+                        "score": tgt_meta.get("score", 0),
+                        "method_title": src.get("title", ""),
+                    })
+            elif rtype == "contradicts":
+                knowledge["total_contradicts"] += 1
+                if tgt_params:
+                    knowledge["contradicted_params"].append({
+                        "params": tgt_params,
+                        "score": tgt_meta.get("score", 0),
+                        "method_title": src.get("title", ""),
+                    })
+            elif rtype == "boundary_of":
+                evidence = r.get("evidence", "")
+                knowledge["boundaries"].append({
+                    "evidence": evidence,
+                    "source": src.get("title", ""),
+                })
+
+        # Build score_by_param: aggregate scores by each parameter dimension value
+        dim_names = self.config.get("dim_names", [])
+        for name in dim_names:
+            knowledge["score_by_param"][name] = {}
+
+        for entry in self.state.get("variant_history", []):
+            dims = entry.get("dims", {})
+            score = entry.get("score", 0)
+            params = entry.get("params", {})
+            for name, val in dims.items():
+                if name not in knowledge["score_by_param"]:
+                    knowledge["score_by_param"][name] = {}
+                dim_map = knowledge["score_by_param"][name]
+                if val not in dim_map:
+                    dim_map[val] = {"total": 0, "count": 0, "best": 0}
+                d = dim_map[val]
+                d["total"] += score
+                d["count"] += 1
+                d["best"] = max(d["best"], score)
+
+        return knowledge
+
+    def _apply_knowledge_to_params(self, base_params: dict, target_params: dict,
+                                   knowledge: dict, cell_key: str) -> dict:
+        """Apply Claim Chain knowledge to parameter selection.
+
+        - Avoid parameter regions with contradicts
+        - Bias toward validates regions
+        - Respect boundaries
+        """
+        result = dict(target_params)
+
+        # Merge base params for non-conflicting keys
+        for k, v in base_params.items():
+            if k not in result:
+                result[k] = v
+
+        # Find best-performing params for the target cell's dimensions
+        dim_names = self.config.get("dim_names", [])
+        cell_parts = cell_key.split("+")
+
+        # Check if cell's dimension values have contradict history
+        for name, val in zip(dim_names, cell_parts):
+            param_map = knowledge["score_by_param"].get(name, {})
+            if val in param_map:
+                info = param_map[val]
+                avg = info["total"] / max(info["count"], 1)
+                _info(f"  [Knowledge] {name}={val}: avg={avg:.1f}, best={info['best']:.1f} "
+                      f"({info['count']} trials)")
+
+        # Apply contradicts avoidance: if params matching this cell have poor history,
+        # mutate more aggressively
+        has_contradicts = any(
+            c["params"].get("lr") == result.get("lr")
+            and c["params"].get("hidden") == result.get("hidden")
+            for c in knowledge["contradicted_params"]
+            if c["params"]
+        )
+
+        if has_contradicts and knowledge["total_validates"] > 0:
+            _info("  [Knowledge] Cell params have contradicts history — increasing mutation rate")
+            # Look for a validates example with similar cell dims and bias toward it
+            best_validated = max(knowledge["validated_params"],
+                                key=lambda x: x.get("score", 0),
+                                default=None)
+            if best_validated:
+                vp = best_validated["params"]
+                _info(f"  [Knowledge] Biasing toward best validated: lr={vp.get('lr')}, "
+                      f"hidden={vp.get('hidden')}, score={best_validated['score']}")
+                # Blend: 60% best validated params, 40% target params
+                for key in ("lr", "hidden", "gamma"):
+                    if key in vp and key in result:
+                        result[key] = vp[key] * 0.6 + result[key] * 0.4
+                        if isinstance(result[key], float):
+                            result[key] = round(result[key], 6)
+                        elif isinstance(result[key], int):
+                            result[key] = int(round(result[key]))
+
+        # Apply boundary constraints
+        for b in knowledge["boundaries"]:
+            evidence = b.get("evidence", "").lower()
+            if "gamma" in evidence and "gamma" in result:
+                if ">= 0.9" in evidence or "> 0.9" in evidence or ">= 0.99" in evidence:
+                    result["gamma"] = max(result["gamma"], 0.99)
+                    _info(f"  [Knowledge] Boundary constraint: gamma >= 0.99")
+
+        # Random perturbation (reduced if knowledge is strong)
+        if random.random() < (0.15 if knowledge["total_validates"] > 2 else 0.3):
+            perturb_keys = ["lr", "gamma"]
+            for key in perturb_keys:
+                if key in result:
+                    val = result[key]
+                    factor = random.uniform(0.7, 1.4)  # narrower range when knowledge-guided
+                    if isinstance(val, (int, float)):
+                        result[key] = round(val * factor, 6)
+
+        return result
+
     def run(self):
         """Run the autonomous PES loop."""
         _info(f"Starting auto-evolve: max {self.max_rounds} rounds, "
               f"exploit_ratio={self.exploit_ratio}, success_threshold={self.success_threshold}")
         _info(f"Archive: {self.archive_dir}, Claim Chain: {self.claim_dir}")
         _info(f"Existing variants: {len(self.state.get('variant_history', []))}")
+
+        # Read initial Claim Chain knowledge
+        self.claim_knowledge = self._read_claim_chain_knowledge()
+        _info(f"Claim Chain knowledge: {self.claim_knowledge['total_validates']} validates, "
+              f"{self.claim_knowledge['total_contradicts']} contradicts, "
+              f"{len(self.claim_knowledge['boundaries'])} boundaries")
 
         trend = self.tracker.get_trend()
         _info(f"Fitness trend: {trend['direction']} (mean={trend.get('mean', 'N/A'):.1f}, "
@@ -336,7 +498,7 @@ class AutoEvolveEngine:
             print(f"\n{'─'*60}", file=sys.stderr)
             _info(f"Round {self.round}/{self.max_rounds}", flush=True)
 
-            # --- Plan Phase ---
+            # --- Plan Phase (Claim Chain informed) ---
             plan = self._plan()
             if plan is None:
                 _warn("Cannot plan further. Stopping.")
@@ -348,6 +510,9 @@ class AutoEvolveEngine:
 
             # --- Summary Phase ---
             self._summarize(variant_id, result, plan)
+
+            # --- Refresh Claim Chain knowledge after new data ---
+            self.claim_knowledge = self._read_claim_chain_knowledge()
 
             # --- Check stopping conditions ---
             if self.success_threshold and result["score"] >= self.success_threshold:
@@ -366,22 +531,44 @@ class AutoEvolveEngine:
         self._finalize()
 
     def _plan(self) -> dict | None:
-        """Plan the next evolution step."""
-        # Determine strategy
+        """Plan the next evolution step, informed by Claim Chain knowledge."""
         strategy = "exploit" if random.random() < self.exploit_ratio else "explore"
 
-        # Sample from grid
         cells = self.state["cells"]
         filled = {k: v for k, v in cells.items() if v["elite_id"] is not None}
+        cc = getattr(self, "claim_knowledge", {})
 
         if not filled:
             strategy = "explore"
 
         if strategy == "exploit":
+            # Use Claim Chain knowledge to weight cell selection:
+            # cells with validates history get higher weight, contradicts get lower
             keys = list(filled.keys())
             scores = np.array([filled[k]["elite_score"] for k in keys])
             scores = scores - scores.min() + 1e-6
             probs = scores / scores.sum()
+
+            # Adjust probs by Claim Chain history per cell
+            for i, k in enumerate(keys):
+                cell_dims = cells[k].get("dim_values", {})
+                # Check if this cell's param combo has validates
+                has_validates = any(
+                    vp.get("params", {}).get("lr") == cell_dims.get("lr_level")
+                    for vp in cc.get("validated_params", []) if vp.get("params")
+                )
+                has_contradicts = any(
+                    cp.get("params", {}).get("lr") == cell_dims.get("lr_level")
+                    for cp in cc.get("contradicted_params", []) if cp.get("params")
+                )
+                if has_validates:
+                    probs[i] *= 1.5
+                    _info(f"  [Knowledge] {k} boosted (has validates)")
+                if has_contradicts:
+                    probs[i] *= 0.5
+                    _info(f"  [Knowledge] {k} discounted (has contradicts)")
+            probs = probs / probs.sum()
+
             idx = np.random.choice(len(keys), p=probs)
             cell_key = keys[idx]
             parent = filled[cell_key]
@@ -405,11 +592,20 @@ class AutoEvolveEngine:
         # Map cell to parameters
         cell_params = map_cell_to_params(cell_key, self.config)
 
-        # Mutate from parent if available
+        # Get base params from parent or cell defaults
         if parent and parent.get("elite_params"):
-            params = mutate_params(parent["elite_params"], cell_params)
+            base_params = dict(parent["elite_params"])
         else:
-            params = dict(cell_params)
+            base_params = dict(cell_params)
+
+        # Apply Claim Chain knowledge to guide mutation
+        if cc:
+            params = self._apply_knowledge_to_params(base_params, cell_params, cc, cell_key)
+        else:
+            params = base_params
+            for k, v in cell_params.items():
+                if k not in params:
+                    params[k] = v
 
         # Add non-mapped params with defaults
         params.setdefault("gamma", 0.99)
@@ -636,21 +832,65 @@ class AutoEvolveEngine:
                                    type="derives", evidence=f"Mutation: {variant_id} derived from {parent_id}")
 
     def _apply_meta_strategy(self):
-        """Apply meta-strategy when stagnation is detected."""
-        _info("Meta-strategy: trying more aggressive exploration...")
-        # Shift toward more exploration
-        self.exploit_ratio = max(0.3, self.exploit_ratio - 0.15)
-        _info(f"  exploit_ratio adjusted to {self.exploit_ratio}")
+        """Apply meta-strategy when stagnation is detected.
 
-        # Check Claim Chain for hints
-        claim_relations = _load_jsonl(self.claim_dir / "relations.jsonl")
-        contradict_relations = [r for r in claim_relations if r["type"] == "contradicts"]
-        if contradict_relations:
-            _info(f"  Claim Chain: {len(contradict_relations)} contradicts — avoiding those directions")
+        Uses Claim Chain knowledge to:
+        1. Identify and avoid parameter regions with consistent fails
+        2. Shift toward parameter regions with consistent success
+        3. Increase exploration of untouched cells
+        4. Relax boundaries if all attempts within bounds are exhausted
+        """
+        _info("Meta-strategy: analyzing Claim Chain for strategy adjustment...")
+        cc = self._read_claim_chain_knowledge()
 
-        validates = [r for r in claim_relations if r["type"] == "validates"]
-        if validates:
-            _info(f"  Claim Chain: {len(validates)} validates — reinforcing those directions")
+        # 1. Build forbidden parameter zones from contradicts
+        forbidden = set()
+        for cp in cc["contradicted_params"]:
+            p = cp.get("params", {})
+            key = (p.get("lr"), p.get("hidden"), p.get("gamma"))
+            forbidden.add(key)
+        if forbidden:
+            _info(f"  Forbidden zones: {len(forbidden)} param combinations to avoid")
+            self._forbidden_zones = forbidden
+
+        # 2. Build promising zones from validates
+        self._promising_zones = []
+        for vp in cc["validated_params"]:
+            p = vp.get("params", {})
+            if p:
+                self._promising_zones.append({
+                    "lr": p.get("lr"), "hidden": p.get("hidden"),
+                    "gamma": p.get("gamma"), "score": vp.get("score", 0),
+                })
+        if self._promising_zones:
+            best = max(self._promising_zones, key=lambda x: x["score"])
+            _info(f"  Best promising zone: lr={best['lr']}, hidden={best['hidden']}, "
+                  f"gamma={best['gamma']}, score={best['score']}")
+
+        # 3. Check grid coverage - target empty cells more aggressively
+        cells = self.state["cells"]
+        empty = [k for k, v in cells.items() if v.get("elite_id") is None]
+        if empty:
+            _info(f"  Untouched cells: {len(empty)}/{len(cells)} — boosting exploration")
+            self.exploit_ratio = max(0.2, self.exploit_ratio - 0.2)
+        else:
+            _info("  All cells touched — looking for weak spots")
+            # Target cells with score below 50% of best
+            filled = {k: v for k, v in cells.items() if v.get("elite_score")}
+            best = max(v["elite_score"] for v in filled.values())
+            weak = [k for k, v in filled.items() if v["elite_score"] < best * 0.3]
+            if weak:
+                _info(f"  Weak cells: {len(weak)} below 30% of best — targeting for improvement")
+
+        # 4. Adjust exploration of hyperparameter ranges
+        if cc["total_contradicts"] > cc["total_validates"]:
+            _info("  More contradicts than validates — widening search space")
+            self._mutation_aggressiveness = 1.5  # wider perturbations
+        else:
+            self._mutation_aggressiveness = 0.8  # tighter, exploit what works
+
+        _info(f"  exploit_ratio={self.exploit_ratio:.1f}, "
+              f"mutation_aggressiveness={getattr(self, '_mutation_aggressiveness', 1.0):.1f}")
 
     def _finalize(self):
         """Final summary and export."""
