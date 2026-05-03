@@ -355,24 +355,98 @@ Update state: `"phase": 3.6`
 - Use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_claude" to notify dashboard
 - Dashboard shows purple "awaiting Claude Code" status
 
-**Mode Selection (if EVOLVE_MODE = "single" and not previously chosen):**
+**Mode Routing (MANDATORY — do NOT skip this logic):**
 
-Use AskUserQuestion to let the user choose experiment mode:
+```
+if EVOLVE_MODE == "explore":
+    → MUST invoke /evo-evolve directly (skip AskUserQuestion)
+    → After evolution completes, run Performance Gate below
+    → Do NOT fall through to single-experiment flow
+elif EVOLVE_MODE == "single":
+    → Show AskUserQuestion mode selection (see below)
+else:
+    → Show AskUserQuestion mode selection (default behavior)
+```
+
+**AskUserQuestion (only if EVOLVE_MODE != "explore"):**
 
 ```
 AskUserQuestion:
   question: "选择实验模式？"
   options:
-    - label: "/evo-code: 单一实验 (Recommended)"
+    - label: "/evo-code: 单一实验"
       description: "实现一个实验方案，适合已有明确方案的情况"
-    - label: "/evo-evolve: 多维进化"
-      description: "PES循环 + MAP-Elites，适合需要探索多个变体的场景"
+    - label: "/evo-evolve: 多维进化 (Recommended)"
+      description: "PES循环 + Island GA + MAP-Elites，自动探索参数空间"
 ```
 
 If user selects `/evo-code` → proceed with single experiment flow below.
-If user selects `/evo-evolve` → invoke `/evo-evolve` and skip to Phase 5 after evolution completes.
+If user selects `/evo-evolve` → set EVOLVE_MODE="explore" and follow explore flow below.
 
-**Single Experiment Flow (/evo-code):**
+---
+
+#### Explore Flow (EVOLVE_MODE = "explore") — MANDATORY when EVOLVE_MODE=explore
+
+**Step 1: Initialize evolution workspace**
+
+```bash
+# Ensure workspace has evolve_archive/ structure
+mkdir -p [workspace]/evolve_archive/{variants,results,islands}
+
+# If evolve_config.json doesn't exist, create it from plan.md parameters
+if [ ! -f [workspace]/evolve_archive/evolve_config.json ]; then
+    # Generate config based on plan.md hyperparameter ranges
+    python tools/evo_auto_evolve.py init-config \
+        --workspace [workspace] \
+        --plan [workspace]/plan.md
+fi
+```
+
+**Step 2: Initialize Claim Chain (if empty)**
+
+```bash
+# Check if Claim Chain has prior knowledge
+python tools/claim_chain.py summary --workspace [workspace]
+```
+
+Read prior atoms and relations. Use them to bias the initial search.
+
+**Step 3: Run autonomous PES evolution loop**
+
+```bash
+# Dry-run first to verify configuration
+python tools/evo_auto_evolve.py dry-run \
+    --config [workspace]/evolve_archive/evolve_config.json \
+    --workspace [workspace] \
+    --max-rounds 5
+
+# If dry-run succeeds, run full evolution
+python tools/evo_auto_evolve.py run \
+    --config [workspace]/evolve_archive/evolve_config.json \
+    --workspace [workspace] \
+    --max-rounds 20 \
+    --exploit-ratio 0.7 \
+    --stagnation-window 5
+```
+
+This auto engine handles the ENTIRE PES loop internally:
+- Sample → Plan → Execute → Summarize → Grid+Claims → Island → Rubric → Migration → repeat
+- Each round: writes Atom+Relation to Claim Chain, updates Grid archive, manages Islands
+- Stops when: success_threshold met OR max_rounds reached OR stagnation too long
+
+**Step 4: After evolution completes — MUST run Performance Gate (see below)**
+
+After evolution, the workspace will contain:
+- `evolve_archive/evolve_state.json` — Grid state with all cells
+- `evolve_archive/evolution_log.jsonl` — Every round's details
+- `evolve_archive/best_variants.json` — Per-cell elites
+- `evolve_archive/islands/` — Auto-created Island clusters
+- `claim_chain/atoms.jsonl` — All method/verification atoms
+- `claim_chain/relations.jsonl` — validates/contradicts/compares_to relations
+
+---
+
+#### Single Experiment Flow (/evo-code)
 
 AskUserQuestion: "即将进入代码实现阶段，切换到 Claude Code 直接执行。确认？"
 
@@ -385,14 +459,15 @@ For each stage in `plan.md` (in dependency order):
 4. **Run full**: Invoke `/evo-run "Stage N" — SANITY_FIRST: false`
 5. If full run fails: Invoke `/evo-debug "[error]"`, retry once
 
-**After Phase 4 complete:**
+---
+
+#### After Phase 4 complete (BOTH modes must reach here):
+
 - Use `mcp__evo-agents__evo_pipeline_control` with action "switch_to_agent" to notify dashboard
-- AskUserQuestion: "实现完成，切回多 agent 系统继续分析？"
-- If user confirms → advance to Phase 5
 
-**Performance Gate (CRITICAL — before Phase 5):**
+#### Performance Gate (MANDATORY — MUST execute before Phase 5, NEVER skip)
 
-Before proceeding to Phase 5 (Analysis), check whether results are good enough to warrant analysis:
+**STOP. Before proceeding to Phase 5, you MUST run this gate. No exceptions.**
 
 ```bash
 python tools/evo_auto_evolve.py performance-gate --workspace [workspace]
@@ -403,17 +478,19 @@ This outputs a JSON with `pass`, `ratio` (actual_score/target), and `recommendat
 | ratio | recommendation | action |
 |-------|---------------|--------|
 | >= 1.0 | `proceed_to_phase5` | Go to Phase 5 |
-| 0.8-1.0 | `iterate_w4` | Re-implement with adjusted params via `/evo-code` |
+| 0.8-1.0 | `iterate_w4` | Re-run evolution with adjusted params |
 | 0.5-0.8 | `iterate_w3_5` | Method change needed → go back to Phase 3.5 ideation |
 | 0.2-0.5 | `iterate_w3` | Research better methods → go back to Phase 3 |
 | < 0.2 | `iterate_w2` | Re-plan from scratch → go back to Phase 2 |
 
 **If gate does NOT pass:**
 - Write the `loop_target` to `experiment_log.md`
-- Auto-return to the recommended phase (W2/W3/W3.5/W4)
-- Do NOT proceed to Phase 5 — analysing terrible results wastes compute
+- Print: "⚠️ Performance Gate FAILED. ratio=[X]. Looping back to [phase]. Do NOT proceed to Phase 5."
+- Update `PIPELINE_STATE.json` with target phase
+- Return to the recommended phase (W2/W3/W3.5/W4) — do NOT continue to Phase 5
 
 **If gate passes:**
+- Print: "✅ Performance Gate PASSED. Proceeding to Phase 5."
 - Proceed to Phase 5
 
 Update state: `"phase": 4, "current_stage": N`

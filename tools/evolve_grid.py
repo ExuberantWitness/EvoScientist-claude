@@ -24,13 +24,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from itertools import product as _itertools_product
 
 
 def _info(msg: str):
     """Print human-readable info to stderr."""
     print(msg, file=sys.stderr)
-
-import numpy as np
 
 
 class EvolveGrid:
@@ -56,7 +55,7 @@ class EvolveGrid:
         dim_names = [d["name"] for d in dims]
 
         cells = {}
-        for combo in _cartesian_product(dim_values):
+        for combo in _itertools_product(*dim_values):
             key = "+".join(combo)
             cells[key] = {
                 "dim_values": dict(zip(dim_names, combo)),
@@ -293,16 +292,6 @@ class EvolveGrid:
 
         export_path.write_text(json.dumps(export, indent=2, ensure_ascii=False))
         _info(f"Exported {len(export)} best variants to {export_path}")
-
-
-def _cartesian_product(lists):
-    """Generate cartesian product of lists as tuples."""
-    if not lists:
-        return [()]
-    result = [[]]
-    for lst in lists:
-        result = [prefix + [item] for prefix in result for item in lst]
-    return [tuple(r) for r in result]
 
 
 if __name__ == "__main__":

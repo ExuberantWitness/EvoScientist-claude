@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import random
+import shlex
 import subprocess
 import sys
 import time
@@ -242,10 +243,21 @@ class IslandManager:
     def _find_island_for_atom(self, atom_id: int) -> str | None:
         for island in self.islands:
             for v in island.get("variants", []):
-                # Check if the atom ID corresponds to this variant's claim
                 if v.get("claim_atom_id") == atom_id:
                     return island["id"]
         return None
+
+    def set_claim_atom_id(self, island_id: str, variant_id: str, atom_id: int):
+        """Store the Claim Chain method atom ID on the island variant for merge detection."""
+        for island in self.islands:
+            if island["id"] == island_id:
+                for v in island.get("variants", []):
+                    if v.get("id") == variant_id:
+                        v["claim_atom_id"] = atom_id
+                        island_dir = self.islands_dir / island_id
+                        (island_dir / "island_meta.json").write_text(
+                            json.dumps(island, indent=2, ensure_ascii=False))
+                        return
 
     def export(self) -> list[dict]:
         return self.islands
@@ -265,7 +277,9 @@ class RubricJudge:
     TRIGGER_RATIO = 0.10  # Trigger when scores within 10% of each other
     MAX_DIMENSIONS = 10
 
-    def __init__(self):
+    def __init__(self, max_score: float = 1000, solve_threshold: float | None = None):
+        self.max_score = max_score
+        self.solve_threshold = solve_threshold
         self.dimensions = list(self.INITIAL_DIMENSIONS)
         self.comparisons: list[dict] = []
 
@@ -320,31 +334,28 @@ class RubricJudge:
         raw = variant.get("raw_output", {})
 
         if dim == "accuracy":
-            # Map score to 0-10. For CartPole, 500 is max (perfect), so score/50 capped at 10
-            return min(10.0, score / 50.0) if score > 0 else 0
+            return min(10.0, score / (self.max_score / 10.0)) if score > 0 else 0
 
         elif dim == "robustness":
-            # Lower std is better. Normalize: 10 * (1 - std/200) capped [0,10]
+            # Lower std is better. Normalize: 10 * (1 - std/max_score*0.4) capped [0,10]
             std = raw.get("last10_std", variant.get("last10_std", 50))
-            return max(0, min(10.0, 10.0 * (1 - std / 200)))
+            return max(0, min(10.0, 10.0 * (1 - std / max(self.max_score * 0.4, 1))))
 
         elif dim == "efficiency":
-            # Fewer episodes to converge is better. Normalize based on total episodes
             episodes = params.get("episodes", 500)
             elapsed = variant.get("elapsed", raw.get("elapsed_seconds", episodes / 50))
-            # Rough efficiency: score per second of training
             eff = score / max(elapsed, 0.1)
-            return min(10.0, eff / 10.0)  # 10 pts/sec = perfect
+            return min(10.0, eff / 10.0)
 
         elif dim == "completeness":
-            # Did it reach the success threshold? Binary-ish score
             best_avg = raw.get("best_avg_score", score)
-            if best_avg >= 195:
+            if self.solve_threshold and best_avg >= self.solve_threshold:
                 return 10.0
-            elif best_avg >= 100:
-                return 5.0 + 5.0 * (best_avg - 100) / 95
+            elif self.solve_threshold:
+                ratio = best_avg / self.solve_threshold
+                return min(10.0, ratio * 10.0)
             else:
-                return max(0, 5.0 * best_avg / 100)
+                return min(10.0, max(0, score / (self.max_score / 10.0)))
 
         elif dim == "generalization":
             # Consistency: last10_std relative to mean. Lower = better generalization
@@ -434,9 +445,17 @@ class AutoEvolveEngine:
         self.claim_dir = workspace / "claim_chain"
         self.evolution_log = self.archive_dir / "evolution_log.jsonl"
 
+        # Task config (replaces hardcoded CartPole/A2C values)
+        self.task_config = config.get("task", {})
+        self.task_name = self.task_config.get("name", "unknown")
+        self.env_name = self.task_config.get("env", "unknown")
+
         self.tracker = FitnessTracker(window=stagnation_window)
         self.island_mgr = IslandManager(self.archive_dir)
-        self.rubric = RubricJudge()
+        self.rubric = RubricJudge(
+            max_score=self.task_config.get("max_score", 1000),
+            solve_threshold=self.task_config.get("solve_threshold", None),
+        )
         self.stagnation_count = 0
         self.round = 0
 
@@ -465,8 +484,13 @@ class AutoEvolveEngine:
         if state_path.exists():
             self.state = json.loads(state_path.read_text(encoding="utf-8"))
         else:
-            _err("No evolve_state.json found. Run 'evolve_grid.py init' first.")
-            sys.exit(1)
+            # Auto-init grid from config if no state file exists
+            _info("No evolve_state.json found. Auto-initializing grid from config...")
+            self._init_grid()
+            if not state_path.exists():
+                _err("Failed to auto-init grid. Check evolve_config.json.")
+                sys.exit(1)
+            self.state = json.loads(state_path.read_text(encoding="utf-8"))
         # Ensure next_variant is always ahead of all recorded IDs
         max_n = 0
         for h in self.state.get("variant_history", []):
@@ -484,6 +508,31 @@ class AutoEvolveEngine:
         """Replay existing variant history into fitness tracker."""
         for entry in self.state.get("variant_history", []):
             self.tracker.record(entry["score"])
+
+    def _init_grid(self):
+        """Auto-initialize grid from config if no state file exists."""
+        from itertools import product as _itertools_product
+        dims = self.config.get("behavior_dims", [])
+        if not dims:
+            _err("Cannot auto-init: behavior_dims missing from config")
+            return
+
+        dim_values = [d["values"] for d in dims]
+        dim_names = [d["name"] for d in dims]
+        cells = {}
+        for combo in _itertools_product(*dim_values):
+            key = "+".join(combo)
+            cells[key] = {
+                "dim_values": dict(zip(dim_names, combo)),
+                "elite_id": None,
+                "elite_score": None,
+            }
+
+        self.config["dim_names"] = dim_names
+        state = {"cells": cells, "variant_history": [], "next_variant": 1}
+        state_path = self.archive_dir / "evolve_state.json"
+        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        _info(f"Auto-initialized {len(cells)} cells ({len(dim_names)}D: {' × '.join(str(len(v)) for v in dim_values)})")
 
     def _read_claim_chain_knowledge(self) -> dict:
         """Read Claim Chain to build a structured knowledge map.
@@ -655,8 +704,9 @@ class AutoEvolveEngine:
               f"{len(self.claim_knowledge['boundaries'])} boundaries")
 
         trend = self.tracker.get_trend()
-        _info(f"Fitness trend: {trend['direction']} (mean={trend.get('mean', 'N/A'):.1f}, "
-              f"best={trend.get('best', 'N/A'):.1f})")
+        mean_str = f"{trend['mean']:.1f}" if isinstance(trend.get('mean'), (int, float)) else "N/A"
+        best_str = f"{trend['best']:.1f}" if isinstance(trend.get('best'), (int, float)) else "N/A"
+        _info(f"Fitness trend: {trend['direction']} (mean={mean_str}, best={best_str})")
 
         for rnd in range(self.max_rounds):
             self.round = rnd + 1
@@ -696,7 +746,9 @@ class AutoEvolveEngine:
                 self.stagnation_count = 0
 
             trend = self.tracker.get_trend()
-            _info(f"Trend: {trend['direction']} | mean={trend['mean']:.1f} best={trend['best']:.1f} | "
+            t_mean = f"{trend['mean']:.1f}" if 'mean' in trend else "N/A"
+            t_best = f"{trend['best']:.1f}" if 'best' in trend else "N/A"
+            _info(f"Trend: {trend['direction']} | mean={t_mean} best={t_best} | "
                   f"stagnation: {self.stagnation_count}/{self.config.get('stagnation_window', 5)}")
 
         self._finalize()
@@ -783,6 +835,27 @@ class AutoEvolveEngine:
         params.setdefault("episodes", 500)
         params.setdefault("seed", 42 + self.round)
 
+        # Apply meta-strategy adjustments (set by _apply_meta_strategy during stagnation)
+        if hasattr(self, '_forbidden_zones') and self._forbidden_zones:
+            for _ in range(3):
+                key = (params.get("lr"), params.get("hidden"), params.get("gamma"))
+                if key not in self._forbidden_zones:
+                    break
+                params = mutate_params(params, params, mutate_rate=0.5)
+
+        if hasattr(self, '_promising_zones') and self._promising_zones:
+            best = max(self._promising_zones, key=lambda x: x.get("score", 0))
+            for key in ("lr", "gamma"):
+                if key in params and key in best and best[key] is not None:
+                    params[key] = params[key] * 0.7 + best[key] * 0.3
+
+        if hasattr(self, '_mutation_aggressiveness'):
+            for key in ("lr", "gamma"):
+                if key in params and isinstance(params[key], (int, float)):
+                    factor = random.uniform(1.0 / self._mutation_aggressiveness,
+                                            self._mutation_aggressiveness)
+                    params[key] = type(params[key])(round(params[key] * factor, 6))
+
         plan = {
             "strategy": strategy,
             "cell_key": cell_key,
@@ -799,8 +872,9 @@ class AutoEvolveEngine:
         cmd_template = self.config.get("training_command",
             "python train_a2c.py --lr {lr} --hidden {hidden} --gamma {gamma} --episodes {episodes} --seed {seed}")
 
-        # Build command with parameter substitution
-        cmd = cmd_template.format(**params, **{k: v for k, v in params.items() if k not in params})
+        # Safe parameter substitution with shlex.quote to prevent shell injection
+        safe_params = {k: shlex.quote(str(v)) for k, v in params.items()}
+        cmd = cmd_template.format(**safe_params)
 
         # Handle boolean/flag params
         for name, val in params.items():
@@ -810,7 +884,7 @@ class AutoEvolveEngine:
 
         # Ensure seed is set
         if "--seed" not in cmd:
-            cmd += f" --seed {params.get('seed', 42)}"
+            cmd += f" --seed {shlex.quote(str(params.get('seed', 42)))}"
 
         _info(f"  Running: {cmd}")
 
@@ -930,14 +1004,18 @@ class AutoEvolveEngine:
             "timestamp": datetime.now().isoformat(),
         })
 
-        # Update Claim Chain
-        self._update_claim_chain(variant_id, score, params, classification, parent_id, parent_score)
+        # Update Claim Chain — returns method atom ID for island linking
+        method_atom_id = self._update_claim_chain(variant_id, score, params, classification, parent_id, parent_score)
 
         # Assign to Island
         island_id = self.island_mgr.detect_and_assign(
             variant_id, cell_key, score, dim_entries,
             method_family=params.get("method_family", "default"))
         _info(f"  Island: {island_id}")
+
+        # Link variant to its Claim Chain atom for merge detection
+        if method_atom_id:
+            self.island_mgr.set_claim_atom_id(island_id, variant_id, method_atom_id)
 
         # Update fitness tracker
         self.tracker.record(score)
@@ -949,48 +1027,44 @@ class AutoEvolveEngine:
             self.stagnation_count = max(0, self.stagnation_count - 1)
 
     def _update_claim_chain(self, variant_id: str, score: float, params: dict,
-                            classification: str, parent_id: str | None, parent_score: float | None):
-        """Write atoms and relations to Claim Chain."""
+                            classification: str, parent_id: str | None, parent_score: float | None) -> int:
+        """Write atoms and relations to Claim Chain. Returns method atom ID."""
         from claim_chain import ClaimChain
-        cc = ClaimChain(self.claim_dir)
+        cc = ClaimChain(self.workspace)
 
-        # Generate atom IDs based on existing data
         existing_atoms = cc.get_atoms(limit=500, status=None)
-        max_id = max((a["id"] for a in existing_atoms), default=0)
 
         # Create method atom
-        method_id = max_id + 1
-        cc.add_atom(
+        params_safe = {k: v for k, v in params.items() if k != "seed"}
+        method_atom = cc.add_atom(
             type="method",
-            title=f"{variant_id} - A2C variant",
-            content=f"A2C with lr={params.get('lr', 'N/A')}, hidden={params.get('hidden', 'N/A')}, "
-                    f"gamma={params.get('gamma', 'N/A')}, seed={params.get('seed', 'N/A')}",
-            tags=["a2c", "variant", f"round_{self.round}"],
+            title=f"{variant_id} - {self.task_name} variant",
+            content=f"{self.task_name} variant with {json.dumps(params_safe)}",
+            tags=["variant", self.task_name, f"round_{self.round}"],
             evidence_level="experiment",
             metadata={"variant_id": variant_id, "round": self.round},
         )
 
         # Create verification atom
-        verif_id = method_id + 1
-        cc.add_atom(
+        verif_atom = cc.add_atom(
             type="verification",
             title=f"{variant_id} score: {score:.1f}",
-            content=f"{variant_id} achieved avg_score={score:.1f} on CartPole-v1. "
-                     f"Parameters: {json.dumps({k: v for k, v in params.items() if k != 'seed'})}",
-            tags=["score", "cartpole", f"round_{self.round}"],
+            content=f"{variant_id} achieved score={score:.1f} on {self.env_name}. "
+                     f"Parameters: {json.dumps(params_safe)}",
+            tags=["score", self.task_name, f"round_{self.round}"],
             evidence_level="experiment",
             metadata={"score": score, "variant_id": variant_id, "params": params},
         )
 
-        # Create relation
+        # Create relation using actual atom IDs from return values
         if classification == "IMPROVEMENT":
-            cc.add_relation(source_id=method_id, target_id=verif_id, type="validates",
+            cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="validates",
                            evidence=f"score={score}, improvement over parent ({parent_id} score={parent_score})")
         elif classification == "REGRESSION":
-            cc.add_relation(source_id=method_id, target_id=verif_id, type="contradicts",
+            cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="contradicts",
                            evidence=f"score={score}, worse than parent ({parent_id} score={parent_score})")
         elif classification == "BASELINE":
-            cc.add_relation(source_id=method_id, target_id=verif_id, type="validates",
+            cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="validates",
                            evidence=f"baseline score={score}")
 
         # If parent exists, link to parent
@@ -999,8 +1073,10 @@ class AutoEvolveEngine:
             if parent_atoms:
                 parent_method = [a for a in parent_atoms if a["type"] == "method"]
                 if parent_method:
-                    cc.add_relation(source_id=parent_method[0]["id"], target_id=method_id,
+                    cc.add_relation(source_id=parent_method[0]["id"], target_id=method_atom["id"],
                                    type="derives", evidence=f"Mutation: {variant_id} derived from {parent_id}")
+
+        return method_atom["id"]
 
     def _apply_meta_strategy(self):
         """Apply meta-strategy when stagnation is detected.
@@ -1127,24 +1203,22 @@ class AutoEvolveEngine:
     def _write_rubric_to_cc(self, variant_a: dict, variant_b: dict, evaluation: dict):
         """Write rubric comparison results to Claim Chain as fact atom + compares_to relation."""
         from claim_chain import ClaimChain
-        cc = ClaimChain(self.claim_dir)
+        cc = ClaimChain(self.workspace)
         existing = cc.get_atoms(limit=500, status=None)
-        max_id = max((a["id"] for a in existing), default=0)
 
         dim_summary = ", ".join(
             f"{dim}: A={s['a']:.1f} B={s['b']:.1f}"
             for dim, s in evaluation["dimension_scores"].items()
         )
 
-        # Find or get method atoms for both variants
+        # Find method atoms for both variants
         atoms_a = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_a["id"]]
         atoms_b = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_b["id"]]
         method_a = next((a for a in atoms_a if a["type"] == "method"), None)
         method_b = next((a for a in atoms_b if a["type"] == "method"), None)
 
-        # Create comparison fact atom
-        fact_id = max_id + 1
-        cc.add_atom(
+        # Create comparison fact atom — capture return value for correct ID
+        fact_atom = cc.add_atom(
             type="fact",
             title=f"Rubric: {variant_a['id']} vs {variant_b['id']}",
             content=f"Multi-dimensional comparison: similarity={evaluation['similarity']:.1%}. "
@@ -1155,7 +1229,7 @@ class AutoEvolveEngine:
                       "evaluation": evaluation},
         )
 
-        # Create compares_to relations
+        # Create compares_to relations using actual atom IDs
         if method_a and method_b:
             cc.add_relation(source_id=method_a["id"], target_id=method_b["id"],
                            type="compares_to",
@@ -1240,12 +1314,12 @@ class AutoEvolveEngine:
                 _info(f"  [Migration] Check 2 FAILED: score {current_score:.1f} < floor {floor:.1f}")
                 continue
 
-            # Check 3: Significant improvement
-            current_island_scores = [v.get("score", 0) for v in current_island.get("variants", []) if v.get("score")]
-            current_avg = sum(current_island_scores) / max(len(current_island_scores), 1)
-            if current_score < current_avg * 1.1:
-                _info(f"  [Migration] Check 3 FAILED: score {current_score:.1f} not significantly above "
-                      f"current island avg {current_avg:.1f}")
+            # Check 3: Migrant must improve upon target island's average
+            target_island_scores = [v.get("score", 0) for v in target_variants if v.get("score")]
+            target_avg = sum(target_island_scores) / max(len(target_island_scores), 1)
+            if current_score <= target_avg:
+                _info(f"  [Migration] Check 3 FAILED: score {current_score:.1f} not above "
+                      f"target island avg {target_avg:.1f}")
                 continue
 
             # All checks passed
@@ -1255,9 +1329,7 @@ class AutoEvolveEngine:
 
             # Write migration to Claim Chain
             from claim_chain import ClaimChain
-            cc = ClaimChain(self.claim_dir)
-            existing = cc.get_atoms(limit=500, status=None)
-            max_id = max((a["id"] for a in existing), default=0)
+            cc = ClaimChain(self.workspace)
             cc.add_atom(
                 type="fact",
                 title=f"Migration: {variant_id} → {target_island['id']}",
@@ -1425,6 +1497,15 @@ if __name__ == "__main__":
     gate_p = sub.add_parser("performance-gate", help="Check performance gate")
     gate_p.add_argument("--workspace", required=True)
 
+    # init-config
+    init_p = sub.add_parser("init-config", help="Generate evolve_config.json from workspace")
+    init_p.add_argument("--workspace", required=True, help="Workspace directory")
+    init_p.add_argument("--plan", default=None, help="Path to plan.md (optional)")
+    init_p.add_argument("--training-command", default=None,
+                        help="Training command template with {lr}, {hidden}, etc.")
+    init_p.add_argument("--success-threshold", type=float, default=195.0,
+                        help="Target score to stop evolution")
+
     # detect-islands
     island_p = sub.add_parser("detect-islands", help="Detect/create islands from results")
     island_p.add_argument("--workspace", required=True)
@@ -1504,6 +1585,58 @@ if __name__ == "__main__":
     elif args.command == "performance-gate":
         result = check_performance_gate(Path(args.workspace))
         print(json.dumps(result, indent=2))
+
+    elif args.command == "init-config":
+        workspace = Path(args.workspace)
+        archive_dir = workspace / "evolve_archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        config_path = archive_dir / "evolve_config.json"
+
+        if config_path.exists():
+            print(f"Config already exists: {config_path}")
+            print(json.dumps(json.loads(config_path.read_text()), indent=2))
+        else:
+            # Detect training script from workspace
+            training_cmd = args.training_command
+            if not training_cmd:
+                # Auto-detect common patterns
+                for candidate in ["train.py", "train_a2c.py", "train_ppo.py", "run.py"]:
+                    if (workspace / candidate).exists():
+                        training_cmd = f"python {candidate} --lr {{lr}} --hidden {{hidden}} --gamma {{gamma}} --episodes {{episodes}} --seed {{seed}}"
+                        break
+                if not training_cmd:
+                    training_cmd = "python train.py --lr {lr} --hidden {hidden} --gamma {gamma} --episodes {episodes} --seed {seed}"
+
+            config = {
+                "behavior_dims": [
+                    {"name": "lr_level", "values": ["high", "medium", "low"]},
+                    {"name": "network_size", "values": ["small", "medium", "large"]},
+                ],
+                "dim_names": ["lr_level", "network_size"],
+                "param_mapping": {
+                    "lr_level": {
+                        "high": {"lr": 0.01},
+                        "medium": {"lr": 0.003},
+                        "low": {"lr": 0.001},
+                    },
+                    "network_size": {
+                        "small": {"hidden": 8},
+                        "medium": {"hidden": 32},
+                        "large": {"hidden": 64},
+                    },
+                },
+                "training_command": training_cmd,
+                "max_rounds": 20,
+                "exploit_ratio": 0.7,
+                "stagnation_window": 5,
+                "stagnation_threshold": 0.01,
+                "success_threshold": args.success_threshold,
+                "archive_dir": "evolve_archive",
+            }
+
+            config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False))
+            print(f"Created config: {config_path}")
+            print(json.dumps(config, indent=2))
 
     elif args.command == "detect-islands":
         workspace = Path(args.workspace)
