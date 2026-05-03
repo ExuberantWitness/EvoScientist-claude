@@ -285,6 +285,50 @@ evolve_archive/islands/
 - **Evidence hierarchy**: experiment > literature > LLM_analysis.
 - **Cap variants**: Stop after MAX_VARIANTS_PER_SESSION to prevent runaway sessions.
 
+## Auto Mode (Autonomous PES Loop)
+
+Use `--auto` to run fully autonomous evolution without manual plan approval or result entry:
+
+```bash
+# Dry-run first to see what would happen
+python tools/evo_auto_evolve.py dry-run \
+  --config evolve_archive/evolve_config.json \
+  --workspace /tmp/evo_cartpole \
+  --max-rounds 5
+
+# Run autonomous evolution
+python tools/evo_auto_evolve.py run \
+  --config evolve_archive/evolve_config.json \
+  --workspace /tmp/evo_cartpole \
+  --max-rounds 20 \
+  --exploit-ratio 0.7 \
+  --stagnation-window 5
+```
+
+The auto engine:
+- Samples from MAP-Elites grid (exploit 70% / explore 30%)
+- Maps cell coordinates to hyperparameters via `param_mapping`
+- Mutates parameters with random perturbation
+- Runs the training command
+- Parses JSON results
+- Updates grid archive and Claim Chain (atoms + relations)
+- Manages Islands (auto-create, detect merge candidates)
+- Tracks fitness and detects stagnation
+- Applies meta-strategy when stalled
+- Stops when success threshold met or max rounds reached
+
+**Performance Gate:**
+```bash
+python tools/evo_auto_evolve.py performance-gate --workspace [workspace]
+```
+Blocks Phase 5 entry if results are too poor (< 20% of target → back to W2).
+
+**Island Detection:**
+```bash
+python tools/evo_auto_evolve.py detect-islands --workspace [workspace]
+```
+Scans variant history and Claim Chain, creates islands, proposes merges.
+
 ## Composing with Other Skills
 
 ```
@@ -292,4 +336,16 @@ evolve_archive/islands/
                                                 ↓
 /evo-analyze ← invoked within Step 3 for detailed metrics
 /evo-iterate ← triggered at end if criteria not met
+```
+
+### Pipeline Integration
+
+```
+/evo-pipeline (Phase 4) → EVOLVE_MODE=explore
+  └→ /evo-evolve --auto
+       └→ evo_auto_evolve.py run (autonomous PES loop)
+            ├→ Sample → Config → Train → Parse → Grid+Claims → Island
+            ├→ Check stagnation → meta-strategy
+            ├→ Check success threshold → stop
+            └→ Finalize → best_variants.json
 ```

@@ -390,6 +390,32 @@ For each stage in `plan.md` (in dependency order):
 - AskUserQuestion: "实现完成，切回多 agent 系统继续分析？"
 - If user confirms → advance to Phase 5
 
+**Performance Gate (CRITICAL — before Phase 5):**
+
+Before proceeding to Phase 5 (Analysis), check whether results are good enough to warrant analysis:
+
+```bash
+python tools/evo_auto_evolve.py performance-gate --workspace [workspace]
+```
+
+This outputs a JSON with `pass`, `ratio` (actual_score/target), and `recommendation`:
+
+| ratio | recommendation | action |
+|-------|---------------|--------|
+| >= 1.0 | `proceed_to_phase5` | Go to Phase 5 |
+| 0.8-1.0 | `iterate_w4` | Re-implement with adjusted params via `/evo-code` |
+| 0.5-0.8 | `iterate_w3_5` | Method change needed → go back to Phase 3.5 ideation |
+| 0.2-0.5 | `iterate_w3` | Research better methods → go back to Phase 3 |
+| < 0.2 | `iterate_w2` | Re-plan from scratch → go back to Phase 2 |
+
+**If gate does NOT pass:**
+- Write the `loop_target` to `experiment_log.md`
+- Auto-return to the recommended phase (W2/W3/W3.5/W4)
+- Do NOT proceed to Phase 5 — analysing terrible results wastes compute
+
+**If gate passes:**
+- Proceed to Phase 5
+
 Update state: `"phase": 4, "current_stage": N`
 
 ### Phase 5 (W5): Analysis
