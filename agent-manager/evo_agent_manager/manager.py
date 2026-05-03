@@ -23,6 +23,8 @@ class AgentSession:
     thread_id: str
     workspace_dir: str
     created_at: str
+    model: str = ""       # LLM model name (preserved across recovery)
+    provider: str = ""    # LLM provider (preserved across recovery)
     status: str = "idle"  # idle / running / waiting_approval / error
     events: list[dict] = field(default_factory=list)
     last_response: str = ""
@@ -152,6 +154,8 @@ class AgentManager:
                 "workspace_dir": session.workspace_dir,
                 "thread_id": session.thread_id,
                 "created_at": session.created_at,
+                "model": session.model,
+                "provider": session.provider,
                 "status": session.status,
                 "sub_agents_used": session.sub_agents_used,
                 "thread_count": session.thread_count,
@@ -212,6 +216,8 @@ class AgentManager:
                         thread_id=data.get("thread_id", sid),
                         workspace_dir=data["workspace_dir"],
                         created_at=data["created_at"],
+                        model=data.get("model", ""),
+                        provider=data.get("provider", ""),
                         status="recovered",
                         sub_agents_used=data.get("sub_agents_used", []),
                         thread_count=data.get("thread_count", 0),
@@ -236,11 +242,11 @@ class AgentManager:
         session.agent = create_agent(
             workspace_dir=session.workspace_dir,
             base_dir=self.base_dir,
-            model=None,
-            provider=None,
+            model=session.model or None,
+            provider=session.provider or None,
             checkpointer=checkpointer,
         )
-        logger.info(f"Agent rebuilt for recovered session {session.session_id}")
+        logger.info(f"Agent rebuilt for recovered session {session.session_id} (model={session.model or 'default'}, provider={session.provider or 'default'})")
 
     async def create_session(
         self,
@@ -271,6 +277,8 @@ class AgentManager:
             thread_id=session_id,
             workspace_dir=workspace_dir,
             created_at=now_iso(),
+            model=model or "",
+            provider=provider or "",
         )
         self.sessions[session_id] = session
         self._save_session_meta(session)

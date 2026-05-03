@@ -43,7 +43,7 @@ W6: Write → W7: Review (optional) → W8: Memory
 - **CODE_MODE = "lite"** — Code generation mode: `lite` or `effort`
 - **REVIEWER = "llm-review"** — MCP for review: `llm-review`, `gemini-review`, or `none`
 - **STATE_FILE = "PIPELINE_STATE.json"** — Pipeline state for recovery
-- **EVOLVE_MODE = "single"** — Experiment mode: `single` (one experiment via /evo-code) or `explore` (multi-variant via /evo-evolve)
+- **EVOLVE_MODE = "ask"** — Experiment mode: `ask` (user chooses), `single` (one experiment via /evo-code), or `explore` (multi-variant via /evo-evolve)
 
 ### Multi-Agent Constants (NEW)
 
@@ -262,6 +262,24 @@ Extract key research topics from `plan.md`.
 **Multi-Agent Mode** (if "research" in MULTI_AGENT_STAGES and session_id exists):
 
 **Phase 3a — 多 Agent 讨论（先）**:
+
+**Claim Chain Context (MUST read before discussion — prevents shallow advice like "increase seeds"):**
+```bash
+python tools/claim_chain.py list-atoms --type method --limit 30
+python tools/claim_chain.py list-atoms --type verification --limit 20
+python tools/claim_chain.py list-relations --type validates --limit 20
+python tools/claim_chain.py list-relations --type contradicts --limit 20
+python tools/claim_chain.py list-relations --type boundary_of --limit 10
+```
+Append to discussion topic:
+"Claim Chain priors from prior experiment cycles:
+- Validated methods (validates relations): [summarize]
+- Contradicted methods (contradicts relations): [summarize]
+- Known parameter boundaries (boundary_of relations): [summarize]
+- Historical best scores (verification atoms): [summarize]
+
+Ground your research directions in these priors. DO NOT re-propose approaches that have been contradicted. Build on approaches that have been validated."
+
 - Use `mcp__evo-agents__evo_discuss` with:
   - `session_id`: from pipeline state
   - `topic`: "文献调研与研究方向分析：[research topics from plan.md]。请 research-agent 使用 paper-navigator skill 检索相关论文（通过 execute 工具执行 scripts/），planner-agent 评估方法与研究问题的适配性，analyst 识别文献中的空缺和机会。"
@@ -299,6 +317,21 @@ Uses **Idea Tree Search**: K parallel directions → branch variants → Elo tou
 **Multi-Agent Mode** (if "ideation" in MULTI_AGENT_STAGES and session_id exists):
 
 **Phase 3.5a — 多 Agent 构思（先）**:
+
+**Claim Chain Context (MUST read before generating ideas):**
+```bash
+python tools/claim_chain.py list-atoms --type method --limit 30
+python tools/claim_chain.py list-relations --type validates --limit 20
+python tools/claim_chain.py list-relations --type contradicts --limit 20
+python tools/claim_chain.py list-relations --type boundary_of --limit 10
+```
+Append to discussion topic:
+"Claim Chain priors from prior experiment cycles:
+- Validated: [list] - DO build on these
+- Contradicted: [list] - DO NOT re-propose these
+- Boundaries: [list] - stay within known limits
+Rate each proposed idea against Claim Chain evidence: does it avoid contradictions? does it extend validations? Cite specific atoms/relations."
+
 - Use `mcp__evo-agents__evo_discuss` with:
   - `topic`: "基于文献调研的 gaps 和 challenge-insight tree，生成 3-5 个研究方向。每个方向需包含：问题陈述、核心假设、预期贡献、所需资源。参考文献中的具体论文。"
   - `agents`: ["planner", "researcher", "analyst"]
@@ -363,9 +396,10 @@ if EVOLVE_MODE == "explore":
     → After evolution completes, run Performance Gate below
     → Do NOT fall through to single-experiment flow
 elif EVOLVE_MODE == "single":
+    → Proceed directly with single-experiment flow (/evo-code)
+    → Skip AskUserQuestion
+else:  # "ask" (new default) or other — user chooses
     → Show AskUserQuestion mode selection (see below)
-else:
-    → Show AskUserQuestion mode selection (default behavior)
 ```
 
 **AskUserQuestion (only if EVOLVE_MODE != "explore"):**
@@ -393,12 +427,22 @@ If user selects `/evo-evolve` → set EVOLVE_MODE="explore" and follow explore f
 # Ensure workspace has evolve_archive/ structure
 mkdir -p [workspace]/evolve_archive/{variants,results,islands}
 
-# If evolve_config.json doesn't exist, create it from plan.md parameters
+# If evolve_config.json doesn't exist, create it with evolve_grid.py init
 if [ ! -f [workspace]/evolve_archive/evolve_config.json ]; then
-    # Generate config based on plan.md hyperparameter ranges
-    python tools/evo_auto_evolve.py init-config \
-        --workspace [workspace] \
-        --plan [workspace]/plan.md
+    # Define behavior descriptor dimensions and task config
+    python tools/evolve_grid.py init --config '{
+      "behavior_dims": [
+        {"name": "method_family", "values": ["baseline", "ppo_variant", "sac_variant"]},
+        {"name": "complexity_level", "values": ["minimal", "medium", "full"]}
+      ],
+      "task": {
+        "name": "[extract task name from plan.md]",
+        "env": "[extract env name from plan.md]",
+        "max_score": [extract target score from success_criteria.md],
+        "solve_threshold": [extract solve threshold from success_criteria.md]
+      },
+      "training_command": "[extract training command from plan.md]"
+    }'
 fi
 ```
 
@@ -498,9 +542,28 @@ Update state: `"phase": 4, "current_stage": N`
 ### Phase 5 (W5): Analysis
 
 **Multi-Agent Mode** (if "analyze" in MULTI_AGENT_STAGES and session_id exists):
+
+**Claim Chain Context (MUST read before analysis — for historically-grounded comparison):**
+```bash
+python tools/claim_chain.py list-atoms --type verification --limit 30
+python tools/claim_chain.py list-relations --type validates --limit 20
+python tools/claim_chain.py list-relations --type contradicts --limit 20
+python tools/claim_chain.py list-relations --type compares_to --limit 20
+python tools/claim_chain.py list-relations --type boundary_of --limit 10
+```
+Append to discussion topic:
+"Claim Chain historical context:
+- Prior best scores (verification atoms): [list with scores]
+- Validated approaches (validates relations): [list]
+- Contradicted approaches (contradicts relations): [DO NOT recommend these]
+- Known boundaries (boundary_of relations): [list]
+- Prior comparisons (compares_to relations): [list]
+
+Compare current results against these historical records. Identify whether the new result represents a breakthrough (exceeds best known), replicates prior findings, or is a regression. Justify all comparisons with specific Claim Chain evidence."
+
 - Use `mcp__evo-agents__evo_discuss` with:
   - `session_id`: from pipeline state
-  - `topic`: "Analyze experiment results from artifacts/. Compute metrics, identify patterns, assess statistical significance, compare with baselines. Results files: [list artifact files]"
+  - `topic`: "Analyze experiment results from artifacts/. Compute metrics, identify patterns, assess statistical significance, compare with baselines AND Claim Chain historical records above. Results files: [list artifact files]"
   - `agents`: ["analyst", "planner", "researcher"]
 - The analyst leads statistical analysis and visualization
 - The planner evaluates against success criteria

@@ -15,6 +15,7 @@ from deepagents.backends.protocol import (
     EditResult,
     FileDownloadResponse,
     FileUploadResponse,
+    GlobResult,
     WriteResult,
 )
 
@@ -180,6 +181,27 @@ class UnrestrictedBackend:
             rel = str(p).lstrip("/")
             return Path(self.root_dir) / rel
         return Path(self.root_dir) / p
+
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Find files matching a glob pattern, required by CompositeBackend.
+
+        Uses pathlib.Path.glob() under the hood.
+        """
+        try:
+            base = self._resolve_path(path)
+            if not base.exists():
+                return GlobResult(error=f"Path not found: {path}", matches=None)
+            results = []
+            for matched in base.glob(pattern):
+                rel = str(matched.relative_to(self.root_dir))
+                results.append({"path": f"/{rel}", "is_dir": matched.is_dir()})
+            return GlobResult(error=None, matches=results)
+        except Exception as e:
+            return GlobResult(error=str(e), matches=None)
+
+    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Async version of glob."""
+        return await asyncio.to_thread(self.glob, pattern, path)
 
     # -- filesystem operations required by deepagents middleware --
 
