@@ -754,7 +754,8 @@ async function restartDashboard() {
   try {
     await fetch('/api/restart', {method: 'POST'});
   } catch(e) {}
-  // Poll until dashboard comes back
+  // Wait 5s for restart script to kill old process, then poll
+  await new Promise(r => setTimeout(r, 5000));
   let attempts = 0;
   const poll = setInterval(async () => {
     attempts++;
@@ -769,7 +770,7 @@ async function restartDashboard() {
         loadSessions();
       }
     } catch(e) {}
-    if (attempts > 30) {
+    if (attempts > 40) {
       clearInterval(poll);
       btn.textContent = 'Timeout';
       btn.style.background = 'rgba(248,81,73,0.15)';

@@ -222,58 +222,15 @@ async def evolve_grid_api(request):
 
 
 async def restart_api(request):
-    """POST endpoint to restart the dashboard process.
-
-    Spawns a helper script that: waits for response to flush,
-    kills all processes on port 8420, waits for port to free,
-    then launches a fresh standalone dashboard.
-    """
+    """POST endpoint to restart the dashboard process."""
     import subprocess
 
-    launcher = Path(__file__).parent.parent / "start_dashboard_standalone.py"
-    port = 8420
-
-    restart_script = f'''
-import subprocess, time, sys, socket
-
-port = {port}
-launcher = r"{launcher}"
-
-# 1. Wait for HTTP response to flush
-time.sleep(1.5)
-
-# 2. Kill only Python processes listening on port 8420
-try:
-    result = subprocess.run(
-        ["bash", "-c", "lsof -ti :{port} | xargs -I{{}} sh -c 'ps -o comm= -p {{}} | grep -q python && kill {{}}'"],
-        capture_output=True, text=True, timeout=5)
-except Exception:
-    pass
-
-# 3. Wait for port to be free
-for _ in range(20):
-    time.sleep(0.5)
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(1)
-            s.bind(("0.0.0.0", port))
-            break
-    except OSError:
-        continue
-
-# 4. Launch new dashboard
-subprocess.Popen(
-    [sys.executable, launcher],
-    cwd=launcher.rsplit("/", 1)[0],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-    start_new_session=True,
-)
-'''
+    helper = Path(__file__).parent.parent / "restart_dashboard.py"
+    python_bin = sys.executable
 
     try:
         subprocess.Popen(
-            [sys.executable, "-c", restart_script],
+            [python_bin, str(helper)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -282,7 +239,7 @@ subprocess.Popen(
         logger.error(f"Failed to schedule restart: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
-    return JSONResponse({"status": "restarting", "message": "Dashboard restarting in ~3 seconds..."})
+    return JSONResponse({"status": "restarting", "message": "Dashboard restarting in ~4 seconds..."})
 
 
 async def sse_events(request):

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pes-controller": {
+      "type": "stdio",
+      "command": "/home/exuber/anaconda3/bin/python",
+      "args": [
+        "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude/tools/pes_controller.py"
+      ],
+      "env": {}
+    }
+  }
+}
