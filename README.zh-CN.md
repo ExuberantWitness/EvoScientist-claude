@@ -475,6 +475,9 @@ channel_enabled: "telegram,slack,feishu,qq"
 
 感谢以上项目作者对开源社区的宝贵贡献。
 
+**算力支持：**
+- [Xiaomi MiMo Orbit](https://100t.xiaomimimo.com/) — 感谢小米 MiMo 百万亿 Token 创造者激励计划提供的算力支持
+
 <p align="right"><a href="#top">🔝回到顶部</a></p>
 
 ## 🎯 ᯓ➤ 路线图

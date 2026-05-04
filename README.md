@@ -448,6 +448,9 @@ EvoScientist-claude/
 - [DeepAgents](https://github.com/deepagents/deepagents) — Agent 创建工具
 - [MCP](https://modelcontextprotocol.io/) — Model Context Protocol
 
+**算力支持：**
+- [Xiaomi MiMo Orbit](https://100t.xiaomimimo.com/) — 感谢小米 MiMo 百万亿 Token 创造者激励计划提供的算力支持
+
 ---
 
 ## 📖 Citation
