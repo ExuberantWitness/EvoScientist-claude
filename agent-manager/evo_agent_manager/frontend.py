@@ -108,6 +108,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <a id="navGraph" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Claim Chain</a>
     <a id="navGrid" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Evolve Grid</a>
     <span id="statusBadge" style="padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface)">idle</span>
+    <button class="btn" id="btnRestart" onclick="restartDashboard()" title="Restart dashboard service">Restart</button>
   </div>
 </div>
 <div class="main">
@@ -742,6 +743,41 @@ async function pollMemory(sessionId, file) {
 // Auto-refresh
 setInterval(() => { loadSessions(); if (currentSession) { pollPipeline(currentSession); pollMemory(currentSession, document.querySelector('.memory-tab.active')?.dataset.file || 'MEMORY.md'); } }, 5000);
 loadSessions();
+
+// Restart dashboard
+async function restartDashboard() {
+  const btn = $('#btnRestart');
+  btn.textContent = 'Restarting...';
+  btn.disabled = true;
+  btn.style.background = 'rgba(210,153,34,0.2)';
+  btn.style.color = 'var(--yellow)';
+  try {
+    await fetch('/api/restart', {method: 'POST'});
+  } catch(e) {}
+  // Poll until dashboard comes back
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    try {
+      const resp = await fetch('/api/sessions');
+      if (resp.ok) {
+        clearInterval(poll);
+        btn.textContent = 'Restart';
+        btn.disabled = false;
+        btn.style.background = '';
+        btn.style.color = '';
+        loadSessions();
+      }
+    } catch(e) {}
+    if (attempts > 30) {
+      clearInterval(poll);
+      btn.textContent = 'Timeout';
+      btn.style.background = 'rgba(248,81,73,0.15)';
+      btn.style.color = 'var(--red)';
+      setTimeout(() => { btn.textContent = 'Restart'; btn.disabled = false; btn.style.background = ''; btn.style.color = ''; }, 5000);
+    }
+  }, 1000);
+}
 </script>
 </body>
 </html>

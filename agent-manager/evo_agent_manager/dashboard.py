@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import os
+import sys
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -217,6 +219,70 @@ async def evolve_grid_api(request):
             key=lambda x: x["elite_score"], reverse=True,
         ),
     })
+
+
+async def restart_api(request):
+    """POST endpoint to restart the dashboard process.
+
+    Spawns a helper script that: waits for response to flush,
+    kills all processes on port 8420, waits for port to free,
+    then launches a fresh standalone dashboard.
+    """
+    import subprocess
+
+    launcher = Path(__file__).parent.parent / "start_dashboard_standalone.py"
+    port = 8420
+
+    restart_script = f'''
+import subprocess, time, sys, socket
+
+port = {port}
+launcher = r"{launcher}"
+
+# 1. Wait for HTTP response to flush
+time.sleep(1.5)
+
+# 2. Kill only Python processes listening on port 8420
+try:
+    result = subprocess.run(
+        ["bash", "-c", "lsof -ti :{port} | xargs -I{{}} sh -c 'ps -o comm= -p {{}} | grep -q python && kill {{}}'"],
+        capture_output=True, text=True, timeout=5)
+except Exception:
+    pass
+
+# 3. Wait for port to be free
+for _ in range(20):
+    time.sleep(0.5)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.bind(("0.0.0.0", port))
+            break
+    except OSError:
+        continue
+
+# 4. Launch new dashboard
+subprocess.Popen(
+    [sys.executable, launcher],
+    cwd=launcher.rsplit("/", 1)[0],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    start_new_session=True,
+)
+'''
+
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", restart_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        logger.error(f"Failed to schedule restart: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    return JSONResponse({"status": "restarting", "message": "Dashboard restarting in ~3 seconds..."})
 
 
 async def sse_events(request):
@@ -541,6 +607,7 @@ def create_dashboard_app() -> Starlette:
             Route("/api/sessions/{session_id}/evolve-grid", evolve_grid_api),
             Route("/sessions/{session_id}/graph", claim_chain_graph_page),
             Route("/sessions/{session_id}/grid", evolve_grid_page),
+            Route("/api/restart", restart_api, methods=["POST"]),
         ],
     )
 
