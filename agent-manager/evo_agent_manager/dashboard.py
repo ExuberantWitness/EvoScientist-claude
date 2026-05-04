@@ -56,6 +56,7 @@ async def list_sessions_api(request):
     mgr = _mgr()
     if not mgr:
         return JSONResponse({"error": "manager not initialized"})
+    mgr.refresh_sessions()
     return JSONResponse(mgr.list_sessions())
 
 

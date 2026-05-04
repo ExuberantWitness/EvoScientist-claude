@@ -627,6 +627,10 @@ class AgentManager:
         """Read current pipeline control state."""
         return self.get_pipeline_state(session_id)
 
+    def refresh_sessions(self):
+        """Re-scan disk for new sessions (called before list_sessions)."""
+        self._load_sessions_from_disk()
+
     def list_sessions(self) -> list[dict]:
         """List all active sessions."""
         return [
