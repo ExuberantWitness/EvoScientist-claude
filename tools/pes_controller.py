@@ -52,27 +52,24 @@ TRANSITIONS = {
 }
 
 # Execution chain steps per phase
+# run_step_pipeline: Python internal CLI→Indexing→Decomposer→Recomposer→Evaluator
 CHAIN_STEPS = {
     PHASE_PLAN: [
-        "step_cli", "step_indexing", "step_decomposer", "step_recomposer", "step_evaluator",
-        "multi_agent_discuss", "elo_tournament", "evolution_memory",
+        "run_step_pipeline", "multi_agent_discuss", "elo_tournament", "evolution_memory",
     ],
     PHASE_RESEARCH: [
-        "step_cli", "step_indexing", "step_decomposer", "step_recomposer", "step_evaluator",
-        "multi_agent_discuss", "elo_tournament", "evolution_memory",
+        "run_step_pipeline", "multi_agent_discuss", "elo_tournament", "evolution_memory",
         "invoke_skill_research", "write_claim_chain",
     ],
     PHASE_ELO: [
-        "step_cli", "step_indexing", "step_decomposer", "step_recomposer", "step_evaluator",
-        "multi_agent_discuss", "elo_tournament", "evolution_memory",
+        "run_step_pipeline", "multi_agent_discuss", "elo_tournament", "evolution_memory",
     ],
     PHASE_EXECUTE: [
         "invoke_skill_code", "wait_external",
     ],
     PHASE_ANALYZE: [
-        "step_cli", "step_indexing", "step_decomposer", "step_recomposer", "step_evaluator",
-        "scan_islands_rubrics", "multi_agent_discuss", "evolution_memory",
-        "write_claim_chain", "island_assign",
+        "run_step_pipeline", "scan_islands_rubrics", "multi_agent_discuss",
+        "evolution_memory", "write_claim_chain", "island_assign",
     ],
 }
 
@@ -148,10 +145,19 @@ class PESController:
             "session_id": None,
             "research_topic": research_topic,
             "config": {},
+            "needs_session": True,
+            "needs_intake": True,
         }
         self._write_state(state)
 
-        return {"workspace_ready": True, "phase": PHASE_PLAN, "iteration": 0}
+        return {
+            "workspace_ready": True,
+            "phase": PHASE_PLAN,
+            "iteration": 0,
+            "needs_session": True,
+            "needs_intake": True,
+            "message": "工作空间已初始化。下一步：1) 调 /evo-intake 2) 调 evo_create_session 创建 agent session",
+        }
 
     # ═══════════════════════════════════════════════════════════════
     # MCP Tool: resume
@@ -327,21 +333,72 @@ class PESController:
         """根据步骤名构造返回的 action JSON。"""
         agents = AGENT_ROLES.get(phase, ["planner", "researcher", "analyst"])
 
-        if step_name in ("step_cli", "step_indexing", "step_decomposer",
-                         "step_recomposer", "step_evaluator"):
+        if step_name == "run_step_pipeline":
+            # Execute 5 STEP pipeline internally: CLI → Indexing → Decomposer → Recomposer → Evaluator
+            primary_agent = agents[0] if agents else "planner"
+            cli_result = self.step_cli("summary")
+            indexing_result = self.step_indexing(phase, primary_agent)
+            decomposer_result = self.step_decomposer()
+            recomposer_result = self.step_recomposer(decomposer_result, phase)
+            evaluator_results = []
+            for proposal in recomposer_result:
+                evaluator_results.append(self.step_evaluator(proposal))
+
+            context_bundle = {
+                "cli_summary": cli_result,
+                "indexing": indexing_result,
+                "primitives": decomposer_result.get("primitives", []),
+                "relation_patterns": decomposer_result.get("relation_patterns", {}),
+                "violable_boundaries": decomposer_result.get("violable_boundaries", []),
+                "proposals": recomposer_result,
+                "evaluation": evaluator_results,
+            }
+
+            # Persist context for subsequent evo_discuss step
+            state["last_pipeline_context"] = context_bundle
+            self._write_state(state)
+
             return {
                 "done": False,
                 "phase": phase,
-                "step": step_name,
+                "step": "run_step_pipeline",
                 "step_index": state.get("sub_loop_step", 0) - 1,
-                "action": "invoke_skill",
-                "skill": "/evo-ideation",
-                "argument": f"[{phase}] {step_name}: 单Agent独立执行。Agent角色: {agents}。"
-                           f"通过 STEP_CLI 自行检索 Claim Chain + Cell Grid。",
-                "context": f"Phase: {phase}, Step: {step_name}, Agents: {agents}",
+                "action": "pipeline_context",
+                "context_bundle": context_bundle,
+                "agent_roles": agents,
+                "instruction": (
+                    f"[{phase}] STEP 管线分析完成。"
+                    f"将 context_bundle 传给 evo_discuss，让每个 agent 独立推理：\n"
+                    f"1. 结构映射：跨领域关系同构搜索\n"
+                    f"2. 反事实嫁接：故意违反边界条件制造认知冲突\n"
+                    f"3. 方案重组：基于嫁接材料构建新方案\n"
+                    f"4. 三公理评估：自识别 + 复述不变性 + 累积性"
+                ),
             }
 
         elif step_name == "multi_agent_discuss":
+            ctx = state.get("last_pipeline_context", {})
+            topic_parts = [
+                f"[{phase}] 多Agent汇总讨论。研究问题: {state.get('research_topic', '')}",
+                "",
+                "## STEP 管线分析结果",
+                "",
+                "### 索引概要",
+                json.dumps(ctx.get("indexing", {}), ensure_ascii=False, indent=2)[:2000],
+                "",
+                "### 概念基元",
+                json.dumps(ctx.get("primitives", [])[:10], ensure_ascii=False, indent=2)[:1500],
+                "",
+                "### 可违反边界条件",
+                json.dumps(ctx.get("violable_boundaries", [])[:5], ensure_ascii=False, indent=2)[:1000],
+                "",
+                "## 任务",
+                "每个 Agent 从自己的视角独立推理：",
+                "1. 搜索跨领域关系同构（结构映射）",
+                "2. 违反边界条件制造认知冲突（反事实嫁接）",
+                "3. 基于嫁接材料构建 2-3 个新方案",
+                "4. 产出格式: {title, hypothesis, method_sketch}",
+            ]
             return {
                 "done": False,
                 "phase": phase,
@@ -349,7 +406,7 @@ class PESController:
                 "step_index": state.get("sub_loop_step", 0) - 1,
                 "action": "multi_agent",
                 "tool": "evo_discuss",
-                "topic": f"[{phase}] 多Agent汇总讨论。各Agent分享独立管线产出，从不同视角讨论。",
+                "topic": "\n".join(topic_parts),
                 "agents": agents,
                 "exclude_agents": ["code-agent", "debug-agent"],
             }
@@ -454,30 +511,58 @@ class PESController:
     # ═══════════════════════════════════════════════════════════════
 
     def post_loop(self, satisfied: bool, chosen_next_phase: str = "",
-                  notes: str = "") -> dict:
-        """提交阶段结果 + 用户确认。"""
+                  notes: str = "", cc_atoms: list[dict] | None = None,
+                  experiment_results: list[dict] | None = None) -> dict:
+        """提交阶段结果 + 用户确认。按规则写入CC/Cell Grid/Evolution Memory/Island。"""
         state = self._read_state()
         phase = state["phase"]
 
         if not satisfied:
-            # 状态不变，回到同一阶段
             state["sub_loop_step"] = 0
             self._write_state(state)
             return {"advanced": False, "next_phase": phase,
                     "message": "用户不满意，回到同一阶段重新执行。"}
 
-        # 用户满意 → 写入 (按规则)
+        # 用户满意 → 实际写入
         events = []
 
-        if phase == PHASE_RESEARCH:
-            # 写入 CC: 真实文献原子
-            events.append("claim_chain_updated: literature atoms from real papers")
+        if phase == PHASE_RESEARCH and cc_atoms:
+            # 写入 CC: 真实文献原子（仅来自真实论文，非 LLM 推测）
+            for atom_data in cc_atoms:
+                atom_type = atom_data.get("type", "fact")
+                title = atom_data.get("title", "")
+                content = atom_data.get("content", "")
+                tags = atom_data.get("tags", [])
+                self.cc.add_atom(type=atom_type, title=title, content=content, tags=tags)
+            cc_summary = self.cc.get_graph_summary()
+            events.append(f"claim_chain_updated: {len(cc_atoms)} literature atoms written, total: {cc_summary.get('atom_count', 0)}")
 
         elif phase == PHASE_ANALYZE:
             # 写入 CC: 真实实验结果
-            events.append("claim_chain_updated: verification atoms from real experiments")
-            # Island 分配
-            events.append("island_assigned")
+            if cc_atoms:
+                for atom_data in cc_atoms:
+                    self.cc.add_atom(
+                        type=atom_data.get("type", "verification"),
+                        title=atom_data.get("title", ""),
+                        content=atom_data.get("content", ""),
+                        tags=atom_data.get("tags", []),
+                    )
+                events.append(f"claim_chain_updated: {len(cc_atoms)} experiment result atoms written")
+
+            # 记录 fitness + Island 分配
+            if experiment_results:
+                for result in experiment_results:
+                    score = result.get("score", 0)
+                    variant_id = result.get("variant_id", "")
+                    descriptor = result.get("descriptor", {})
+                    self.fitness.record(score=score, metadata=result)
+                    cell_key = self.grid.assign(variant_id, descriptor)
+                    self.grid.record_result(variant_id, score, descriptor)
+                    island_id = self.island_mgr.detect_and_assign(
+                        variant_id, cell_key, score, descriptor,
+                        method_family=descriptor.get("method_family", "default"),
+                    )
+                    events.append(f"fitness_recorded: score={score}, cell={cell_key}, island={island_id}")
 
         # 达标判断 (仅 W5)
         if phase == PHASE_ANALYZE:
@@ -907,6 +992,16 @@ TOOLS = [
                 "chosen_next_phase": {"type": "string",
                                        "description": "用户选择的下一个阶段（不满意时可选）"},
                 "notes": {"type": "string", "description": "用户备注"},
+                "cc_atoms": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Claim Chain 原子列表（仅真实文献/实验结果）: [{type, title, content, tags}]",
+                },
+                "experiment_results": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "实验结果列表（W5专用）: [{variant_id, score, descriptor}]",
+                },
             },
             "required": ["workspace_dir", "satisfied"],
         },
@@ -936,6 +1031,8 @@ async def handle_tool(name: str, arguments: dict) -> str:
             satisfied=arguments["satisfied"],
             chosen_next_phase=arguments.get("chosen_next_phase", ""),
             notes=arguments.get("notes", ""),
+            cc_atoms=arguments.get("cc_atoms"),
+            experiment_results=arguments.get("experiment_results"),
         )
     else:
         result = {"error": f"Unknown tool: {name}"}
