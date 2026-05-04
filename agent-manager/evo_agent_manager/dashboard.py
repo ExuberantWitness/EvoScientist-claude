@@ -606,13 +606,10 @@ def _is_port_free(port: int) -> bool:
 
 
 def start_dashboard(host: str = "0.0.0.0", port: int = 8420):
-    """Start the dashboard as a standalone subprocess.
+    """Start the dashboard in-process as a daemon thread.
 
-    Uses subprocess to avoid daemon-thread event-loop conflicts with
-    the MCP stdio server. Dashboard reads session state from the shared
-    checkpoint database, so sessions created via MCP are visible.
-
-    Falls back to in-process thread if the standalone launcher is unavailable.
+    Must run in the same process as the AgentManager so SSE events
+    from sub-agent execution are streamed to the browser in real-time.
     """
     import subprocess
     import time
@@ -627,27 +624,7 @@ def start_dashboard(host: str = "0.0.0.0", port: int = 8420):
             logger.error(f"Port {port} still occupied after cleanup. Dashboard not started.")
             return
 
-    # ── Primary: launch as standalone subprocess ──
-    launcher = Path(__file__).parent.parent / "start_dashboard_standalone.py"
-    if launcher.exists():
-        try:
-            proc = subprocess.Popen(
-                [subprocess.sys.executable, str(launcher)],
-                cwd=str(launcher.parent),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(1.5)
-            if not _is_port_free(port):
-                logger.info(f"Dashboard running (subprocess pid={proc.pid}) on http://{host}:{port}/")
-                return
-            else:
-                logger.warning("Dashboard subprocess started but port not bound. Retrying with thread fallback...")
-                proc.kill()
-        except Exception as e:
-            logger.warning(f"Dashboard subprocess failed: {e}. Trying thread fallback...")
-
-    # ── Fallback: in-process daemon thread (legacy) ──
+    # ── In-process daemon thread (shares AgentManager with MCP server) ──
     import threading
     import asyncio
 
