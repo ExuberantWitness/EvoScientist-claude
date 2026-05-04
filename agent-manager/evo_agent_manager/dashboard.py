@@ -614,15 +614,9 @@ def start_dashboard(host: str = "0.0.0.0", port: int = 8420):
     import subprocess
     import time
 
-    # Check for port conflicts and clean up stale processes
-    if not _is_port_free(port):
-        logger.warning(f"Port {port} is occupied. Attempting to free it...")
-        killed = _kill_port_occupant(port)
-        if killed:
-            time.sleep(0.5)
-        if not _is_port_free(port):
-            logger.error(f"Port {port} still occupied after cleanup. Dashboard not started.")
-            return
+    # Kill stale standalone dashboard processes on the port
+    _kill_port_occupant(port)
+    time.sleep(0.3)
 
     # ── In-process daemon thread (shares AgentManager with MCP server) ──
     import threading
@@ -647,7 +641,7 @@ def start_dashboard(host: str = "0.0.0.0", port: int = 8420):
     t.start()
     time.sleep(1.5)
 
-    if _is_port_free(port):
-        logger.error(f"Dashboard failed to bind port {port} (both subprocess and thread).")
+    if server.started:
+        logger.info(f"Dashboard running on http://{host}:{port}/")
     else:
-        logger.info(f"Dashboard running (thread fallback) on http://{host}:{port}/")
+        logger.warning(f"Dashboard thread started but may not be serving yet on port {port}")
