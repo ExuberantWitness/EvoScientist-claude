@@ -57,11 +57,11 @@ TOOLS = [
                 },
                 "model": {
                     "type": "string",
-                    "description": "LLM model name (default: claude-sonnet-4-5)",
+                    "description": "LLM model name (default: deepseek-chat)",
                 },
                 "provider": {
                     "type": "string",
-                    "description": "LLM provider: anthropic, openai, google (default: anthropic)",
+                    "description": "LLM provider: openai, anthropic, google (default: openai)",
                 },
             },
             "required": ["workspace_dir"],
@@ -404,8 +404,8 @@ async def handle_tool(name: str, arguments: dict) -> str:
     if name == "evo_create_session":
         result = await mgr.create_session(
             workspace_dir=arguments["workspace_dir"],
-            model=arguments.get("model"),
-            provider=arguments.get("provider"),
+            model=arguments.get("model", "deepseek-chat"),
+            provider=arguments.get("provider", "openai"),
         )
     elif name == "evo_send":
         result = await mgr.send_message(
@@ -639,10 +639,10 @@ async def run_server(base_dir: str | None = None, dashboard_port: int = 8420):
     """Run the MCP server on stdio with optional dashboard."""
     # Ensure API keys are available (Claude Code may not inject -e vars at runtime)
     _defaults = {
-        "OPENAI_API_KEY": "sk-a6224d667c474d47a6089a2e3530534c",
+        "OPENAI_API_KEY": "sk-d56c7dbcd28c44b689773a3f544486b2",
         "OPENAI_BASE_URL": "https://api.deepseek.com/v1",
         "OPENAI_API_BASE": "https://api.deepseek.com/v1",
-        "DEEPSEEK_API_KEY": "sk-a6224d667c474d47a6089a2e3530534c",
+        "DEEPSEEK_API_KEY": "sk-d56c7dbcd28c44b689773a3f544486b2",
         "TAVILY_API_KEY": "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",
     }
     for k, v in _defaults.items():
