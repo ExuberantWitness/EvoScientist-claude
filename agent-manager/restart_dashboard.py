@@ -2,7 +2,6 @@
 import subprocess
 import sys
 import time
-import socket
 from pathlib import Path
 
 PORT = 8420
@@ -20,7 +19,7 @@ def log(msg):
 # 1. Wait for HTTP response to flush
 with open(LOG, "w") as f:
     f.write("")
-log(f"Restart started. Python={PYTHON}, Launcher={LAUNCHER}")
+log(f"Restart started. Python={PYTHON}")
 time.sleep(2)
 
 # 2. Kill Python processes on port
@@ -30,26 +29,13 @@ try:
     for pid in pids:
         comm = subprocess.run(["ps", "-o", "comm=", "-p", pid], capture_output=True, text=True, timeout=3)
         if "python" in comm.stdout.lower():
-            subprocess.run(["kill", pid], capture_output=True, timeout=3)
+            subprocess.run(["kill", "-9", pid], capture_output=True, timeout=3)
             log(f"Killed PID {pid}")
+    time.sleep(1)
 except Exception as e:
     log(f"Kill error: {e}")
 
-# 3. Wait for port to free
-for i in range(30):
-    time.sleep(0.5)
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(1)
-            s.bind(("0.0.0.0", PORT))
-            log(f"Port freed after {i+1} attempts")
-            break
-    except OSError:
-        continue
-else:
-    log("Port not freed after 15s")
-
-# 4. Launch new dashboard
+# 3. Launch new dashboard immediately (uvicorn uses SO_REUSEADDR)
 try:
     with open("/tmp/evo-dashboard.log", "w") as out:
         proc = subprocess.Popen(

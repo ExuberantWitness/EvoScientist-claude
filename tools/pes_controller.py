@@ -38,47 +38,60 @@ PHASE_RESEARCH = "文献调研"
 PHASE_ELO = "ELO筛选"
 PHASE_EXECUTE = "实验执行"
 PHASE_ANALYZE = "结果分析"
+PHASE_WRITE = "论文写作"
+PHASE_WRITE_REVIEW = "论文审阅"
 PHASE_TERMINATED = "已终止"
 
-PHASES = [PHASE_PLAN, PHASE_RESEARCH, PHASE_ELO, PHASE_EXECUTE, PHASE_ANALYZE]
+PHASES = [PHASE_PLAN, PHASE_RESEARCH, PHASE_ELO, PHASE_EXECUTE,
+          PHASE_ANALYZE, PHASE_WRITE, PHASE_WRITE_REVIEW]
 
 # Phase transitions (from → [legal next])
 TRANSITIONS = {
-    PHASE_PLAN:      [PHASE_RESEARCH],
-    PHASE_RESEARCH:  [PHASE_ELO],
-    PHASE_ELO:       [PHASE_EXECUTE],
-    PHASE_EXECUTE:   [PHASE_ANALYZE],
-    PHASE_ANALYZE:   [PHASE_PLAN, PHASE_RESEARCH, PHASE_ELO, PHASE_EXECUTE, PHASE_TERMINATED],
+    PHASE_PLAN:          [PHASE_RESEARCH],
+    PHASE_RESEARCH:      [PHASE_ELO],
+    PHASE_ELO:           [PHASE_EXECUTE],
+    PHASE_EXECUTE:       [PHASE_ANALYZE],
+    PHASE_ANALYZE:       [PHASE_PLAN, PHASE_RESEARCH, PHASE_ELO, PHASE_EXECUTE, PHASE_WRITE],
+    PHASE_WRITE:         [PHASE_WRITE_REVIEW, PHASE_PLAN],
+    PHASE_WRITE_REVIEW:  [PHASE_WRITE, PHASE_PLAN, PHASE_TERMINATED],
 }
 
 # Execution chain steps per phase
 # run_step_pipeline: Python internal CLI→Indexing→Decomposer→Recomposer→Evaluator
 CHAIN_STEPS = {
     PHASE_PLAN: [
-        "run_step_pipeline", "multi_agent_discuss", "elo_tournament", "evolution_memory",
+        "web_reconnaissance", "run_step_pipeline", "multi_agent_discuss",
+        "elo_tournament", "evolution_memory",
     ],
     PHASE_RESEARCH: [
-        "run_step_pipeline", "multi_agent_discuss", "elo_tournament", "evolution_memory",
+        "web_reconnaissance", "run_step_pipeline", "multi_agent_discuss",
+        "elo_tournament", "evolution_memory",
         "invoke_skill_research", "write_claim_chain",
     ],
     PHASE_ELO: [
-        "run_step_pipeline", "multi_agent_discuss", "elo_tournament", "evolution_memory",
+        "web_reconnaissance", "run_step_pipeline", "multi_agent_discuss",
+        "elo_tournament", "evolution_memory",
     ],
     PHASE_EXECUTE: [
         "invoke_skill_code", "wait_external",
     ],
     PHASE_ANALYZE: [
-        "run_step_pipeline", "scan_islands_rubrics", "multi_agent_discuss",
-        "evolution_memory", "write_claim_chain", "island_assign",
+        "run_step_pipeline", "ingest_results", "scan_islands_rubrics",
+        "multi_agent_discuss", "evolution_memory",
+        "write_claim_chain", "island_assign",
     ],
+    PHASE_WRITE:         ["invoke_skill_write"],
+    PHASE_WRITE_REVIEW:  ["invoke_skill_review"],
 }
 
 # Agent roles per phase
 AGENT_ROLES = {
-    PHASE_PLAN:      ["planner", "researcher", "analyst"],
-    PHASE_RESEARCH:  ["researcher", "planner", "analyst"],
-    PHASE_ELO:       ["planner", "researcher", "analyst"],
-    PHASE_ANALYZE:   ["analyst", "planner", "researcher"],
+    PHASE_PLAN:          ["planner", "researcher", "analyst"],
+    PHASE_RESEARCH:      ["researcher", "planner", "analyst"],
+    PHASE_ELO:           ["planner", "researcher", "analyst"],
+    PHASE_ANALYZE:       ["analyst", "planner", "researcher"],
+    PHASE_WRITE:         ["writer"],
+    PHASE_WRITE_REVIEW:  ["writer"],
 }
 
 
@@ -248,6 +261,8 @@ class PESController:
             PHASE_ELO: "多Agent 方案构思 + ELO 锦标赛筛选",
             PHASE_EXECUTE: "单Agent 代码实现 + 等待用户运行实验",
             PHASE_ANALYZE: "多Agent 结果分析 + Rubrics 评分 + Island 分配",
+            PHASE_WRITE: "撰写论文报告，汇总所有实验发现",
+            PHASE_WRITE_REVIEW: "外部 LLM 审阅论文，迭代修改直到通过",
         }
         return descriptions.get(phase, "")
 
@@ -304,6 +319,8 @@ class PESController:
             PHASE_ELO: f"第{iteration+1}轮·方案筛选。ELO 锦标赛将排序候选方案。",
             PHASE_EXECUTE: f"第{iteration+1}轮·实验执行。准备生成代码。",
             PHASE_ANALYZE: f"第{iteration+1}轮·结果分析。当前最佳{best:.1f}。",
+            PHASE_WRITE: f"论文写作。基于实验结果撰写报告。",
+            PHASE_WRITE_REVIEW: f"论文审阅。外部审阅将评估报告质量。",
         }
         return prompts.get(phase, f"当前阶段: {phase}")
 
@@ -352,11 +369,19 @@ class PESController:
                 "violable_boundaries": decomposer_result.get("violable_boundaries", []),
                 "proposals": recomposer_result,
                 "evaluation": evaluator_results,
+                "exploration_guidance": decomposer_result.get("exploration_guidance", {}),
             }
 
-            # Persist context for subsequent evo_discuss step
             state["last_pipeline_context"] = context_bundle
             self._write_state(state)
+
+            self._post_to_dashboard(
+                state.get("session_id", ""), "pipeline_step_completed",
+                {"phase": phase, "proposals_count": len(recomposer_result),
+                 "mappings_count": len(decomposer_result.get("mappings", [])),
+                 "grafts_count": len(decomposer_result.get("grafts", [])),
+                 "web_primitives": decomposer_result.get("web_primitives_count", 0)},
+            )
 
             return {
                 "done": False,
@@ -374,6 +399,30 @@ class PESController:
                     f"3. 方案重组：基于嫁接材料构建新方案\n"
                     f"4. 三公理评估：自识别 + 复述不变性 + 累积性"
                 ),
+            }
+
+        elif step_name == "web_reconnaissance":
+            search_queries = self._build_search_queries(phase, state)
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "multi_agent",
+                "tool": "evo_discuss",
+                "topic": (
+                    f"[{phase}] Web 侦察：搜索最新研究进展。\n"
+                    f"研究问题: {state.get('research_topic', '')}\n\n"
+                    f"## 搜索任务\n"
+                    f"每个 Agent 用 Tavily 独立搜索以下主题:\n"
+                    + "\n".join(f"- {q}" for q in search_queries)
+                    + "\n\n## 输出要求\n"
+                    f"每个 Agent 输出结构化搜索结果，格式:\n"
+                    f'[{{"title": "...", "summary": "...", "key_insight": "...", "tags": ["..."]}}]\n'
+                    f"所有结果汇总保存到 workspace/web_research.json"
+                ),
+                "agents": agents,
+                "exclude_agents": ["code-agent", "debug-agent"],
             }
 
         elif step_name == "multi_agent_discuss":
@@ -399,6 +448,16 @@ class PESController:
                 "3. 基于嫁接材料构建 2-3 个新方案",
                 "4. 产出格式: {title, hypothesis, method_sketch}",
             ]
+            guidance = ctx.get("exploration_guidance", {})
+            if guidance:
+                topic_parts.extend([
+                    "", "## 探索指导（上轮 Gap 分析）",
+                    f"- 上轮最佳: {guidance.get('previous_best', 'N/A')}",
+                    f"- 目标: {guidance.get('target', 'N/A')}",
+                    f"- Grid 覆盖率: {guidance.get('grid_coverage_pct', 0)}%",
+                    f"- 未探索 Cell: {guidance.get('unexplored_count', 0)}",
+                    f"- **指令**: {guidance.get('directive', '')}",
+                ])
             return {
                 "done": False,
                 "phase": phase,
@@ -459,6 +518,25 @@ class PESController:
                 "argument": "基于plan.md实现实验代码。单Agent模式。",
             }
 
+        elif step_name == "ingest_results":
+            results = self._auto_ingest_results()
+            state = self._read_state()
+            state["ingested_results"] = results
+            self._write_state(state)
+            self._post_to_dashboard(
+                state.get("session_id", ""), "results_ingested",
+                {"count": len(results), "phase": phase},
+            )
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "ingest_results",
+                "experiment_results": results,
+                "instruction": f"自动扫描发现 {len(results)} 个实验结果，将传入 post_loop。",
+            }
+
         elif step_name == "wait_external":
             return {
                 "done": False,
@@ -504,6 +582,28 @@ class PESController:
                 "argument": f"[{phase}] 变体入岛分配。检测 Island 合并候选。",
             }
 
+        elif step_name == "invoke_skill_write":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "invoke_skill",
+                "skill": "/evo-write",
+                "argument": f"基于所有实验结果和分析报告撰写论文。研究问题: {state.get('research_topic', '')}",
+            }
+
+        elif step_name == "invoke_skill_review":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "invoke_skill",
+                "skill": "/evo-review",
+                "argument": "审阅论文报告。target >= 7/10 才能通过。",
+            }
+
         return {"done": True, "phase": phase}
 
     # ═══════════════════════════════════════════════════════════════
@@ -518,6 +618,12 @@ class PESController:
         phase = state["phase"]
 
         if not satisfied:
+            if phase == PHASE_WRITE_REVIEW:
+                state["phase"] = PHASE_WRITE
+                state["sub_loop_step"] = 0
+                self._write_state(state)
+                return {"advanced": False, "next_phase": PHASE_WRITE,
+                        "message": "审阅未通过，回到论文写作阶段修改。"}
             state["sub_loop_step"] = 0
             self._write_state(state)
             return {"advanced": False, "next_phase": phase,
@@ -550,6 +656,9 @@ class PESController:
                 events.append(f"claim_chain_updated: {len(cc_atoms)} experiment result atoms written")
 
             # 记录 fitness + Island 分配
+            # Fallback: 使用 ingest_results 自动扫描的结果
+            if not experiment_results:
+                experiment_results = state.get("ingested_results", [])
             if experiment_results:
                 for result in experiment_results:
                     score = result.get("score", 0)
@@ -558,26 +667,59 @@ class PESController:
                     self.fitness.record(score=score, metadata=result)
                     cell_key = self.grid.assign(variant_id, descriptor)
                     self.grid.record_result(variant_id, score, descriptor)
-                    island_id = self.island_mgr.detect_and_assign(
+                    island_id = self.islands.detect_and_assign(
                         variant_id, cell_key, score, descriptor,
                         method_family=descriptor.get("method_family", "default"),
                     )
                     events.append(f"fitness_recorded: score={score}, cell={cell_key}, island={island_id}")
 
-        # 达标判断 (仅 W5)
+        # Gap 分析 (仅 W5 Analyze)
+        gap_analysis = None
         if phase == PHASE_ANALYZE:
+            target = self._read_success_target()
             fs = self.fitness.get_stats()
             best = fs.get("global", {}).get("max_score", 0)
-            # 从 success_criteria.md 读目标
-            target = self._read_success_target()
-            if target and best >= target:
-                chosen_next_phase = PHASE_TERMINATED
+            cc_summary = self.cc.get_graph_summary()
+            grid_data = self.grid.get_heatmap_data()
+            coverage = grid_data.get("coverage", {})
+
+            if target is not None:
+                gap = max(0, target - best)
+                gap_pct = (gap / target * 100) if target > 0 else 0
+                target_met = best >= target
+            else:
+                gap = 0
+                gap_pct = 0
+                target_met = False
+
+            gap_analysis = {
+                "target_score": target,
+                "best_score": best,
+                "gap": gap,
+                "gap_percent": round(gap_pct, 1),
+                "target_met": target_met,
+                "cc_atom_count": cc_summary.get("total_atoms", 0),
+                "grid_filled": coverage.get("filled", 0),
+                "grid_total": coverage.get("total", 0),
+                "iteration": state.get("iteration", 0),
+            }
 
         # 确定下一阶段
         if chosen_next_phase:
             next_phase = chosen_next_phase
         elif phase == PHASE_ANALYZE:
-            next_phase = PHASE_TERMINATED  # 默认终止
+            # 达标 → 写作；未达标 → 回到 W2 开始新一轮迭代
+            target = self._read_success_target()
+            fs = self.fitness.get_stats()
+            best = fs.get("global", {}).get("max_score", 0)
+            if target is not None and best >= target:
+                next_phase = PHASE_WRITE
+            else:
+                next_phase = PHASE_PLAN
+        elif phase == PHASE_WRITE:
+            next_phase = PHASE_WRITE_REVIEW
+        elif phase == PHASE_WRITE_REVIEW:
+            next_phase = PHASE_TERMINATED
         else:
             legal = self._legal_next(phase)
             next_phase = legal[0] if legal else PHASE_TERMINATED
@@ -587,16 +729,26 @@ class PESController:
         state["sub_loop_step"] = 0
         if phase == PHASE_ANALYZE:
             state["iteration"] = state.get("iteration", 0) + 1
+        if gap_analysis:
+            state["last_gap_analysis"] = gap_analysis
 
         self._write_state(state)
+
+        msg = f"阶段 '{phase}' 完成。进入 '{next_phase}'。"
+        if next_phase == PHASE_PLAN and phase == PHASE_ANALYZE:
+            msg = f"第{state.get('iteration', 0)}轮迭代完成。未达标，回到方案提出。"
+        elif next_phase == PHASE_WRITE:
+            msg = "达标！进入论文写作阶段。"
+        elif next_phase == PHASE_TERMINATED:
+            msg = "管线完成。"
 
         return {
             "advanced": True,
             "next_phase": next_phase,
             "phase_completed": phase,
             "events": events,
-            "message": f"阶段 '{phase}' 完成。进入 '{next_phase}'。" if next_phase != PHASE_TERMINATED
-                       else "研究阶段结束。进入写作阶段。",
+            "gap_analysis": gap_analysis,
+            "message": msg,
         }
 
     def _read_success_target(self) -> float | None:
@@ -732,11 +884,14 @@ class PESController:
         }
 
     def step_decomposer(self, concept_primitives: list[dict] | None = None) -> dict:
-        """STEP_Decomposer: Python 预处理 + LLM 嫁接。
+        """STEP_Decomposer: 结构映射 + 反事实嫁接 + 冲突检测。
 
-        Python 预处理: 从 CC 提取基元子图、关系链模式、可违反边界条件。
-        返回结构化数据供 LLM 做跨域类比和反事实嫁接。
+        处理 CC 内部数据 + Web 搜索结果，产生跨域映射和嫁接材料。
         """
+        state = self._read_state()
+        gap = state.get("last_gap_analysis")
+        iteration = state.get("iteration", 0)
+
         # 从 CC 提取基元
         atoms = self.cc.get_atoms(limit=200)
         relations = self.cc.get_relations(limit=200)
@@ -790,13 +945,78 @@ class PESController:
         # 当前领域基元
         primitives = concept_primitives or []
         if not primitives:
-            # 从 method 原子自动构建基元列表
-            method_atoms = [a for a in atoms if a["type"] == "method" and a["status"] == "active"]
+            # 从 method/fact 原子自动构建基元列表
+            relevant_atoms = [a for a in atoms if a["type"] in ("method", "fact") and a["status"] == "active"]
             primitives = [
                 {"atom_id": a["id"], "title": a["title"], "tags": a.get("tags", []),
                  "content": a.get("content", "")[:200]}
-                for a in method_atoms[:20]
+                for a in relevant_atoms[:20]
             ]
+
+        # 融合 Web 搜索结果作为额外 primitives
+        web_path = self.workspace / "web_research.json"
+        web_count = 0
+        if web_path.exists():
+            try:
+                web_findings = json.loads(web_path.read_text(encoding="utf-8"))
+                if isinstance(web_findings, list):
+                    for f in web_findings:
+                        primitives.append({
+                            "atom_id": f"web_{web_count}",
+                            "title": f.get("title", ""),
+                            "tags": f.get("tags", []),
+                            "content": (f.get("summary", "") or f.get("key_insight", ""))[:200],
+                            "source": "web_search",
+                        })
+                        web_count += 1
+            except Exception:
+                pass
+
+        # 结构映射: 发现同构关系模式
+        mappings = self._find_structural_mappings(atoms, relations)
+
+        # 反事实嫁接: 从边界条件和 primitives 生成
+        grafts = self._generate_counterfactual_grafts(boundaries, primitives)
+
+        # 冲突区检测
+        conflict_zones = []
+        for cc_item in contradicts_chains:
+            src = self.cc.get_atom(cc_item["source_id"])
+            tgt = self.cc.get_atom(cc_item["target_id"])
+            if src and tgt:
+                conflict_zones.append({
+                    "atom_a": src["title"], "atom_b": tgt["title"],
+                    "tension": cc_item.get("evidence", ""),
+                    "resolution_opportunity": f"Resolving {src['title']} vs {tgt['title']}",
+                })
+
+        # Fallback: CC 空时从研究主题生成
+        if not mappings and not grafts:
+            fallback = self._generate_fallback_proposals(state)
+            for item in fallback:
+                if "isomorphic_relation" in item:
+                    mappings.append(item)
+                else:
+                    grafts.append(item)
+
+        # 探索指导 (从上轮 gap analysis)
+        exploration_guidance = {}
+        if gap:
+            empty = self.grid.get_empty_cells()
+            exploration_guidance = {
+                "previous_best": gap.get("best_score"),
+                "target": gap.get("target_score"),
+                "grid_coverage_pct": round(
+                    gap.get("grid_filled", 0) / max(gap.get("grid_total", 1), 1) * 100, 1
+                ),
+                "unexplored_count": len(empty),
+                "iteration": iteration,
+                "directive": (
+                    f"上轮最佳={gap.get('best_score')}，目标={gap.get('target_score')}。"
+                    f"Grid 覆盖 {gap.get('grid_filled', 0)}/{gap.get('grid_total', 0)}。"
+                    f"本轮必须提出结构上不同的方案，而非超参数调整。"
+                ),
+            }
 
         return {
             "primitives": primitives,
@@ -806,37 +1026,160 @@ class PESController:
                 "contradicts_chains": contradicts_chains[:20],
             },
             "violable_boundaries": boundaries[:10],
-            "mappings": [],    # LLM 填充: 跨域关系同构
-            "grafts": [],      # LLM 填充: 反事实嫁接
-            "conflict_zones": [],
+            "mappings": mappings[:15],
+            "grafts": grafts[:15],
+            "conflict_zones": conflict_zones[:5],
+            "web_primitives_count": web_count,
+            "exploration_guidance": exploration_guidance,
         }
 
-    def step_recomposer(self, grafted_materials: dict, phase: str = "") -> list[dict]:
-        """STEP_Recomposer: 将 Decomposer 原材料格式化为单Agent可用的方案模板。
+    def _find_structural_mappings(self, atoms: list[dict], relations: list[dict]) -> list[dict]:
+        """发现 CC atoms 之间同构的关系模式。"""
+        atom_rels: dict[int, list[str]] = {}
+        for r in relations:
+            atom_rels.setdefault(r["source_id"], []).append(r["type"])
+            atom_rels.setdefault(r["target_id"], []).append(r["type"])
 
-        grafted_materials: Decomposer 输出 {mappings, grafts, conflict_zones, primitives}
-        """
+        method_atoms = [a for a in atoms if a["type"] in ("method", "fact") and a["status"] == "active"]
+        sig_groups: dict[tuple, list] = {}
+        for a in method_atoms:
+            sig = tuple(sorted(set(atom_rels.get(a["id"], []))))
+            sig_groups.setdefault(sig, []).append(a)
+
+        mappings = []
+        for sig, group in sig_groups.items():
+            if len(group) >= 2 and sig:
+                for i in range(len(group)):
+                    for j in range(i + 1, len(group)):
+                        mappings.append({
+                            "source_primitive": group[i]["title"],
+                            "target_domain": group[j]["title"],
+                            "isomorphic_relation": f"Both share pattern: {' + '.join(sig)}",
+                            "confidence": 0.6,
+                        })
+        return mappings[:10]
+
+    def _generate_counterfactual_grafts(self, boundaries: list[dict], primitives: list[dict]) -> list[dict]:
+        """从边界条件和 primitives 生成反事实嫁接。"""
+        grafts = []
+        for b in boundaries:
+            grafts.append({
+                "violated_boundary": b.get("atom_title", ""),
+                "primitive_a": b.get("atom_title", ""),
+                "primitive_b": "NEGATED: " + b.get("boundary_description", "")[:100],
+                "counterfactual": f"What if {b.get('atom_title', '')} does NOT hold?",
+                "potential_breakthrough": "Violating boundary could reveal hidden assumptions.",
+            })
+
+        if not grafts and primitives:
+            tags: dict[str, list] = {}
+            for p in primitives:
+                for t in p.get("tags", []):
+                    tags.setdefault(t, []).append(p)
+            tag_list = list(tags.keys())
+            for i in range(len(tag_list)):
+                for j in range(i + 1, min(i + 3, len(tag_list))):
+                    pa = tags[tag_list[i]][0] if tags[tag_list[i]] else None
+                    pb = tags[tag_list[j]][0] if tags[tag_list[j]] else None
+                    if pa and pb:
+                        grafts.append({
+                            "violated_boundary": "tag_boundary",
+                            "primitive_a": pa["title"],
+                            "primitive_b": pb["title"],
+                            "counterfactual": f"Combine {pa['title']} ({tag_list[i]}) with {pb['title']} ({tag_list[j]})?",
+                            "potential_breakthrough": f"Cross-tag graft: {tag_list[i]} x {tag_list[j]}",
+                        })
+        return grafts[:10]
+
+    def _generate_fallback_proposals(self, state: dict) -> list[dict]:
+        """CC 空时从研究主题 + Grid 维度生成保底提案。"""
+        import random
+        topic = state.get("research_topic", "")
+        proposals = []
+
+        algorithms = []
+        for alg in ["ppo", "sac", "td3", "ddpg", "a2c", "a3c"]:
+            if alg in topic.lower():
+                algorithms.append(alg.upper())
+        if not algorithms:
+            algorithms = ["DDPG", "SAC", "TD3"]
+
+        axes = ["network_architecture", "exploration_strategy", "training_tricks", "reward_shaping"]
+
+        for alg in algorithms:
+            for axis in axes:
+                proposals.append({
+                    "violated_boundary": f"{axis}_convention",
+                    "primitive_a": alg,
+                    "primitive_b": axis,
+                    "counterfactual": f"What if we radically redesign {axis} for {alg}?",
+                    "potential_breakthrough": f"Novel {axis} for {alg}",
+                })
+
+        for i in range(len(algorithms)):
+            for j in range(i + 1, len(algorithms)):
+                proposals.append({
+                    "source_primitive": algorithms[i],
+                    "target_domain": algorithms[j],
+                    "isomorphic_relation": f"Both actor-critic; what works for {algorithms[i]} may transfer to {algorithms[j]}",
+                    "confidence": 0.5,
+                })
+
+        empty = self.grid.get_empty_cells()
+        if empty:
+            for cell_key in random.sample(empty, min(3, len(empty))):
+                parts = cell_key.split("+")
+                proposals.append({
+                    "violated_boundary": "unexplored_region",
+                    "primitive_a": parts[0] if parts else "unknown",
+                    "primitive_b": parts[1] if len(parts) > 1 else "unknown",
+                    "counterfactual": f"Fill empty cell: {cell_key}",
+                    "potential_breakthrough": f"Unexplored: {cell_key}",
+                })
+
+        return proposals[:15]
+
+    def step_recomposer(self, grafted_materials: dict, phase: str = "") -> list[dict]:
+        """STEP_Recomposer: 将 Decomposer 原材料格式化为带具体步骤的方案。"""
         proposals = []
 
         for graft in grafted_materials.get("grafts", []):
             proposals.append({
-                "title": f"Graft: {graft.get('primitive_a', '?')} + {graft.get('primitive_b', '?')}",
+                "title": f"Graft: {graft.get('primitive_a', '?')} × {graft.get('primitive_b', '?')}",
                 "hypothesis": graft.get("potential_breakthrough", ""),
-                "method_sketch": "",
-                "primitives_used": [
-                    graft.get("primitive_a", ""),
-                    graft.get("primitive_b", ""),
-                ],
+                "method_sketch": (
+                    f"1. Base: {graft.get('primitive_a', '?')}\n"
+                    f"2. Violate: {graft.get('violated_boundary', 'unknown')}\n"
+                    f"3. Counterfactual: {graft.get('counterfactual', 'TBD')}\n"
+                    f"4. Compare vs baseline"
+                ),
+                "primitives_used": [graft.get("primitive_a", ""), graft.get("primitive_b", "")],
                 "novelty_claim": f"Cross-domain graft via {graft.get('violated_boundary', 'unknown')}",
+                "proposal_type": "counterfactual_graft",
             })
 
         for mapping in grafted_materials.get("mappings", []):
             proposals.append({
                 "title": f"Map: {mapping.get('source_primitive', '?')} → {mapping.get('target_domain', '?')}",
                 "hypothesis": mapping.get("isomorphic_relation", ""),
-                "method_sketch": "",
+                "method_sketch": (
+                    f"1. Identify what works in {mapping.get('source_primitive', '?')}\n"
+                    f"2. Map isomorphic structure to {mapping.get('target_domain', '?')}\n"
+                    f"3. Adapt and test"
+                ),
                 "primitives_used": [mapping.get("source_primitive", "")],
                 "novelty_claim": f"Isomorphic mapping (confidence: {mapping.get('confidence', 'N/A')})",
+                "proposal_type": "structural_mapping",
+            })
+
+        for zone in grafted_materials.get("conflict_zones", []):
+            proposals.append({
+                "title": f"Resolve: {zone.get('atom_a', '?')} vs {zone.get('atom_b', '?')}",
+                "hypothesis": zone.get("resolution_opportunity", ""),
+                "method_sketch": "Reproduce conflict conditions → control variables → determine driver",
+                "primitives_used": [zone.get("atom_a", ""), zone.get("atom_b", "")],
+                "novelty_claim": "Conflict resolution experiment",
+                "proposal_type": "conflict_resolution",
             })
 
         return proposals
@@ -898,6 +1241,126 @@ class PESController:
             "scores": [0.0, 0.0, 0.0],
             "passed": [False, False, False],
         }
+
+    # ── Web reconnaissance helpers ──
+
+    def _build_search_queries(self, phase: str, state: dict) -> list[str]:
+        """根据阶段和 CC 当前状态生成搜索查询。"""
+        topic = state.get("research_topic", "")
+        queries = [f"Latest advances in {topic} 2024-2025"]
+
+        if phase == PHASE_PLAN:
+            queries.append("Novel actor-critic improvements beyond hyperparameter tuning")
+            queries.append("Creative reinforcement learning techniques for continuous control")
+        elif phase == PHASE_RESEARCH:
+            cc_summary = self.cc.get_graph_summary()
+            queries.append("SOTA continuous control RL techniques beyond DDPG SAC TD3")
+        elif phase == PHASE_ELO:
+            gap = state.get("last_gap_analysis")
+            if gap:
+                queries.append(f"How to improve RL agent from {gap.get('best_score')} to {gap.get('target_score')}")
+            queries.append("Novel exploration strategies for actor-critic methods")
+
+        return queries[:5]
+
+    # ── Auto-ingest helpers ──
+
+    def _auto_ingest_results(self) -> list[dict]:
+        """自动扫描 workspace 结果文件，构建 experiment_results 格式。"""
+        results = []
+
+        # Strategy 1: summary.json in results subdirectories
+        for subdir in ["ablation", "ablation_v2"]:
+            summary = self.workspace / "results" / subdir / "summary.json"
+            if summary.exists():
+                try:
+                    entries = json.loads(summary.read_text(encoding="utf-8"))
+                    if isinstance(entries, list):
+                        for e in entries:
+                            variant = e.get("variant", "unknown")
+                            score = e.get("mean_final_reward", 0) or e.get("mean_reward", 0)
+                            std = e.get("std_final_reward", 0) or e.get("std_reward", 0)
+                            results.append({
+                                "variant_id": variant,
+                                "score": score,
+                                "descriptor": {
+                                    "method_family": self._classify_family(variant),
+                                    "improvement_axis": self._classify_axis(variant),
+                                },
+                                "std": std,
+                            })
+                except Exception:
+                    continue
+
+        if results:
+            return results
+
+        # Strategy 2: Individual seed result JSON files
+        results_dir = self.workspace / "results"
+        if results_dir.exists():
+            for json_file in sorted(results_dir.rglob("*.json")):
+                if "summary" in json_file.name or "seed" not in json_file.name:
+                    continue
+                try:
+                    data = json.loads(json_file.read_text(encoding="utf-8"))
+                    evals = data.get("eval_results", [])
+                    if evals:
+                        score = evals[-1].get("mean_reward", 0)
+                        variant = data.get("variant", json_file.stem)
+                        results.append({
+                            "variant_id": f"{variant}_seed{data.get('seed', 0)}",
+                            "score": score,
+                            "descriptor": {
+                                "method_family": self._classify_family(variant),
+                                "improvement_axis": self._classify_axis(variant),
+                            },
+                        })
+                except Exception:
+                    continue
+
+        return results
+
+    @staticmethod
+    def _classify_family(name: str) -> str:
+        name = name.lower()
+        for f in ["ppo", "sac", "td3", "ddpg", "a2c", "a3c"]:
+            if f in name:
+                return f.upper()
+        return "unknown"
+
+    @staticmethod
+    def _classify_axis(name: str) -> str:
+        name = name.lower()
+        if "twin" in name or "double" in name:
+            return "training_tricks"
+        if "per" in name or "prioritized" in name:
+            return "training_tricks"
+        if "param_noise" in name or "noise" in name:
+            return "exploration_strategy"
+        if "combined" in name:
+            return "training_tricks"
+        return "network_architecture"
+
+    # ── Dashboard event posting ──
+
+    def _post_to_dashboard(self, session_id: str, event_type: str, data: dict):
+        """推送事件到 Dashboard SSE 流（非关键，失败静默）。"""
+        try:
+            import urllib.request
+            payload = json.dumps({
+                "session_id": session_id,
+                "type": event_type,
+                "data": data,
+            }).encode()
+            req = urllib.request.Request(
+                "http://localhost:8420/api/internal/events",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════

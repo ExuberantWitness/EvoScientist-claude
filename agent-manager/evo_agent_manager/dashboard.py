@@ -547,6 +547,32 @@ async def evolve_grid_page(request):
     return HTMLResponse(_EVOLVE_GRID_PAGE_HTML)
 
 
+async def post_internal_event(request):
+    """接收 PESController 推送的事件，转发到 EventBus SSE 流。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    session_id = body.get("session_id", "")
+    event_type = body.get("type", "pipeline_step")
+    data = body.get("data", {})
+
+    if not session_id:
+        return JSONResponse({"error": "session_id required"}, status_code=400)
+
+    mgr = _mgr()
+    if mgr and hasattr(mgr, "event_bus"):
+        import time as _time
+        mgr.event_bus.publish(session_id, {
+            "type": event_type,
+            "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            "data": data,
+        })
+        return JSONResponse({"published": True, "session_id": session_id})
+    return JSONResponse({"error": "no manager available"}, status_code=503)
+
+
 # ── App factory ──
 
 def create_dashboard_app() -> Starlette:
@@ -565,6 +591,7 @@ def create_dashboard_app() -> Starlette:
             Route("/sessions/{session_id}/graph", claim_chain_graph_page),
             Route("/sessions/{session_id}/grid", evolve_grid_page),
             Route("/api/restart", restart_api, methods=["POST"]),
+            Route("/api/internal/events", post_internal_event, methods=["POST"]),
         ],
     )
 
