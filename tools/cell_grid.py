@@ -531,6 +531,117 @@ class CellGrid:
 
     # ── 内部读写 ──
 
+    def get_discovery_index(self) -> dict:
+        """返回 Grid 结构索引，供渐进式发现用。
+
+        Agent 看到：哪些维度存在、空cell区域模式、饱和区域、异常计数。
+        不直接看到完整 cell 数据，必须通过 pes_cli 查询。
+        """
+        state = self._read_state()
+        config = self._read_config()
+        cells = state.get("cells", {})
+
+        filled = {k: v for k, v in cells.items() if v.get("elite_id") is not None}
+        empty = {k: v for k, v in cells.items() if not v.get("elite_id")}
+
+        dim_names = config.get("dim_names", [])
+        behavior_dims = config.get("behavior_dims", [])
+        dim_values = {d["name"]: d.get("values", []) for d in behavior_dims} if behavior_dims else {}
+
+        empty_regions = self._find_empty_regions(empty, dim_names)
+        saturated_regions = self._find_saturated_regions(filled)
+        anomaly_count = sum(len(c.get("anomalies", [])) for c in cells.values())
+
+        return {
+            "dimension_names": dim_names,
+            "dimension_values": dim_values,
+            "total_cells": len(cells),
+            "filled_cells": len(filled),
+            "empty_cells": len(empty),
+            "empty_regions": empty_regions,
+            "saturated_regions": saturated_regions,
+            "anomaly_count": anomaly_count,
+            "part3_slots_remaining": config.get("part3_slots_remaining", 3),
+            "milestone_count": len(state.get("milestone_log", [])),
+            "next_variant": state.get("next_variant", 1),
+        }
+
+    def _find_empty_regions(self, empty: dict, dim_names: list[str]) -> list[dict]:
+        """找相邻空cell区域（>=3个连续空cell共享某维度值）。"""
+        if len(empty) < 3:
+            return []
+
+        # 按维度值分组空cell
+        dim_value_counts: dict[str, dict[str, int]] = {}
+        for dim in dim_names:
+            dim_value_counts[dim] = {}
+        for cell_key in empty:
+            if cell_key.count("+") != len(dim_names) - 1:
+                continue
+            parts = cell_key.split("+")
+            for i, dim in enumerate(dim_names):
+                if i < len(parts):
+                    val = parts[i]
+                    dim_value_counts[dim][val] = dim_value_counts[dim].get(val, 0) + 1
+
+        regions = []
+        for dim in dim_names:
+            for val, count in dim_value_counts[dim].items():
+                if count >= 3:
+                    # 找到具有此 dim=val 的 cell keys
+                    matching_cells = [k for k in empty
+                                     if k.count("+") == len(dim_names) - 1
+                                     and k.split("+")[dim_names.index(dim)] == val]
+                    regions.append({
+                        "dimension": dim,
+                        "value": val,
+                        "empty_count": count,
+                        "cell_keys_sample": matching_cells[:5],
+                        "description": f"{count} empty cells share {dim}={val} — an unexplored behavioral region",
+                    })
+        return sorted(regions, key=lambda r: r["empty_count"], reverse=True)
+
+    def _find_saturated_regions(self, filled: dict) -> list[dict]:
+        """找饱和区域（>=3个filled cells共享某维度值，分数方差低）。"""
+        if len(filled) < 3:
+            return []
+
+        state = self._read_state()
+        cells = state.get("cells", {})
+        config = self._read_config()
+        dim_names = config.get("dim_names", [])
+
+        dim_value_filled: dict[str, dict[str, list[float]]] = {}
+        for dim in dim_names:
+            dim_value_filled[dim] = {}
+        for cell_key, cell_data in filled.items():
+            parts = cell_key.split("+")
+            for i, dim in enumerate(dim_names):
+                if i < len(parts):
+                    val = parts[i]
+                    if val not in dim_value_filled[dim]:
+                        dim_value_filled[dim][val] = []
+                    score = cell_data.get("elite_score")
+                    if score is not None:
+                        dim_value_filled[dim][val].append(score)
+
+        regions = []
+        for dim in dim_names:
+            for val, scores in dim_value_filled[dim].items():
+                if len(scores) >= 3:
+                    mean_score = sum(scores) / len(scores)
+                    variance = sum((s - mean_score) ** 2 for s in scores) / len(scores)
+                    if variance < 0.1 * abs(mean_score) + 1e-6:  # Low variance → saturated
+                        regions.append({
+                            "dimension": dim,
+                            "value": val,
+                            "filled_count": len(scores),
+                            "mean_score": round(mean_score, 2),
+                            "score_variance": round(variance, 4),
+                            "description": f"{len(scores)} filled cells share {dim}={val} with low score variance — saturated region",
+                        })
+        return sorted(regions, key=lambda r: r["filled_count"], reverse=True)
+
     def _read_state(self) -> dict:
         if not self.state_path.exists():
             return {"cells": {}, "variant_history": [], "milestone_log": [], "next_variant": 1}

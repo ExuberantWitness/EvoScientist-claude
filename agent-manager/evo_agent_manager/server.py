@@ -620,8 +620,15 @@ def create_server(base_dir: str | None = None, dashboard_port: int = 8420) -> Se
     mgr = get_manager(base_dir)
 
     # Wire manager to dashboard
-    from .dashboard import set_manager
+    from .dashboard import set_manager, set_bridge
     set_manager(mgr)
+
+    # Create and wire PipelineBridge (对标 Ping Island HookSocketServer)
+    from .pipeline_bridge import PipelineBridge
+    bridge = PipelineBridge()
+    bridge.set_event_bus(mgr.event_bus)
+    bridge.set_manager(mgr)
+    set_bridge(bridge)
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:

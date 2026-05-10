@@ -5,6 +5,10 @@ AgentManager — Session management and multi-agent discussion coordination.
 import asyncio
 import json
 import logging
+import os
+import socket
+import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +17,111 @@ from .event_bus import EventBus
 from .utils import generate_session_id, now_iso, truncate
 
 logger = logging.getLogger(__name__)
+
+
+# ── HookEmitter: 对标 Ping Island Bridge 的事件发射器 ──
+
+class HookEmitter:
+    """向 PipelineBridge (Unix Socket) 发送生命周期事件。
+
+    对标 Ping Island 的 Hook 机制:
+    - Agent 框架在关键切点发射事件
+    - 非阻塞事件 (agent_message, tool_call): fire-and-forget
+    - 阻塞事件 (permission_request): 发送后等待 Bridge 响应
+
+    Socket 不可用时降级为 no-op，不影响 Agent 正常运行。
+    """
+
+    def __init__(self, socket_path: str = "/tmp/evo-pipeline-bridge.sock"):
+        self.socket_path = socket_path
+        self._connected = False
+        self._try_connect()
+
+    def _try_connect(self) -> bool:
+        """尝试连接 socket。失败则降级为 no-op。"""
+        if self._connected:
+            return True
+        if not os.path.exists(self.socket_path):
+            return False
+        try:
+            self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._sock.settimeout(2.0)
+            self._sock.connect(self.socket_path)
+            self._sock.settimeout(None)
+            self._connected = True
+            logger.info(f"HookEmitter connected to {self.socket_path}")
+            return True
+        except Exception:
+            return False
+
+    def _send_envelope(self, envelope: dict) -> bool:
+        """发送 envelope 到 socket。失败返回 False。"""
+        if not self._connected and not self._try_connect():
+            return False
+        try:
+            data = (json.dumps(envelope, ensure_ascii=False) + "\n").encode()
+            self._sock.sendall(data)
+            return True
+        except Exception as e:
+            logger.debug(f"HookEmitter send failed: {e}")
+            self._connected = False
+            return False
+
+    def _recv_response(self, timeout: float = 300) -> dict | None:
+        """阻塞读取 socket 响应。"""
+        if not self._connected:
+            return None
+        try:
+            self._sock.settimeout(timeout)
+            data = b""
+            while True:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if b"\n" in data:
+                    break
+            self._sock.settimeout(None)
+            if data:
+                return json.loads(data.decode())
+        except Exception as e:
+            logger.debug(f"HookEmitter recv failed: {e}")
+            self._connected = False
+        return None
+
+    def emit(self, event_type: str, session_id: str, data: dict | None = None,
+             expects_response: bool = False):
+        """发射非阻塞事件 (fire-and-forget)。"""
+        envelope = {
+            "id": str(uuid.uuid4()),
+            "event_type": event_type,
+            "session_id": session_id,
+            "status": data.get("status", "") if data else "",
+            "data": data or {},
+            "expects_response": expects_response,
+            "timestamp": time.time(),
+        }
+        self._send_envelope(envelope)
+
+    def emit_and_wait(self, event_type: str, session_id: str,
+                      data: dict | None = None, timeout: float = 3600) -> dict | None:
+        """发射阻塞事件并等待 Bridge 响应。"""
+        envelope = {
+            "id": str(uuid.uuid4()),
+            "event_type": event_type,
+            "session_id": session_id,
+            "status": data.get("status", "waiting_approval") if data else "waiting_approval",
+            "data": data or {},
+            "expects_response": True,
+            "timestamp": time.time(),
+        }
+        if not self._send_envelope(envelope):
+            return {"error": "HookEmitter not connected"}
+
+        response = self._recv_response(timeout=timeout)
+        if response is None:
+            return {"error": "HookEmitter recv timeout"}
+        return response
 
 
 @dataclass
@@ -46,7 +155,9 @@ class AgentManager:
     # Safety threshold: rotate thread before hitting model's context limit
     MAX_CONTEXT_CHARS = 2_400_000  # ~800K tokens (80% of DeepSeek's 1M)
 
-    def __init__(self, base_dir: str | None = None):
+    def __init__(self, base_dir: str | None = None,
+                 hook_socket_path: str = "/tmp/evo-pipeline-bridge.sock",
+                 use_persistent_checkpointer: bool = True):
         self.base_dir = base_dir or str(Path(__file__).parent.parent)
         self.sessions: dict[str, AgentSession] = {}
         self._checkpointer = None
@@ -54,8 +165,11 @@ class AgentManager:
         self._event_bus = EventBus()
         self._stream_states: dict[str, Any] = {}
         self._use_rich_streaming = True
+        self._persistent_checkpointer = use_persistent_checkpointer
         # Pipeline pause gates: per-session asyncio.Event
         self._pipeline_gates: dict[str, asyncio.Event] = {}
+        # HookEmitter: 对标 Ping Island Bridge 事件发射器
+        self._hook = HookEmitter(hook_socket_path)
         # Recover sessions from disk on startup
         self._load_sessions_from_disk()
 
@@ -90,6 +204,8 @@ class AgentManager:
         passed via summaries injected into the first message.
         """
         if summary:
+            if not isinstance(session.thread_summaries, list):
+                session.thread_summaries = []
             session.thread_summaries.append(summary)
         session.thread_count += 1
         new_thread = f"{session.session_id}_t{session.thread_count}"
@@ -125,15 +241,25 @@ class AgentManager:
         return "\n".join(parts)
 
     async def _get_checkpointer(self):
-        """Get or create AsyncSqliteSaver (disk-persisted, survives restarts)."""
+        """Get or create checkpointer.
+
+        Uses InMemorySaver when use_persistent_checkpointer=False (Dashboard mode)
+        or when langgraph/aiosqlite not installed.
+        """
+        if not self._persistent_checkpointer:
+            return None  # force InMemorySaver in agent_factory
         if self._checkpointer is None:
-            import aiosqlite
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-            db_path = Path(self.base_dir) / ".evo_checkpoints.db"
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._checkpoint_conn = await aiosqlite.connect(str(db_path))
-            self._checkpointer = AsyncSqliteSaver(self._checkpoint_conn)
-            logger.info(f"AsyncSqliteSaver initialized at {db_path}")
+            try:
+                import aiosqlite
+                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+                db_path = Path(self.base_dir) / ".evo_checkpoints.db"
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+                self._checkpoint_conn = await aiosqlite.connect(str(db_path))
+                self._checkpointer = AsyncSqliteSaver(self._checkpoint_conn)
+                logger.info(f"AsyncSqliteSaver initialized at {db_path}")
+            except (ImportError, Exception) as e:
+                logger.warning(f"Checkpointer unavailable ({e}), using InMemorySaver")
+                self._checkpointer = None
         return self._checkpointer
 
     # ── Session persistence ──
@@ -210,21 +336,33 @@ class AgentManager:
                     sid = data["session_id"]
                     if sid in self.sessions:
                         continue  # already loaded
+                    # Defensive: ensure list-typed fields are actually lists
+                    sub_agents = data.get("sub_agents_used", [])
+                    if not isinstance(sub_agents, list):
+                        sub_agents = []
+                    summaries = data.get("thread_summaries", [])
+                    if not isinstance(summaries, list):
+                        summaries = []
+                    fitness = data.get("fitness_history", [])
+                    if not isinstance(fitness, list):
+                        fitness = []
+                    thread_id = data.get("thread_id") or sid
+
                     session = AgentSession(
                         session_id=sid,
                         agent=None,  # will be rebuilt on first use
-                        thread_id=data.get("thread_id", sid),
+                        thread_id=thread_id,
                         workspace_dir=data["workspace_dir"],
                         created_at=data["created_at"],
                         model=data.get("model", ""),
                         provider=data.get("provider", ""),
                         status="recovered",
-                        sub_agents_used=data.get("sub_agents_used", []),
+                        sub_agents_used=sub_agents,
                         thread_count=data.get("thread_count", 0),
-                        thread_summaries=data.get("thread_summaries", []),
+                        thread_summaries=summaries,
                     )
+                    session.fitness_history = fitness
                     session.last_response = data.get("last_response", "")
-                    session.fitness_history = data.get("fitness_history", [])
                     self.sessions[sid] = session
                     recovered += 1
                 except Exception as e:
@@ -282,6 +420,14 @@ class AgentManager:
         )
         self.sessions[session_id] = session
         self._save_session_meta(session)
+
+        # Hook: 发射 session_start 事件
+        self._hook.emit("session_start", session_id, {
+            "workspace_dir": workspace_dir,
+            "created_at": session.created_at,
+            "model": model or "",
+            "provider": provider or "",
+        })
 
         return {
             "session_id": session_id,
@@ -407,6 +553,14 @@ class AgentManager:
             self._execute_discuss_background(session, full_prompt, excluded)
         )
 
+        # Hook: 发射 task_start 事件
+        self._hook.emit("task_start", session_id, {
+            "task_type": "discuss",
+            "topic": topic[:200],
+            "agents": agents or ["planner", "researcher", "analyst"],
+            "excluded": sorted(excluded),
+        })
+
         return {
             "status": "processing",
             "thread_id": session.thread_id,
@@ -426,6 +580,16 @@ class AgentManager:
             # Extract code proposals
             code_proposals = self._extract_code_proposals(response, excluded)
             session._task = None  # cleared when done
+
+            # Hook: 发射 task_done 事件
+            self._hook.emit("task_done", session.session_id, {
+                "task_type": "discuss",
+                "status": "completed",
+                "response_chars": len(response),
+                "sub_agents_used": session.sub_agents_used,
+                "proposals_count": len(code_proposals),
+            })
+
             logger.info(
                 f"Background discuss completed for {session.session_id}: "
                 f"{len(response)} chars, {len(session.sub_agents_used)} agents, "
@@ -436,6 +600,13 @@ class AgentManager:
             session.last_response = f"Error: {e}"
             session._task = None
             self._save_session_meta(session)
+
+            # Hook: 发射 task_error 事件
+            self._hook.emit("task_error", session.session_id, {
+                "task_type": "discuss",
+                "error": str(e)[:500],
+            })
+
             logger.error(f"Background discuss failed for {session.session_id}: {e}", exc_info=True)
 
     def _extract_code_proposals(self, transcript: str, excluded: set[str]) -> list[str]:
@@ -699,8 +870,24 @@ class AgentManager:
             return {"error": f"Session {session_id} not found"}
 
         from .evolution.elo import EloTournament
+
+        # Hook: 发射 task_start
+        self._hook.emit("task_start", session_id, {
+            "task_type": "tournament",
+            "num_proposals": len(proposals),
+            "judge_model": judge_model,
+        })
+
         tournament = EloTournament(judge_model=judge_model)
         ranked = await tournament.rank(proposals)
+
+        # Hook: 发射 task_done
+        self._hook.emit("task_done", session_id, {
+            "task_type": "tournament",
+            "status": "completed",
+            "winner": ranked[0]["title"] if ranked else "",
+            "num_ranked": len(ranked),
+        })
 
         return {
             "status": "completed",
@@ -732,6 +919,12 @@ class AgentManager:
         session = self.sessions.get(session_id)
         if not session:
             return {"error": f"Session {session_id} not found"}
+
+        # Hook: 发射 task_start
+        self._hook.emit("task_start", session_id, {
+            "task_type": "distill",
+            "distill_type": distill_type,
+        })
 
         mem = await self._get_evolution_memory(session)
         result = {"status": "completed", "actions": []}
@@ -765,6 +958,14 @@ class AgentManager:
             result["actions"].append({"type": "ESE", "status": "recorded"})
 
         result["stats"] = mem.get_stats()
+
+        # Hook: 发射 task_done
+        self._hook.emit("task_done", session_id, {
+            "task_type": "distill",
+            "status": "completed",
+            "actions": [a.get("type", "") for a in result.get("actions", [])],
+        })
+
         return result
 
     async def get_evolution_memory(
@@ -847,6 +1048,16 @@ class AgentManager:
                     name = event.get("name", "sub-agent")
                     if name not in session.sub_agents_used:
                         session.sub_agents_used.append(name)
+                    # Hook: 发射 agent_message (子Agent启动)
+                    self._hook.emit("agent_message", session.session_id, {
+                        "agent": name, "message": "sub-agent started",
+                    })
+                elif event_type == "tool_call":
+                    # Hook: 发射 tool_call
+                    self._hook.emit("tool_call", session.session_id, {
+                        "tool": str(event.get("tool_name", ""))[:100],
+                        "args_preview": str(event.get("args", ""))[:200],
+                    })
                 elif event_type == "done":
                     response_text = event.get("response", "")
                     # Fix: done event's response is often just the main-agent's

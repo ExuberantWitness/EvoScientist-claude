@@ -1,0 +1,533 @@
+{
+  "meta": {
+    "description": "Concept primitive library for Structure Mapping Engine. Each domain is a relational graph of concepts — SME compares graph structures, not entity names.",
+    "version": "1.0",
+    "total_domains": 8
+  },
+  "domains": {
+    "evolutionary_algorithms": {
+      "name": "Evolutionary Algorithms",
+      "description": "Population-based optimization through variation, selection, and inheritance",
+      "concepts": [
+        {
+          "name": "mutation",
+          "abstraction": "random_variation",
+          "relations": [
+            {"type": "generates", "target": "diversity"},
+            {"type": "precedes", "target": "selection"},
+            {"type": "operates_on", "target": "population"}
+          ]
+        },
+        {
+          "name": "selection",
+          "abstraction": "fitness_filter",
+          "relations": [
+            {"type": "precedes", "target": "inheritance"},
+            {"type": "evaluates", "target": "fitness"},
+            {"type": "operates_on", "target": "population"}
+          ]
+        },
+        {
+          "name": "inheritance",
+          "abstraction": "trait_preservation",
+          "relations": [
+            {"type": "precedes", "target": "mutation"},
+            {"type": "preserves", "target": "fitness"},
+            {"type": "operates_on", "target": "population"}
+          ]
+        },
+        {
+          "name": "fitness",
+          "abstraction": "quality_metric",
+          "relations": [
+            {"type": "guides", "target": "selection"},
+            {"type": "constrains", "target": "exploration"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "variation_selection_loop", "pattern": ["mutation", "selection", "inheritance"], "relation_chain": "precedes→precedes→precedes", "type": "cyclic_3node"},
+        {"name": "fitness_driven_filter", "pattern": ["fitness", "selection"], "relation_chain": "guides", "type": "control"}
+      ]
+    },
+
+    "neural_architecture_search": {
+      "name": "Neural Architecture Search",
+      "description": "Automated neural network design through architecture generation and evaluation",
+      "concepts": [
+        {
+          "name": "architecture_generation",
+          "abstraction": "candidate_proposal",
+          "relations": [
+            {"type": "generates", "target": "architecture_diversity"},
+            {"type": "precedes", "target": "performance_evaluation"},
+            {"type": "operates_on", "target": "search_space"}
+          ]
+        },
+        {
+          "name": "performance_evaluation",
+          "abstraction": "fitness_filter",
+          "relations": [
+            {"type": "precedes", "target": "weight_inheritance"},
+            {"type": "evaluates", "target": "validation_accuracy"},
+            {"type": "operates_on", "target": "search_space"}
+          ]
+        },
+        {
+          "name": "weight_inheritance",
+          "abstraction": "trait_preservation",
+          "relations": [
+            {"type": "precedes", "target": "architecture_generation"},
+            {"type": "preserves", "target": "validation_accuracy"},
+            {"type": "operates_on", "target": "search_space"}
+          ]
+        },
+        {
+          "name": "validation_accuracy",
+          "abstraction": "quality_metric",
+          "relations": [
+            {"type": "guides", "target": "performance_evaluation"},
+            {"type": "constrains", "target": "architecture_diversity"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "generate_evaluate_loop", "pattern": ["architecture_generation", "performance_evaluation", "weight_inheritance"], "relation_chain": "precedes→precedes→precedes", "type": "cyclic_3node"},
+        {"name": "accuracy_driven_filter", "pattern": ["validation_accuracy", "performance_evaluation"], "relation_chain": "guides", "type": "control"}
+      ]
+    },
+
+    "reinforcement_learning": {
+      "name": "Reinforcement Learning",
+      "description": "Learning through interaction: exploration, exploitation, policy improvement",
+      "concepts": [
+        {
+          "name": "exploration",
+          "abstraction": "random_variation",
+          "relations": [
+            {"type": "collects", "target": "experience"},
+            {"type": "precedes", "target": "exploitation"},
+            {"type": "requires", "target": "stochastic_policy"}
+          ]
+        },
+        {
+          "name": "exploitation",
+          "abstraction": "fitness_filter",
+          "relations": [
+            {"type": "consumes", "target": "experience"},
+            {"type": "precedes", "target": "policy_improvement"},
+            {"type": "maximizes", "target": "expected_return"}
+          ]
+        },
+        {
+          "name": "policy_improvement",
+          "abstraction": "trait_preservation",
+          "relations": [
+            {"type": "updates", "target": "policy"},
+            {"type": "precedes", "target": "policy_evaluation"},
+            {"type": "uses", "target": "experience"}
+          ]
+        },
+        {
+          "name": "policy_evaluation",
+          "abstraction": "quality_metric",
+          "relations": [
+            {"type": "estimates", "target": "value_function"},
+            {"type": "precedes", "target": "policy_improvement"},
+            {"type": "constrains", "target": "exploration"}
+          ]
+        },
+        {
+          "name": "entropy_regularization",
+          "abstraction": "diversity_preservation",
+          "relations": [
+            {"type": "augments", "target": "exploration"},
+            {"type": "constrains", "target": "deterministic_policy"},
+            {"type": "requires", "target": "stochastic_policy"}
+          ]
+        },
+        {
+          "name": "reward_shaping",
+          "abstraction": "guidance_signal",
+          "relations": [
+            {"type": "augments", "target": "exploitation"},
+            {"type": "biases", "target": "expected_return"},
+            {"type": "requires", "target": "domain_knowledge"}
+          ]
+        },
+        {
+          "name": "target_network",
+          "abstraction": "stability_mechanism",
+          "relations": [
+            {"type": "stabilizes", "target": "policy_evaluation"},
+            {"type": "delays", "target": "policy_improvement"},
+            {"type": "constrains", "target": "update_speed"}
+          ]
+        },
+        {
+          "name": "experience_replay",
+          "abstraction": "memory_buffer",
+          "relations": [
+            {"type": "stores", "target": "experience"},
+            {"type": "decorrelates", "target": "gradient_updates"},
+            {"type": "enables", "target": "off_policy_learning"}
+          ]
+        },
+        {
+          "name": "actor_critic",
+          "abstraction": "dual_architecture",
+          "relations": [
+            {"type": "separates", "target": "exploration_from_evaluation"},
+            {"type": "combines", "target": "policy_improvement_with_policy_evaluation"},
+            {"type": "reduces", "target": "gradient_variance"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "explore_exploit_loop", "pattern": ["exploration", "exploitation", "policy_improvement"], "relation_chain": "precedes→precedes", "type": "cyclic_3node"},
+        {"name": "actor_critic_separation", "pattern": ["actor_critic", "exploration", "exploitation"], "relation_chain": "separates→combines", "type": "architectural"},
+        {"name": "target_network_stabilization", "pattern": ["target_network", "policy_evaluation", "policy_improvement"], "relation_chain": "stabilizes→delays", "type": "control"}
+      ]
+    },
+
+    "causal_inference": {
+      "name": "Causal Inference",
+      "description": "Reasoning about cause-effect relationships beyond statistical association",
+      "concepts": [
+        {
+          "name": "intervention",
+          "abstraction": "controlled_variation",
+          "relations": [
+            {"type": "breaks", "target": "confounding"},
+            {"type": "enables", "target": "causal_effect_estimation"},
+            {"type": "requires", "target": "structural_causal_model"}
+          ]
+        },
+        {
+          "name": "counterfactual",
+          "abstraction": "alternative_reality",
+          "relations": [
+            {"type": "contrasts", "target": "observed_outcome"},
+            {"type": "requires", "target": "structural_causal_model"},
+            {"type": "enables", "target": "individual_level_causation"}
+          ]
+        },
+        {
+          "name": "structural_causal_model",
+          "abstraction": "causal_graph",
+          "relations": [
+            {"type": "encodes", "target": "causal_mechanisms"},
+            {"type": "constrains", "target": "independence_relations"},
+            {"type": "enables", "target": "do_calculus"}
+          ]
+        },
+        {
+          "name": "confounding",
+          "abstraction": "hidden_common_cause",
+          "relations": [
+            {"type": "distorts", "target": "effect_estimation"},
+            {"type": "motivates", "target": "intervention"},
+            {"type": "violates", "target": "ignorability"}
+          ]
+        },
+        {
+          "name": "instrumental_variable",
+          "abstraction": "exogenous_variation",
+          "relations": [
+            {"type": "bypasses", "target": "confounding"},
+            {"type": "enables", "target": "causal_effect_estimation"},
+            {"type": "requires", "target": "exclusion_restriction"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "intervention_counterfactual_pair", "pattern": ["intervention", "counterfactual"], "relation_chain": "contrasts→enables", "type": "complementary"},
+        {"name": "causal_model_basis", "pattern": ["structural_causal_model", "intervention", "counterfactual"], "relation_chain": "enables→enables", "type": "hub"}
+      ]
+    },
+
+    "control_theory": {
+      "name": "Control Theory",
+      "description": "Feedback-driven dynamic system regulation",
+      "concepts": [
+        {
+          "name": "feedback_loop",
+          "abstraction": "self_correction_cycle",
+          "relations": [
+            {"type": "compares", "target": "reference_signal"},
+            {"type": "adjusts", "target": "control_input"},
+            {"type": "requires", "target": "sensor_measurement"}
+          ]
+        },
+        {
+          "name": "pid_controller",
+          "abstraction": "three_term_regulator",
+          "relations": [
+            {"type": "implements", "target": "feedback_loop"},
+            {"type": "combines", "target": "proportional_control_with_integral_and_derivative"},
+            {"type": "minimizes", "target": "tracking_error"}
+          ]
+        },
+        {
+          "name": "model_predictive_control",
+          "abstraction": "lookahead_optimizer",
+          "relations": [
+            {"type": "replaces", "target": "reactive_feedback"},
+            {"type": "requires", "target": "system_model"},
+            {"type": "optimizes", "target": "future_trajectory"}
+          ]
+        },
+        {
+          "name": "lyapunov_stability",
+          "abstraction": "convergence_guarantee",
+          "relations": [
+            {"type": "constrains", "target": "controller_design"},
+            {"type": "guarantees", "target": "bounded_error"},
+            {"type": "requires", "target": "energy_function"}
+          ]
+        },
+        {
+          "name": "system_identification",
+          "abstraction": "model_learning",
+          "relations": [
+            {"type": "estimates", "target": "system_model"},
+            {"type": "consumes", "target": "sensor_measurement"},
+            {"type": "enables", "target": "model_predictive_control"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "feedback_correction_cycle", "pattern": ["feedback_loop", "sensor_measurement", "control_input"], "relation_chain": "compares→adjusts→requires", "type": "closed_loop"}
+      ]
+    },
+
+    "information_theory": {
+      "name": "Information Theory",
+      "description": "Quantification, compression, and transmission of information",
+      "concepts": [
+        {
+          "name": "entropy",
+          "abstraction": "uncertainty_measure",
+          "relations": [
+            {"type": "quantifies", "target": "information_content"},
+            {"type": "constrains", "target": "compression_limit"},
+            {"type": "bounds", "target": "channel_capacity"}
+          ]
+        },
+        {
+          "name": "mutual_information",
+          "abstraction": "shared_information",
+          "relations": [
+            {"type": "measures", "target": "dependency_strength"},
+            {"type": "relates", "target": "entropy_to_conditional_entropy"},
+            {"type": "bounds", "target": "communication_rate"}
+          ]
+        },
+        {
+          "name": "rate_distortion",
+          "abstraction": "lossy_compression_tradeoff",
+          "relations": [
+            {"type": "balances", "target": "compression_versus_fidelity"},
+            {"type": "constrains", "target": "representation_learning"},
+            {"type": "generalizes", "target": "variational_inference"}
+          ]
+        },
+        {
+          "name": "information_bottleneck",
+          "abstraction": "relevant_information_extraction",
+          "relations": [
+            {"type": "optimizes", "target": "mutual_information"},
+            {"type": "compresses", "target": "input_representation"},
+            {"type": "preserves", "target": "task_relevant_information"},
+            {"type": "generalizes", "target": "representation_learning"}
+          ]
+        },
+        {
+          "name": "channel_capacity",
+          "abstraction": "maximum_throughput",
+          "relations": [
+            {"type": "constrains", "target": "communication_rate"},
+            {"type": "bounds", "target": "achievable_performance"},
+            {"type": "characterizes", "target": "noise_robustness"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "entropy_mutual_information_link", "pattern": ["entropy", "mutual_information", "information_bottleneck"], "relation_chain": "relates→optimizes", "type": "hierarchical"}
+      ]
+    },
+
+    "optimization_theory": {
+      "name": "Optimization Theory",
+      "description": "Finding optimal solutions under constraints",
+      "concepts": [
+        {
+          "name": "gradient_descent",
+          "abstraction": "local_improvement",
+          "relations": [
+            {"type": "follows", "target": "gradient_direction"},
+            {"type": "converges", "target": "local_optimum"},
+            {"type": "requires", "target": "differentiable_objective"}
+          ]
+        },
+        {
+          "name": "lagrange_multiplier",
+          "abstraction": "constraint_incorporation",
+          "relations": [
+            {"type": "converts", "target": "constrained_to_unconstrained"},
+            {"type": "penalizes", "target": "constraint_violation"},
+            {"type": "enables", "target": "constrained_optimization"}
+          ]
+        },
+        {
+          "name": "stochastic_optimization",
+          "abstraction": "noise_tolerant_search",
+          "relations": [
+            {"type": "estimates", "target": "gradient_from_samples"},
+            {"type": "escapes", "target": "local_optimum"},
+            {"type": "enables", "target": "large_scale_learning"}
+          ]
+        },
+        {
+          "name": "convex_relaxation",
+          "abstraction": "tractable_approximation",
+          "relations": [
+            {"type": "approximates", "target": "nonconvex_objective"},
+            {"type": "guarantees", "target": "global_optimum"},
+            {"type": "sacrifices", "target": "model_accuracy"}
+          ]
+        },
+        {
+          "name": "duality",
+          "abstraction": "primal_dual_relationship",
+          "relations": [
+            {"type": "transforms", "target": "primal_problem"},
+            {"type": "bounds", "target": "optimal_value"},
+            {"type": "simplifies", "target": "constraint_structure"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "dual_ascent", "pattern": ["duality", "lagrange_multiplier", "gradient_descent"], "relation_chain": "transforms→converts→follows", "type": "method_chain"}
+      ]
+    },
+
+    "deep_learning_architectures": {
+      "name": "Deep Learning Architectures",
+      "description": "Neural network design patterns and attention mechanisms",
+      "concepts": [
+        {
+          "name": "self_attention",
+          "abstraction": "global_context_aggregation",
+          "relations": [
+            {"type": "computes", "target": "pairwise_similarity"},
+            {"type": "aggregates", "target": "global_context"},
+            {"type": "requires", "target": "quadratic_computation"},
+            {"type": "enables", "target": "long_range_dependencies"}
+          ]
+        },
+        {
+          "name": "graph_neural_network",
+          "abstraction": "relational_inductive_bias",
+          "relations": [
+            {"type": "operates_on", "target": "graph_structure"},
+            {"type": "aggregates", "target": "neighborhood_information"},
+            {"type": "constrains", "target": "message_passing_scope"}
+          ]
+        },
+        {
+          "name": "batch_normalization",
+          "abstraction": "distribution_stabilization",
+          "relations": [
+            {"type": "normalizes", "target": "layer_activations"},
+            {"type": "stabilizes", "target": "training_dynamics"},
+            {"type": "reduces", "target": "internal_covariate_shift"}
+          ]
+        },
+        {
+          "name": "residual_connection",
+          "abstraction": "identity_preserving_path",
+          "relations": [
+            {"type": "adds", "target": "skip_connection"},
+            {"type": "preserves", "target": "gradient_flow"},
+            {"type": "enables", "target": "very_deep_networks"}
+          ]
+        },
+        {
+          "name": "dropout",
+          "abstraction": "stochastic_regularization",
+          "relations": [
+            {"type": "randomly_disables", "target": "neuron_units"},
+            {"type": "prevents", "target": "coadaptation"},
+            {"type": "approximates", "target": "model_averaging"}
+          ]
+        }
+      ],
+      "signature_cycles": [
+        {"name": "attention_aggregation", "pattern": ["self_attention", "graph_neural_network"], "relation_chain": "aggregates→aggregates", "type": "functional_isomorphism"}
+      ]
+    }
+  },
+
+  "cross_domain_isomorphisms": [
+    {
+      "id": "iso_001",
+      "name": "Evolution ↔ NAS",
+      "source_domain": "evolutionary_algorithms",
+      "target_domain": "neural_architecture_search",
+      "isomorphic_patterns": [
+        {"source_pattern": ["mutation","selection","inheritance"], "target_pattern": ["architecture_generation","performance_evaluation","weight_inheritance"], "relation_chain": "precedes→precedes→precedes", "confidence": 0.92, "type": "cyclic_3node_generate_evaluate_retain"},
+        {"source_pattern": ["fitness","selection"], "target_pattern": ["validation_accuracy","performance_evaluation"], "relation_chain": "guides", "confidence": 0.88, "type": "quality_driven_filter"}
+      ]
+    },
+    {
+      "id": "iso_002",
+      "name": "RL Exploration ↔ Evolution Mutation",
+      "source_domain": "reinforcement_learning",
+      "target_domain": "evolutionary_algorithms",
+      "isomorphic_patterns": [
+        {"source_pattern": ["exploration","exploitation","policy_improvement"], "target_pattern": ["mutation","selection","inheritance"], "relation_chain": "precedes→precedes", "confidence": 0.85, "type": "explore_exploit_cycle"},
+        {"source_pattern": ["entropy_regularization","exploration"], "target_pattern": ["mutation","diversity"], "relation_chain": "augments→generates", "confidence": 0.78, "type": "diversity_preservation"}
+      ]
+    },
+    {
+      "id": "iso_003",
+      "name": "Causal Intervention ↔ RL Action",
+      "source_domain": "causal_inference",
+      "target_domain": "reinforcement_learning",
+      "isomorphic_patterns": [
+        {"source_pattern": ["intervention","counterfactual"], "target_pattern": ["exploration","exploitation"], "relation_chain": "contrasts→enables", "confidence": 0.81, "type": "do_observe_distinction"},
+        {"source_pattern": ["structural_causal_model","intervention"], "target_pattern": ["value_function","exploration"], "relation_chain": "enables", "confidence": 0.76, "type": "model_guided_action"}
+      ]
+    },
+    {
+      "id": "iso_004",
+      "name": "Information Bottleneck ↔ Actor-Critic",
+      "source_domain": "information_theory",
+      "target_domain": "reinforcement_learning",
+      "isomorphic_patterns": [
+        {"source_pattern": ["information_bottleneck","mutual_information","entropy"], "target_pattern": ["actor_critic","exploration","exploitation"], "relation_chain": "optimizes→measures", "confidence": 0.79, "type": "information_partitioning"},
+        {"source_pattern": ["rate_distortion","information_bottleneck"], "target_pattern": ["policy_evaluation","actor_critic"], "relation_chain": "balances→separates", "confidence": 0.74, "type": "compression_fidelity_tradeoff"}
+      ]
+    },
+    {
+      "id": "iso_005",
+      "name": "Control Feedback ↔ RL Policy Evaluation",
+      "source_domain": "control_theory",
+      "target_domain": "reinforcement_learning",
+      "isomorphic_patterns": [
+        {"source_pattern": ["feedback_loop","pid_controller"], "target_pattern": ["policy_evaluation","policy_improvement"], "relation_chain": "compares→adjusts", "confidence": 0.83, "type": "error_correction_cycle"},
+        {"source_pattern": ["lyapunov_stability","controller_design"], "target_pattern": ["target_network","policy_evaluation"], "relation_chain": "constrains→stabilizes", "confidence": 0.77, "type": "stability_guarantee"}
+      ]
+    },
+    {
+      "id": "iso_006",
+      "name": "Self-Attention ↔ Graph Message Passing",
+      "source_domain": "deep_learning_architectures",
+      "target_domain": "deep_learning_architectures",
+      "isomorphic_patterns": [
+        {"source_pattern": ["self_attention","pairwise_similarity"], "target_pattern": ["graph_neural_network","neighborhood_information"], "relation_chain": "computes→aggregates", "confidence": 0.86, "type": "global_vs_local_aggregation"}
+      ]
+    }
+  ]
+}

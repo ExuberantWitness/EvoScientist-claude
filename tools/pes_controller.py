@@ -1,12 +1,13 @@
 """PESController: 单一状态机 + 五步渐进式发现管线 + MCP Server。
 
-MCP Tools (6):
-  mcp__pes_controller__init       — 初始化工作空间
-  mcp__pes_controller__resume     — 崩溃恢复
-  mcp__pes_controller__state      — 状态快照
-  mcp__pes_controller__pre_loop   — 状态切换准备 (基础状态管理)
-  mcp__pes_controller__sub_loop   — 分步返回执行步骤
-  mcp__pes_controller__post_loop  — 提交结果 + 用户确认
+MCP Tools (7):
+  mcp__pes_controller__init        — 初始化工作空间
+  mcp__pes_controller__resume      — 崩溃恢复
+  mcp__pes_controller__state       — 状态快照
+  mcp__pes_controller__pre_loop    — 状态切换准备 (基础状态管理)
+  mcp__pes_controller__sub_loop    — 分步返回执行步骤
+  mcp__pes_controller__post_loop   — 提交阶段数据写入（纯数据，不管流转）
+  mcp__pes_controller__transition  — Dashboard 控制阶段流转
 
 用法:
   python tools/pes_controller.py              # 启动 MCP server
@@ -33,65 +34,84 @@ from fitness_tracker import FitnessTracker
 
 # ── Phase constants ──
 
-PHASE_PLAN = "方案提出"
-PHASE_RESEARCH = "文献调研"
-PHASE_ELO = "ELO筛选"
-PHASE_EXECUTE = "实验执行"
-PHASE_ANALYZE = "结果分析"
-PHASE_WRITE = "论文写作"
-PHASE_WRITE_REVIEW = "论文审阅"
+PHASE_PLAN     = "W2 Plan"
+PHASE_RESEARCH = "W3 Research"
+PHASE_IDEATE   = "W3.5 Ideate"
+PHASE_CODE     = "W4 Code"
+PHASE_ANALYZE  = "W5 Analyze"
+PHASE_WRITE    = "W6 Write"
+PHASE_REVIEW   = "W7 Review"
 PHASE_TERMINATED = "已终止"
 
-PHASES = [PHASE_PLAN, PHASE_RESEARCH, PHASE_ELO, PHASE_EXECUTE,
-          PHASE_ANALYZE, PHASE_WRITE, PHASE_WRITE_REVIEW]
+PHASES = [PHASE_PLAN, PHASE_RESEARCH, PHASE_IDEATE, PHASE_CODE,
+          PHASE_ANALYZE, PHASE_WRITE, PHASE_REVIEW]
+
+# Phases that require Agent SDK subprocess (W4 Code, W6 Write, W7 Review)
+AGENT_SDK_PHASES = frozenset({PHASE_CODE, PHASE_WRITE, PHASE_REVIEW})
 
 # Phase transitions (from → [legal next])
 TRANSITIONS = {
-    PHASE_PLAN:          [PHASE_RESEARCH],
-    PHASE_RESEARCH:      [PHASE_ELO],
-    PHASE_ELO:           [PHASE_EXECUTE],
-    PHASE_EXECUTE:       [PHASE_ANALYZE],
-    PHASE_ANALYZE:       [PHASE_PLAN, PHASE_RESEARCH, PHASE_ELO, PHASE_EXECUTE, PHASE_WRITE],
-    PHASE_WRITE:         [PHASE_WRITE_REVIEW, PHASE_PLAN],
-    PHASE_WRITE_REVIEW:  [PHASE_WRITE, PHASE_PLAN, PHASE_TERMINATED],
+    PHASE_PLAN:     [PHASE_RESEARCH],
+    PHASE_RESEARCH: [PHASE_IDEATE],
+    PHASE_IDEATE:   [PHASE_CODE],
+    PHASE_CODE:     [PHASE_ANALYZE],
+    PHASE_ANALYZE:  [PHASE_PLAN, PHASE_WRITE],
+    PHASE_WRITE:    [PHASE_REVIEW, PHASE_TERMINATED],
+    PHASE_REVIEW:   [PHASE_WRITE],
 }
 
-# Execution chain steps per phase
-# run_step_pipeline: Python internal CLI→Indexing→Decomposer→Recomposer→Evaluator
+# Execution chain steps per phase (五条执行链路)
+# 链路1: W2 Plan — 看CC/EM → 多Agent → ELO → EM
+# 链路2: W3 Research — 看CC/EM → 多Agent → ELO → EM → 文献调研 → 写CC
+# 链路3: W3.5 Ideate — 看CC/EM → 多Agent → ELO → EM
+# 链路4: W4 Code — 看CC/EM → 单Agent代码实现
+# 链路5: W5 Analyze — 看CC → Island/Rubric → Judge+EM → 写CC → Island分配
 CHAIN_STEPS = {
     PHASE_PLAN: [
-        "web_reconnaissance", "run_step_pipeline", "multi_agent_discuss",
+        "run_step_pipeline", "multi_agent_discuss",
         "elo_tournament", "evolution_memory",
     ],
     PHASE_RESEARCH: [
-        "web_reconnaissance", "run_step_pipeline", "multi_agent_discuss",
+        "run_step_pipeline", "multi_agent_discuss",
         "elo_tournament", "evolution_memory",
         "invoke_skill_research", "write_claim_chain",
     ],
-    PHASE_ELO: [
-        "web_reconnaissance", "run_step_pipeline", "multi_agent_discuss",
+    PHASE_IDEATE: [
+        "run_step_pipeline", "multi_agent_discuss",
         "elo_tournament", "evolution_memory",
     ],
-    PHASE_EXECUTE: [
-        "invoke_skill_code", "wait_external",
+    PHASE_CODE: [
+        "run_step_pipeline", "invoke_skill_code",
     ],
     PHASE_ANALYZE: [
-        "run_step_pipeline", "ingest_results", "scan_islands_rubrics",
+        "run_step_pipeline", "scan_islands_rubrics",
         "multi_agent_discuss", "evolution_memory",
         "write_claim_chain", "island_assign",
     ],
-    PHASE_WRITE:         ["invoke_skill_write"],
-    PHASE_WRITE_REVIEW:  ["invoke_skill_review"],
+    PHASE_WRITE:   ["invoke_skill_write"],
+    PHASE_REVIEW:  ["invoke_skill_review"],
 }
 
 # Agent roles per phase
 AGENT_ROLES = {
-    PHASE_PLAN:          ["planner", "researcher", "analyst"],
-    PHASE_RESEARCH:      ["researcher", "planner", "analyst"],
-    PHASE_ELO:           ["planner", "researcher", "analyst"],
-    PHASE_ANALYZE:       ["analyst", "planner", "researcher"],
-    PHASE_WRITE:         ["writer"],
-    PHASE_WRITE_REVIEW:  ["writer"],
+    PHASE_PLAN:     ["planner", "researcher", "analyst"],
+    PHASE_RESEARCH: ["researcher", "planner", "analyst"],
+    PHASE_IDEATE:   ["planner", "researcher", "analyst"],
+    PHASE_ANALYZE:  ["analyst", "planner", "researcher"],
+    PHASE_WRITE:    ["writer"],
+    PHASE_REVIEW:   ["writer"],
+}
+
+
+# Phase name migration map (old Chinese → new W-based)
+_PHASE_MIGRATION = {
+    "方案提出": "W2 Plan",
+    "文献调研": "W3 Research",
+    "ELO筛选": "W3.5 Ideate",
+    "实验执行": "W4 Code",
+    "结果分析": "W5 Analyze",
+    "论文写作": "W6 Write",
+    "论文审阅": "W7 Review",
 }
 
 
@@ -112,8 +132,10 @@ class PESController:
     # ═══════════════════════════════════════════════════════════════
 
     def _read_state(self) -> dict:
+        """原子读 + 旧中文阶段名自动迁移。"""
         if not self.state_path.exists():
             return {
+                "protocol_version": 1,
                 "phase": PHASE_PLAN,
                 "iteration": 0,
                 "sub_loop_step": 0,
@@ -122,11 +144,19 @@ class PESController:
                 "session_id": None,
                 "config": {},
             }
-        return json.loads(self.state_path.read_text(encoding="utf-8"))
+        state = atomic_read(self.state_path)
+        if "phase" not in state:
+            state["phase"] = PHASE_PLAN
+        phase = state.get("phase", PHASE_PLAN)
+        if phase in _PHASE_MIGRATION:
+            state["phase"] = _PHASE_MIGRATION[phase]
+            atomic_write(self.state_path, state)
+        return state
 
     def _write_state(self, state: dict):
+        """Dashboard 侧写入（使用 pipeline_protocol 原子写）。"""
         state["timestamp"] = time.time()
-        self.state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        atomic_write(self.state_path, state)
 
     def _legal_next(self, phase: str) -> list[str]:
         return TRANSITIONS.get(phase, [])
@@ -158,8 +188,6 @@ class PESController:
             "session_id": None,
             "research_topic": research_topic,
             "config": {},
-            "needs_session": True,
-            "needs_intake": True,
         }
         self._write_state(state)
 
@@ -256,13 +284,13 @@ class PESController:
 
     def _phase_description(self, phase: str) -> str:
         descriptions = {
-            PHASE_PLAN: "基于 Claim Chain 先验，多Agent 讨论制定实验计划",
-            PHASE_RESEARCH: "按计划方向调研文献，收集真实论文数据",
-            PHASE_ELO: "多Agent 方案构思 + ELO 锦标赛筛选",
-            PHASE_EXECUTE: "单Agent 代码实现 + 等待用户运行实验",
-            PHASE_ANALYZE: "多Agent 结果分析 + Rubrics 评分 + Island 分配",
+            PHASE_PLAN: "看CC/EM → 多Agent讨论制定实验计划 → ELO排序 → Evolution Memory",
+            PHASE_RESEARCH: "看CC/EM → 多Agent文献调研 → ELO排序 → Evolution Memory → 真实文献写入CC",
+            PHASE_IDEATE: "看CC/EM → 多Agent方案构思 → ELO锦标赛筛选 → Evolution Memory",
+            PHASE_CODE: "看CC/EM → 单Agent代码实现",
+            PHASE_ANALYZE: "看CC → Island/Rubric扫描 → 多Agent Judge+EM → 真实结果写入CC → Island分配",
             PHASE_WRITE: "撰写论文报告，汇总所有实验发现",
-            PHASE_WRITE_REVIEW: "外部 LLM 审阅论文，迭代修改直到通过",
+            PHASE_REVIEW: "外部LLM审阅论文，不满意则回到Write重写",
         }
         return descriptions.get(phase, "")
 
@@ -314,13 +342,13 @@ class PESController:
         ft = self.fitness.get_trend()
 
         prompts = {
-            PHASE_PLAN: f"第{iteration+1}轮·方案提出。当前最佳{best:.1f}，趋势{ft['direction']}。是否继续？",
-            PHASE_RESEARCH: f"第{iteration+1}轮·文献调研。请确认调研方向。",
-            PHASE_ELO: f"第{iteration+1}轮·方案筛选。ELO 锦标赛将排序候选方案。",
-            PHASE_EXECUTE: f"第{iteration+1}轮·实验执行。准备生成代码。",
-            PHASE_ANALYZE: f"第{iteration+1}轮·结果分析。当前最佳{best:.1f}。",
-            PHASE_WRITE: f"论文写作。基于实验结果撰写报告。",
-            PHASE_WRITE_REVIEW: f"论文审阅。外部审阅将评估报告质量。",
+            PHASE_PLAN: f"第{iteration+1}轮·W2 Plan。当前最佳{best:.1f}，趋势{ft['direction']}。制定实验方案。",
+            PHASE_RESEARCH: f"第{iteration+1}轮·W3 Research。调研文献收集真实论文数据。",
+            PHASE_IDEATE: f"第{iteration+1}轮·W3.5 Ideate。ELO锦标赛排序候选方案。",
+            PHASE_CODE: f"第{iteration+1}轮·W4 Code。单Agent代码实现。",
+            PHASE_ANALYZE: f"第{iteration+1}轮·W5 Analyze。当前最佳{best:.1f}。Judge+Rubrics评分。",
+            PHASE_WRITE: f"W6 Write。基于实验结果撰写论文报告。",
+            PHASE_REVIEW: f"W7 Review。外部审阅评估论文质量。",
         }
         return prompts.get(phase, f"当前阶段: {phase}")
 
@@ -331,6 +359,15 @@ class PESController:
     def sub_loop(self) -> dict:
         """分步返回：每次调用返回当前阶段的下一个执行步骤。"""
         state = self._read_state()
+
+        # 等待 Dashboard 决策时，LLM 不推进
+        if state.get("status") == "awaiting_decision":
+            return {
+                "done": False,
+                "phase": state["phase"],
+                "action": "wait_for_decision",
+                "message": "等待用户在 Dashboard (localhost:8420/pipeline) 做决策...",
+            }
         phase = state["phase"]
         step_idx = state.get("sub_loop_step", 0)
         chain = CHAIN_STEPS.get(phase, [])
@@ -351,23 +388,32 @@ class PESController:
         agents = AGENT_ROLES.get(phase, ["planner", "researcher", "analyst"])
 
         if step_name == "run_step_pipeline":
-            # Execute 5 STEP pipeline internally: CLI → Indexing → Decomposer → Recomposer → Evaluator
+            # Execute 5 STEP pipeline: CLI → Indexing → Decomposer → Recomposer → Evaluator
             primary_agent = agents[0] if agents else "planner"
             cli_result = self.step_cli("summary")
             indexing_result = self.step_indexing(phase, primary_agent)
             decomposer_result = self.step_decomposer()
             recomposer_result = self.step_recomposer(decomposer_result, phase)
             evaluator_results = []
+            filtered_proposals = []
+            rejected_count = 0
             for proposal in recomposer_result:
-                evaluator_results.append(self.step_evaluator(proposal))
+                eval_result = self.step_evaluator(proposal)
+                evaluator_results.append(eval_result)
+                if eval_result.get("verdict") != "pseudo":
+                    filtered_proposals.append(proposal)
+                else:
+                    rejected_count += 1
 
             context_bundle = {
                 "cli_summary": cli_result,
                 "indexing": indexing_result,
                 "primitives": decomposer_result.get("primitives", []),
                 "relation_patterns": decomposer_result.get("relation_patterns", {}),
+                "sme_mappings": decomposer_result.get("sme_mappings", []),
                 "violable_boundaries": decomposer_result.get("violable_boundaries", []),
-                "proposals": recomposer_result,
+                "proposals": filtered_proposals,
+                "rejected_pseudo_proposals": rejected_count,
                 "evaluation": evaluator_results,
                 "exploration_guidance": decomposer_result.get("exploration_guidance", {}),
             }
@@ -377,7 +423,8 @@ class PESController:
 
             self._post_to_dashboard(
                 state.get("session_id", ""), "pipeline_step_completed",
-                {"phase": phase, "proposals_count": len(recomposer_result),
+                {"phase": phase, "proposals_count": len(filtered_proposals),
+                 "rejected_pseudo": rejected_count,
                  "mappings_count": len(decomposer_result.get("mappings", [])),
                  "grafts_count": len(decomposer_result.get("grafts", [])),
                  "web_primitives": decomposer_result.get("web_primitives_count", 0)},
@@ -397,7 +444,8 @@ class PESController:
                     f"1. 结构映射：跨领域关系同构搜索\n"
                     f"2. 反事实嫁接：故意违反边界条件制造认知冲突\n"
                     f"3. 方案重组：基于嫁接材料构建新方案\n"
-                    f"4. 三公理评估：自识别 + 复述不变性 + 累积性"
+                    f"4. 三公理评估：自识别 + 复述不变性 + 累积性\n"
+                    f"({rejected_count} pseudo-novel proposals rejected by axiom filters)"
                 ),
             }
 
@@ -482,8 +530,10 @@ class PESController:
             }
 
         elif step_name == "evolution_memory":
-            distill_type = {"方案提出": "ide", "文献调研": "ive",
-                           "ELO筛选": "ide", "结果分析": "ese"}.get(phase, "ide")
+            distill_type = {
+                "W2 Plan": "ide", "W3 Research": "ive",
+                "W3.5 Ideate": "ide", "W5 Analyze": "ese",
+            }.get(phase, "ide")
             return {
                 "done": False,
                 "phase": phase,
@@ -610,30 +660,15 @@ class PESController:
     # MCP Tool: post_loop
     # ═══════════════════════════════════════════════════════════════
 
-    def post_loop(self, satisfied: bool, chosen_next_phase: str = "",
-                  notes: str = "", cc_atoms: list[dict] | None = None,
+    def post_loop(self, cc_atoms: list[dict] | None = None,
                   experiment_results: list[dict] | None = None) -> dict:
-        """提交阶段结果 + 用户确认。按规则写入CC/Cell Grid/Evolution Memory/Island。"""
+        """提交阶段数据写入。不做阶段流转决策（由 Dashboard 管控）。"""
         state = self._read_state()
         phase = state["phase"]
-
-        if not satisfied:
-            if phase == PHASE_WRITE_REVIEW:
-                state["phase"] = PHASE_WRITE
-                state["sub_loop_step"] = 0
-                self._write_state(state)
-                return {"advanced": False, "next_phase": PHASE_WRITE,
-                        "message": "审阅未通过，回到论文写作阶段修改。"}
-            state["sub_loop_step"] = 0
-            self._write_state(state)
-            return {"advanced": False, "next_phase": phase,
-                    "message": "用户不满意，回到同一阶段重新执行。"}
-
-        # 用户满意 → 实际写入
         events = []
 
+        # 1. CC 写入（仅 W3 Research 和 W5 Analyze）
         if phase == PHASE_RESEARCH and cc_atoms:
-            # 写入 CC: 真实文献原子（仅来自真实论文，非 LLM 推测）
             for atom_data in cc_atoms:
                 atom_type = atom_data.get("type", "fact")
                 title = atom_data.get("title", "")
@@ -644,7 +679,6 @@ class PESController:
             events.append(f"claim_chain_updated: {len(cc_atoms)} literature atoms written, total: {cc_summary.get('atom_count', 0)}")
 
         elif phase == PHASE_ANALYZE:
-            # 写入 CC: 真实实验结果
             if cc_atoms:
                 for atom_data in cc_atoms:
                     self.cc.add_atom(
@@ -655,7 +689,6 @@ class PESController:
                     )
                 events.append(f"claim_chain_updated: {len(cc_atoms)} experiment result atoms written")
 
-            # 记录 fitness + Island 分配
             # Fallback: 使用 ingest_results 自动扫描的结果
             if not experiment_results:
                 experiment_results = state.get("ingested_results", [])
@@ -673,82 +706,134 @@ class PESController:
                     )
                     events.append(f"fitness_recorded: score={score}, cell={cell_key}, island={island_id}")
 
-        # Gap 分析 (仅 W5 Analyze)
+        # 2. Gap analysis（仅 W5 Analyze）
         gap_analysis = None
         if phase == PHASE_ANALYZE:
-            target = self._read_success_target()
-            fs = self.fitness.get_stats()
-            best = fs.get("global", {}).get("max_score", 0)
-            cc_summary = self.cc.get_graph_summary()
-            grid_data = self.grid.get_heatmap_data()
-            coverage = grid_data.get("coverage", {})
+            gap_analysis = self._compute_gap_analysis(state)
 
-            if target is not None:
-                gap = max(0, target - best)
-                gap_pct = (gap / target * 100) if target > 0 else 0
-                target_met = best >= target
-            else:
-                gap = 0
-                gap_pct = 0
-                target_met = False
-
-            gap_analysis = {
-                "target_score": target,
-                "best_score": best,
-                "gap": gap,
-                "gap_percent": round(gap_pct, 1),
-                "target_met": target_met,
-                "cc_atom_count": cc_summary.get("total_atoms", 0),
-                "grid_filled": coverage.get("filled", 0),
-                "grid_total": coverage.get("total", 0),
-                "iteration": state.get("iteration", 0),
-            }
-
-        # 确定下一阶段
-        if chosen_next_phase:
-            next_phase = chosen_next_phase
-        elif phase == PHASE_ANALYZE:
-            # 达标 → 写作；未达标 → 回到 W2 开始新一轮迭代
-            target = self._read_success_target()
-            fs = self.fitness.get_stats()
-            best = fs.get("global", {}).get("max_score", 0)
-            if target is not None and best >= target:
-                next_phase = PHASE_WRITE
-            else:
-                next_phase = PHASE_PLAN
-        elif phase == PHASE_WRITE:
-            next_phase = PHASE_WRITE_REVIEW
-        elif phase == PHASE_WRITE_REVIEW:
-            next_phase = PHASE_TERMINATED
-        else:
-            legal = self._legal_next(phase)
-            next_phase = legal[0] if legal else PHASE_TERMINATED
-
-        # 更新状态
-        state["phase"] = next_phase
-        state["sub_loop_step"] = 0
-        if phase == PHASE_ANALYZE:
-            state["iteration"] = state.get("iteration", 0) + 1
+        # 3. 设置状态为"等待用户决策"
+        state["status"] = "awaiting_decision"
         if gap_analysis:
             state["last_gap_analysis"] = gap_analysis
-
         self._write_state(state)
 
-        msg = f"阶段 '{phase}' 完成。进入 '{next_phase}'。"
-        if next_phase == PHASE_PLAN and phase == PHASE_ANALYZE:
-            msg = f"第{state.get('iteration', 0)}轮迭代完成。未达标，回到方案提出。"
-        elif next_phase == PHASE_WRITE:
-            msg = "达标！进入论文写作阶段。"
-        elif next_phase == PHASE_TERMINATED:
-            msg = "管线完成。"
+        cc_summary = self.cc.get_graph_summary()
+        grid_data = self.grid.get_heatmap_data()
+        coverage = grid_data.get("coverage", {})
 
         return {
-            "advanced": True,
-            "next_phase": next_phase,
-            "phase_completed": phase,
+            "phase": phase,
+            "data_written": True,
             "events": events,
             "gap_analysis": gap_analysis,
-            "message": msg,
+            "cc_atom_count": cc_summary.get("total_atoms", 0),
+            "grid_filled": coverage.get("filled", 0),
+            "grid_total": coverage.get("total", 0),
+            "message": f"阶段 '{phase}' 数据已写入。请在 Dashboard (localhost:8420/pipeline) 确认下一步。",
+        }
+
+    # ═══════════════════════════════════════════════════════════════
+    # MCP Tool: transition_phase (Dashboard 控制)
+    # ═══════════════════════════════════════════════════════════════
+
+    def transition_phase(self, action: str) -> dict:
+        """Dashboard 调用的阶段流转方法。LLM 不参与决策。"""
+        state = self._read_state()
+        phase = state["phase"]
+
+        if action == "satisfied":
+            next_phase = self._auto_next_phase(phase, state)
+            state["phase"] = next_phase
+            state["sub_loop_step"] = 0
+            state["status"] = "in_progress"
+            if phase == PHASE_ANALYZE:
+                state["iteration"] = state.get("iteration", 0) + 1
+            self._write_state(state)
+            self._post_to_dashboard(
+                state.get("session_id", ""), "phase_changed",
+                {"from": phase, "to": next_phase},
+            )
+            return {"transitioned": True, "from": phase, "to": next_phase}
+
+        elif action == "unsatisfied":
+            if phase == PHASE_REVIEW:
+                state["phase"] = PHASE_WRITE
+            state["sub_loop_step"] = 0
+            state["status"] = "in_progress"
+            self._write_state(state)
+            return {"transitioned": False, "phase": state["phase"],
+                    "message": f"重做阶段 '{state['phase']}'"}
+
+        elif action == "jump_to_write":
+            gap = state.get("last_gap_analysis")
+            if not gap or gap.get("target_score") is None:
+                return {"error": "无法进入写作：未定义成功目标。请先创建 success_criteria.md"}
+            state["phase"] = PHASE_WRITE
+            state["sub_loop_step"] = 0
+            state["status"] = "in_progress"
+            self._write_state(state)
+            return {"transitioned": True, "to": PHASE_WRITE}
+
+        elif action == "terminate":
+            state["phase"] = PHASE_TERMINATED
+            state["status"] = "terminated"
+            self._write_state(state)
+            return {"transitioned": True, "to": PHASE_TERMINATED}
+
+        return {"error": f"Unknown action: {action}"}
+
+    def _auto_next_phase(self, phase: str, state: dict) -> str:
+        """根据当前阶段自动计算下一阶段。"""
+        if phase == PHASE_PLAN:
+            return PHASE_RESEARCH
+        elif phase == PHASE_RESEARCH:
+            return PHASE_IDEATE
+        elif phase == PHASE_IDEATE:
+            return PHASE_CODE
+        elif phase == PHASE_CODE:
+            return PHASE_ANALYZE
+        elif phase == PHASE_ANALYZE:
+            target = self._read_success_target()
+            if target is not None:
+                fs = self.fitness.get_stats()
+                best = fs.get("global", {}).get("max_score", 0)
+                if best >= target:
+                    return PHASE_WRITE
+            return PHASE_PLAN  # 未达标→回到Plan，Island上已有积累
+        elif phase == PHASE_WRITE:
+            return PHASE_TERMINATED  # 满意→终止（不满意由用户选Review）
+        elif phase == PHASE_REVIEW:
+            return PHASE_WRITE  # Review后回到Write
+        return PHASE_TERMINATED
+
+    def _compute_gap_analysis(self, state: dict) -> dict:
+        """计算 gap analysis。target=None 时 gap=None。"""
+        target = self._read_success_target()
+        fs = self.fitness.get_stats()
+        best = fs.get("global", {}).get("max_score", 0)
+        cc_summary = self.cc.get_graph_summary()
+        grid_data = self.grid.get_heatmap_data()
+        coverage = grid_data.get("coverage", {})
+
+        if target is not None:
+            gap = max(0, target - best)
+            gap_pct = (gap / target * 100) if target > 0 else 0
+            target_met = best >= target
+        else:
+            gap = None
+            gap_pct = None
+            target_met = False
+
+        return {
+            "target_score": target,
+            "best_score": best,
+            "gap": gap,
+            "gap_percent": gap_pct,
+            "target_met": target_met,
+            "cc_atom_count": cc_summary.get("total_atoms", 0),
+            "grid_filled": coverage.get("filled", 0),
+            "grid_total": coverage.get("total", 0),
+            "iteration": state.get("iteration", 0),
         }
 
     def _read_success_target(self) -> float | None:
@@ -798,89 +883,166 @@ class PESController:
             return {"error": f"Unknown query_type: {query_type}"}
 
     def step_indexing(self, phase: str, agent_role: str) -> dict:
-        """STEP_indexing: 结构化概要 + 自主探索建议。
+        """STEP_indexing: 渐进式发现索引。
+
+        返回 discovery_index (结构形状，不含数据) + discovery_prompts (引导问题 + action 指令)。
+        Agent 必须通过 pes_cli 查询才能获取具体数据 — 不被 spoon-feed。
 
         phase: "Plan"|"Research"|"Ideate"|"RubricsJudge"
-        agent_role: "planner"|"researcher"|"analyst"
         """
-        atoms = self.cc.get_atoms(limit=200)
-        relations = self.cc.get_relations(limit=200)
-        elites = self.grid.get_elites()
-        empty_cells = self.grid.get_empty_cells()
-        anomalies = self.grid.get_anomaly_cells()
+        cc_idx = self.cc.get_atoms_index()
+        grid_idx = self.grid.get_discovery_index()
 
-        # 概要：按阶段侧重点不同
         if phase in ("Plan", PHASE_PLAN):
-            # 发现研究残缺
-            validated = [a for a in atoms if a["type"] == "method" and
-                        any(r["type"] == "validates" and r["source_id"] == a["id"]
-                            for r in relations)]
-            contradicts = [r for r in relations if r["type"] == "contradicts"]
-            summary = {
-                "focus": "研究残缺",
-                "validated_methods_count": len(validated),
-                "contradicts_count": len(contradicts),
-                "gaps": f"{len(empty_cells)} 个未探索cell",
-            }
-            suggested_queries = [
-                "查询所有 validates 关系 — 哪些方法已被验证有效？",
-                "查询所有 contradicts 关系 — 哪些方法已被证伪？",
-                "查询 boundary_of 关系 — 已知参数边界在哪？",
-            ]
-
+            return self._step_indexing_plan(agent_role, cc_idx, grid_idx)
         elif phase in ("Research", PHASE_RESEARCH):
-            # 发现不确定性
-            boundary_relations = [r for r in relations if r["type"] == "boundary_of"]
-            contradicts = [r for r in relations if r["type"] == "contradicts"]
-            summary = {
-                "focus": "不确定性",
-                "boundary_count": len(boundary_relations),
-                "contradicts_count": len(contradicts),
-                "uncertainty_zones": f"{len(anomalies)} 个异常cell待解决",
-            }
-            suggested_queries = [
-                "查询所有 boundary_of 关系 — 哪些边界条件模糊？",
-                "查询异常 cell 详情 — 同CC条件下为何性能差异巨大？",
-                "查询文献来源的 fact 原子 — 有哪些外部参考？",
-            ]
-
-        elif phase in ("Ideate", "ELO筛选", PHASE_ELO):
-            # 发现空白
-            summary = {
-                "focus": "空白",
-                "empty_cells_count": len(empty_cells),
-                "empty_cells_sample": empty_cells[:5],
-                "elites_count": len(elites),
-            }
-            suggested_queries = [
-                f"查询空 cell: {', '.join(empty_cells[:3]) if empty_cells else '全部已填充'}",
-                "查询精英变体的 method 原子 — 哪些方向已验证成功？",
-                "跨领域搜索：找与当前最优方法结构相似的相邻领域方法",
-            ]
-
+            return self._step_indexing_research(agent_role, cc_idx, grid_idx)
+        elif phase in ("Ideate", "W3.5 Ideate", PHASE_IDEATE):
+            return self._step_indexing_ideate(agent_role, cc_idx, grid_idx)
         elif phase in ("RubricsJudge", PHASE_ANALYZE):
-            # 发现缺失评价维度
-            summary = {
-                "focus": "缺失评价维度",
-                "anomaly_count": len(anomalies),
-                "elites_count": len(elites),
-                "active_dimensions": self.rubric.get_active_dimensions(),
-            }
-            suggested_queries = [
-                "查询拥挤 cell — 哪些 cell 内有多个相近得分变体需要 Rubric 对比？",
-                "查询当前活跃评分维度 — 是否有未覆盖的评估方面？",
-                "查询 Island 摘要 — 哪些方法家族需要对比？",
-            ]
-
+            return self._step_indexing_rubrics_judge(agent_role, cc_idx, grid_idx)
         else:
-            summary = {"focus": "general"}
-            suggested_queries = ["查询 CC 摘要", "查询 Grid 覆盖率"]
+            return {
+                "discovery_index": {"cc": cc_idx, "grid": grid_idx},
+                "discovery_prompts": [{"id": "gen-1", "question": "Explore the workspace", "action": "run pes_cli summary"}],
+                "agent_role": agent_role,
+                "phase_guidance": "Explore the workspace structure.",
+            }
 
+    def _step_indexing_plan(self, agent_role: str, cc_idx: dict, grid_idx: dict) -> dict:
+        """Plan: 发现研究残缺 (缺少的CC类型、空cell区域、未定义岛心)。"""
         return {
-            "summary": summary,
-            "suggested_queries": suggested_queries,
+            "discovery_index": {
+                "claim_chain": cc_idx,
+                "grid": {k: v for k, v in grid_idx.items()
+                        if k in ("dimension_names", "dimension_values", "total_cells",
+                                 "filled_cells", "empty_cells", "empty_regions")},
+            },
+            "discovery_prompts": [
+                {
+                    "id": "plan-gap-1",
+                    "category": "missing_cc_types",
+                    "question": f"The Claim Chain has types={cc_idx.get('type_counts',{})} but MISSING: {cc_idx.get('missing_atom_types',[])}. What method/theorem atoms should be created?",
+                    "action": "Run pes_cli atoms --type fact to inspect existing content. Identify which facts imply unstated methods.",
+                },
+                {
+                    "id": "plan-gap-2",
+                    "category": "missing_relations",
+                    "question": f"0 relations exist in CC. Which atoms logically relate to each other? Missing relation types: {cc_idx.get('missing_relation_types',[])}",
+                    "action": "Run pes_cli atoms to compare titles and tags. Identify which fact atoms should validate/contradict/derive from others.",
+                },
+                {
+                    "id": "plan-gap-3",
+                    "category": "empty_grid_regions",
+                    "question": f"{grid_idx.get('empty_cells',0)}/{grid_idx.get('total_cells',1)} cells empty. Are there adjacent empty regions representing unexplored behavioral regimes?",
+                    "action": "Run pes_cli cells --status empty to find adjacent empty regions.",
+                },
+            ],
             "agent_role": agent_role,
-            "phase": phase,
+            "phase_guidance": "Your mission as Plan agent: identify CONCRETE, TESTABLE research gaps. Focus on: (1) which empty behavioral regions are most promising, (2) which missing CC atom types block reasoning.",
+        }
+
+    def _step_indexing_research(self, agent_role: str, cc_idx: dict, grid_idx: dict) -> dict:
+        """Research: 发现不确定性 (边界违规、矛盾、异常cell)。"""
+        return {
+            "discovery_index": {
+                "claim_chain": cc_idx,
+                "grid": {k: v for k, v in grid_idx.items()
+                        if k in ("anomaly_count", "filled_cells", "total_cells")},
+                "uncertainty_zones": [
+                    {"type": "no_boundaries_defined", "severity": "high",
+                     "implication": "We do not know where any method fails — boundaries are undefined"},
+                    {"type": "no_contradictions_recorded", "severity": "medium",
+                     "implication": "No competing claims have been tested against each other"},
+                    {"type": f"all_{cc_idx.get('max_atom_id',0)}_atoms_are_orphans" if cc_idx.get('orphan_atom_count',0) > 0 else "connected",
+                     "severity": "medium",
+                     "implication": f"{cc_idx.get('orphan_atom_count',0)} atoms have zero relations — knowledge is fragmented"},
+                ],
+            },
+            "discovery_prompts": [
+                {
+                    "id": "research-unc-1",
+                    "question": "Without boundary_of relations, which fact atoms suggest implicit limits that should be formalized?",
+                    "action": "Run pes_cli atoms and look for claims about 'limitations', 'fails when', or 'only works if' in content.",
+                },
+                {
+                    "id": "research-unc-2",
+                    "question": "Which fact atoms make potentially CONTRADICTORY claims? E.g., one says entropy helps, another says deterministic is better.",
+                    "action": "Run pes_cli atoms --type fact and compare hypotheses across atoms with different tags.",
+                },
+                {
+                    "id": "research-unc-3",
+                    "question": f"Grid has {grid_idx.get('anomaly_count',0)} anomaly cells. Are there cells where similar methods produce very different scores?",
+                    "action": "Run pes_cli anomalies to identify score gaps >30% between variants in same cell.",
+                },
+            ],
+            "agent_role": agent_role,
+            "phase_guidance": "Your mission as Research agent: discover UNCERTAINTIES. Where is our knowledge incomplete or contradictory? What boundaries are unknown?",
+        }
+
+    def _step_indexing_ideate(self, agent_role: str, cc_idx: dict, grid_idx: dict) -> dict:
+        """Ideate: 发现空白 (未探索 cell 组合、未尝试 tag 组合)。"""
+        tag_vocab = cc_idx.get("tag_vocabulary", [])
+        return {
+            "discovery_index": {
+                "claim_chain": cc_idx,
+                "grid": {k: v for k, v in grid_idx.items()
+                        if k in ("dimension_names", "dimension_values", "total_cells",
+                                 "filled_cells", "empty_cells", "empty_regions")},
+                "unexplored_combinations": (
+                    f"{len(tag_vocab)} tags available, "
+                    f"{cc_idx.get('total_atoms',0)} atoms — "
+                    f"countless cross-tag combinations never tried"
+                ),
+            },
+            "discovery_prompts": [
+                {
+                    "id": "ideate-blank-1",
+                    "question": f"{grid_idx.get('empty_cells',0)} empty cells. Which specific cell would represent the most SURPRISING behavioral regime compared to known methods?",
+                    "action": "Run pes_cli cells --status empty. Map dimension values to algorithm properties. Find counter-intuitive combinations.",
+                },
+                {
+                    "id": "ideate-blank-2",
+                    "question": "Which pairs of CC fact tags have NEVER been combined? What would a method combining them look like?",
+                    "action": "Run pes_cli atoms to get all atoms, compute tag co-occurrence matrix, find zero-count pairs.",
+                },
+                {
+                    "id": "ideate-blank-3",
+                    "question": "What cross-domain structural analogies could produce entirely new method types?",
+                    "action": "Explore concept primitives library across evolution, NAS, causal inference, information theory, and control theory.",
+                },
+            ],
+            "agent_role": agent_role,
+            "phase_guidance": "Your mission as Ideate agent: discover BLANKS. Where are the unfilled spaces? What combinations have never been tried?",
+        }
+
+    def _step_indexing_rubrics_judge(self, agent_role: str, cc_idx: dict, grid_idx: dict) -> dict:
+        """RubricsJudge: 发现缺失评价维度。"""
+        return {
+            "discovery_index": {
+                "claim_chain": cc_idx,
+                "grid": {k: v for k, v in grid_idx.items()
+                        if k in ("dimension_names", "anomaly_count", "filled_cells")},
+                "evaluation_gaps": (
+                    f"Grid has {len(grid_idx.get('dimension_names',[]))} dimensions. "
+                    f"Additional dimensions may be needed: sample_efficiency, wall_clock_time, "
+                    f"hyperparameter_sensitivity, generalization_gap, compute_cost"
+                ),
+            },
+            "discovery_prompts": [
+                {
+                    "id": "eval-gap-1",
+                    "question": "Which evaluation dimensions are MISSING? Could 'sample_efficiency', 'wall_clock_time', or 'hyperparameter_sensitivity' distinguish methods that currently cluster together?",
+                    "action": "Run pes_cli cells --status filled. If methods cluster in same cells, propose finer-grained dimensions.",
+                },
+                {
+                    "id": "eval-gap-2",
+                    "question": f"Grid dimensions ({grid_idx.get('dimension_names',[])}) — do they overlap or leave gaps?",
+                    "action": "Check if 'generalization' or 'compute_efficiency' should be added to the grid.",
+                },
+            ],
+            "agent_role": agent_role,
+            "phase_guidance": "Your mission as RubricsJudge: discover MISSING evaluation dimensions. What aspects of performance are unmeasured?",
         }
 
     def step_decomposer(self, concept_primitives: list[dict] | None = None) -> dict:
@@ -1018,6 +1180,32 @@ class PESController:
                 ),
             }
 
+        # SME: 跨域关系同构搜索 (Structure Mapping Engine)
+        sme_mappings = []
+        try:
+            from structure_mapping_engine import StructureMappingEngine
+            sme = StructureMappingEngine()
+            seed_concepts = []
+            for p in primitives[:10]:
+                seed_concepts.extend(p.get("tags", []))
+                seed_concepts.append(p.get("title", "")[:30])
+            sme_isos = sme.find_isomorphisms_across_library(
+                list(set(seed_concepts)), min_similarity=0.5
+            )
+            for iso in sme_isos[:10]:
+                sme_mappings.append({
+                    "source_domain": iso.get("source_domain", ""),
+                    "target_domain": iso.get("target_domain", ""),
+                    "source_pattern": iso.get("source_pattern", []),
+                    "target_pattern": iso.get("target_pattern", []),
+                    "relation_chain": iso.get("isomorphic_relation_chain", ""),
+                    "confidence": iso.get("confidence", 0),
+                    "type": iso.get("type", "cross_domain"),
+                    "interpretation": iso.get("interpretation", ""),
+                })
+        except Exception:
+            pass  # SME 不可用时静默跳过
+
         return {
             "primitives": primitives,
             "relation_patterns": {
@@ -1028,6 +1216,7 @@ class PESController:
             "violable_boundaries": boundaries[:10],
             "mappings": mappings[:15],
             "grafts": grafts[:15],
+            "sme_mappings": sme_mappings,
             "conflict_zones": conflict_zones[:5],
             "web_primitives_count": web_count,
             "exploration_guidance": exploration_guidance,
@@ -1092,38 +1281,65 @@ class PESController:
         return grafts[:10]
 
     def _generate_fallback_proposals(self, state: dict) -> list[dict]:
-        """CC 空时从研究主题 + Grid 维度生成保底提案。"""
+        """CC 空时从研究主题 + 概念基元库生成多样化保底提案。
+
+        不再枚举 algorithm × axis 笛卡尔积。
+        改用概念基元库的跨域同构 + 多类型提案。
+        """
         import random
         topic = state.get("research_topic", "")
         proposals = []
 
+        # 从 topic 提取算法名
         algorithms = []
-        for alg in ["ppo", "sac", "td3", "ddpg", "a2c", "a3c"]:
-            if alg in topic.lower():
+        for alg in ["ppo", "sac", "td3", "ddpg", "a2c", "a3c", "crossq", "redq", "droq"]:
+            if alg.lower() in topic.lower():
                 algorithms.append(alg.upper())
         if not algorithms:
             algorithms = ["DDPG", "SAC", "TD3"]
 
-        axes = ["network_architecture", "exploration_strategy", "training_tricks", "reward_shaping"]
-
-        for alg in algorithms:
-            for axis in axes:
+        # 尝试加载概念基元库获取跨域同构
+        try:
+            from structure_mapping_engine import StructureMappingEngine
+            sme = StructureMappingEngine()
+            # 跨域搜索
+            isos = sme.find_isomorphisms_across_library([topic[:60]], min_similarity=0.4)
+            for iso in isos[:8]:
+                src_pat = " × ".join(iso.get("source_pattern", ["?"])[:2])
+                tgt_pat = " × ".join(iso.get("target_pattern", ["?"])[:2])
                 proposals.append({
-                    "violated_boundary": f"{axis}_convention",
-                    "primitive_a": alg,
-                    "primitive_b": axis,
-                    "counterfactual": f"What if we radically redesign {axis} for {alg}?",
-                    "potential_breakthrough": f"Novel {axis} for {alg}",
+                    "source_primitive": f"{iso.get('source_domain','')}:{src_pat}",
+                    "target_domain": f"{iso.get('target_domain','')}:{tgt_pat}",
+                    "isomorphic_relation": iso.get("isomorphic_relation_chain", ""),
+                    "confidence": iso.get("confidence", 0.5),
                 })
+        except Exception:
+            pass
 
-        for i in range(len(algorithms)):
-            for j in range(i + 1, len(algorithms)):
-                proposals.append({
-                    "source_primitive": algorithms[i],
-                    "target_domain": algorithms[j],
-                    "isomorphic_relation": f"Both actor-critic; what works for {algorithms[i]} may transfer to {algorithms[j]}",
-                    "confidence": 0.5,
-                })
+        # 如果 SME 无结果或不可用，用算法组合 + 多样化轴
+        if len(proposals) < 3:
+            diverse_axes = [
+                ("entropy_regularization", "violates the deterministic policy requirement", "counterfactual_graft"),
+                ("information_bottleneck_theory", "compresses task-irrelevant features", "structural_mapping"),
+                ("causal_graph_discovery", "identifies interventions for exploration", "structural_mapping"),
+                ("feedback_linearization", "replaces stochastic exploration with deterministic control", "counterfactual_graft"),
+                ("batch_normalization_trick", "eliminates target networks via implicit normalization", "counterfactual_graft"),
+            ]
+            for alg in algorithms[:2]:
+                for axis, mechanism, ptype in diverse_axes[:3]:
+                    proposals.append({
+                        "violated_boundary": f"{alg.lower()}_convention",
+                        "primitive_a": alg,
+                        "primitive_b": axis,
+                        "counterfactual": f"What if we apply {axis} ({mechanism}) to {alg}?",
+                        "potential_breakthrough": f"{axis} for {alg}: {mechanism}",
+                    })
+                    proposals.append({
+                        "source_primitive": alg,
+                        "target_domain": axis,
+                        "isomorphic_relation": mechanism,
+                        "confidence": 0.3,
+                    })
 
         empty = self.grid.get_empty_cells()
         if empty:
@@ -1139,107 +1355,498 @@ class PESController:
 
         return proposals[:15]
 
-    def step_recomposer(self, grafted_materials: dict, phase: str = "") -> list[dict]:
-        """STEP_Recomposer: 将 Decomposer 原材料格式化为带具体步骤的方案。"""
-        proposals = []
+    def step_recomposer(self, grafted_materials: dict, phase: str = "",
+                        existing_proposals: list[dict] | None = None) -> list[dict]:
+        """STEP_Recomposer: 三阶段创造性重组。
 
+        DIVERGENT: 每个边界违规生成一个候选 (强制结构多样性)
+        CONVERGENT: 为每个候选构建具体调和机制 (强制技术多样性)
+        FILTER: 移除同质化提案 (Jaccard 去重)
+        """
+        # Stage 1: DIVERGENT — 每边界一候选
+        candidates = self._divergent_generate(grafted_materials)
+        if not candidates:
+            candidates = self._legacy_recompose(grafted_materials)
+
+        # Stage 2: CONVERGENT — 构建调和机制
+        reconciled = self._convergent_reconcile(candidates, grafted_materials)
+
+        # Stage 3: FILTER — 去重
+        existing = existing_proposals or []
+        filtered = self._filter_homogeneous(reconciled, existing)
+
+        return filtered
+
+    def _divergent_generate(self, materials: dict) -> list[dict]:
+        """DIVERGENT: 每边界违规 + 跨域同构各生成候选。最少 3 个。"""
+        grafts = materials.get("grafts", [])
+        boundaries = materials.get("violable_boundaries", [])
+        mappings = materials.get("mappings", [])
+        sme_mappings = materials.get("sme_mappings", [])
+        primitives = materials.get("primitives", [])
+        candidates = []
+        seen_boundaries = set()
+
+        # Source 1: CC-internal grafts
+        for graft in grafts:
+            boundary = graft.get("violated_boundary", graft.get("boundary", ""))
+            if not boundary:
+                boundary = f"{graft.get('primitive_a','')}-{graft.get('primitive_b','')}"
+            if boundary in seen_boundaries:
+                continue
+            seen_boundaries.add(boundary)
+            candidates.append(self._make_graft_candidate(graft, boundary))
+
+        # Source 2: CC-internal mappings
+        for mapping in mappings:
+            mp_key = f"map:{mapping.get('source_primitive','')}-{mapping.get('target_domain','')}"
+            if mp_key in seen_boundaries:
+                continue
+            seen_boundaries.add(mp_key)
+            candidates.append(self._make_mapping_candidate(mapping, mp_key))
+
+        # Source 3: SME cross-domain isomorphisms
+        for sme in sme_mappings:
+            sme_key = f"sme:{sme.get('source_domain','')}-{sme.get('target_domain','')}"
+            if sme_key in seen_boundaries:
+                continue
+            seen_boundaries.add(sme_key)
+            candidates.append(self._make_sme_candidate(sme, sme_key))
+
+        # Source 4: Primitive-pair grafts (when CC sparse)
+        if len(candidates) < 3 and len(primitives) >= 2:
+            tag_groups: dict[str, list] = {}
+            for p in primitives:
+                for t in p.get("tags", []):
+                    tag_groups.setdefault(t, []).append(p)
+            unique_tags = list(tag_groups.keys())
+            for i in range(min(len(unique_tags), 4)):
+                for j in range(i + 1, min(i + 3, len(unique_tags))):
+                    pa = tag_groups[unique_tags[i]][0]
+                    pb = tag_groups[unique_tags[j]][0]
+                    boundary = f"{unique_tags[i]}×{unique_tags[j]}"
+                    if boundary in seen_boundaries:
+                        continue
+                    seen_boundaries.add(boundary)
+                    candidates.append({
+                        "title": f"Cross-Tag: {pa.get('title','?')[:30]} × {pb.get('title','?')[:30]}",
+                        "hypothesis": f"Combining {unique_tags[i]} with {unique_tags[j]} creates a novel synthesis",
+                        "method_sketch": f"1. Extract {unique_tags[i]} mechanism from {pa.get('title','?')}\n2. Adapt to {unique_tags[j]} domain of {pb.get('title','?')}\n3. Test hybrid",
+                        "primitives_used": [pa.get("title", ""), pb.get("title", "")],
+                        "novelty_claim": f"Cross-domain combination of {unique_tags[i]} × {unique_tags[j]}",
+                        "proposal_type": "counterfactual_graft",
+                        "violated_boundary": boundary,
+                    })
+
+        # Ensure minimum: borrow SME if still too few
+        if len(candidates) < 3 and sme_mappings:
+            for sme in sme_mappings:
+                for concept_domain in ["reinforcement_learning", "information_theory", "causal_inference"]:
+                    alt_key = f"sme-alt:{concept_domain}-{sme.get('target_domain','')}"
+                    if alt_key in seen_boundaries:
+                        continue
+                    seen_boundaries.add(alt_key)
+                    candidates.append({
+                        "title": f"SME-Discover: {concept_domain} insights for {sme.get('target_domain','')}",
+                        "hypothesis": f"Structural analogy between {concept_domain} and {sme.get('target_domain','')}",
+                        "method_sketch": f"1. Map {concept_domain} structural patterns\n2. Adapt to {sme.get('target_domain','')}\n3. Test transferred mechanism",
+                        "primitives_used": [concept_domain, sme.get("target_domain", "")],
+                        "novelty_claim": f"Cross-domain SME discovery: {concept_domain} → {sme.get('target_domain','')}",
+                        "proposal_type": "structural_mapping",
+                        "violated_boundary": alt_key,
+                    })
+                    break
+
+        return candidates
+
+    def _make_graft_candidate(self, graft: dict, boundary: str) -> dict:
+        return {
+            "title": f"Graft: {graft.get('primitive_a', '?')} × {graft.get('primitive_b', '?')}",
+            "hypothesis": graft.get("potential_breakthrough", graft.get("counterfactual", "")),
+            "method_sketch": (
+                f"1. Base: {graft.get('primitive_a', '?')} establishes baseline\n"
+                f"2. Violate: deliberately violate '{boundary}'\n"
+                f"3. Counterfactual: {graft.get('counterfactual', 'explore what happens when the boundary does not hold')}\n"
+                f"4. Reconcile: find a mechanism from another domain that naturally handles the violation\n"
+                f"5. Compare vs baseline to quantify the effect"
+            ),
+            "primitives_used": [graft.get("primitive_a", ""), graft.get("primitive_b", "")],
+            "novelty_claim": f"Cross-domain graft via deliberate violation of '{boundary}'",
+            "proposal_type": "counterfactual_graft",
+            "violated_boundary": boundary,
+        }
+
+    def _make_mapping_candidate(self, mapping: dict, mp_key: str) -> dict:
+        return {
+            "title": f"Map: {mapping.get('source_primitive', '?')} → {mapping.get('target_domain', '?')}",
+            "hypothesis": mapping.get("isomorphic_relation", ""),
+            "method_sketch": (
+                f"1. Analyze what makes {mapping.get('source_primitive', '?')} work\n"
+                f"2. Map isomorphic relational structure to {mapping.get('target_domain', '?')}\n"
+                f"3. Adapt the mapped mechanism to the target domain's constraints\n"
+                f"4. Test whether the structural analogy transfers"
+            ),
+            "primitives_used": [mapping.get("source_primitive", "")],
+            "novelty_claim": f"Isomorphic cross-domain mapping (confidence: {mapping.get('confidence', 'N/A')})",
+            "proposal_type": "structural_mapping",
+            "violated_boundary": mp_key,
+        }
+
+    def _make_sme_candidate(self, sme: dict, sme_key: str) -> dict:
+        src_pat = " × ".join(sme.get("source_pattern", ["?"])[:2])
+        tgt_pat = " × ".join(sme.get("target_pattern", ["?"])[:2])
+        return {
+            "title": f"SME: {sme.get('source_domain','?')}/{src_pat} → {sme.get('target_domain','?')}/{tgt_pat}",
+            "hypothesis": sme.get("interpretation", ""),
+            "method_sketch": (
+                f"1. Identify: {sme.get('source_pattern', ['?'])[0]} → {sme.get('target_pattern', ['?'])[0]}\n"
+                f"2. Map via: {sme.get('isomorphic_relation_chain', 'structural homology')}\n"
+                f"3. Adapt: {sme.get('target_pattern', ['?'])[-1] if sme.get('target_pattern') else 'mechanism'}\n"
+                f"4. Test cross-domain transfer"
+            ),
+            "primitives_used": sme.get("source_pattern", []) + sme.get("target_pattern", []),
+            "novelty_claim": f"SME-discovered cross-domain isomorphism ({sme.get('type','structural')}, confidence={sme.get('confidence',0):.2f})",
+            "proposal_type": "structural_mapping",
+            "violated_boundary": sme_key,
+        }
+
+    def _convergent_reconcile(self, candidates: list[dict], materials: dict) -> list[dict]:
+        """CONVERGENT: 为每个候选构建具体调和机制。
+
+        调和机制是使边界违规可行的具体技术方案。
+        必须引用 SME 跨域同构中的具体技术。
+        """
+        sme_mappings = materials.get("sme_mappings", [])
+        primitives = materials.get("primitives", [])
+
+        for candidate in candidates:
+            reconciliation = ""
+
+            # 策略1: 从 SME mappings 借用机制
+            for sme_map in sme_mappings[:5]:
+                if sme_map.get("type", "") in ("cyclic_3node", "control", "functional_isomorphism"):
+                    source = sme_map.get("source_pattern", [])
+                    target = sme_map.get("target_pattern", [])
+                    reconciliation = (
+                        f"Reconcile via {sme_map.get('cross_domain_name', sme_map.get('type', 'SME'))}: "
+                        f"the {'→'.join(source[:2])} → {'→'.join(target[:2])} isomorphism suggests "
+                        f"using {target[-1] if target else 'the mapped mechanism'} "
+                        f"to handle the boundary violation naturally"
+                    )
+                    break
+
+            # 策略2: 从 primitives 找互补机制
+            if not reconciliation and len(primitives) >= 2:
+                a = primitives[0].get("title", primitives[0].get("name", "A"))
+                b = primitives[-1].get("title", primitives[-1].get("name", "B"))
+                reconciliation = (
+                    f"Reconcile via complementary primitives: "
+                    f"'{a}' provides the foundation; "
+                    f"'{b}' supplies the mechanism to handle the boundary violation"
+                )
+
+            # 策略3: 通用调和
+            if not reconciliation:
+                reconciliation = (
+                    "Reconcile via progressive constraint relaxation: "
+                    "start with strict boundary, gradually relax, measure the trade-off curve, "
+                    "identify the Pareto-optimal point where violation yields net positive gain"
+                )
+
+            candidate["reconciliation_mechanism"] = reconciliation
+            # 扩展 method_sketch 加入调和步骤
+            candidate["method_sketch"] += f"\n5. Reconciliation: {reconciliation}"
+
+        return candidates
+
+    def _filter_homogeneous(self, proposals: list[dict], existing: list[dict],
+                           similarity_threshold: float = 0.6) -> list[dict]:
+        """FILTER: 移除过于相似的提案 (Jaccard 去重)。"""
+        if len(proposals) <= 1:
+            return proposals
+
+        kept = []
+        for i, p in enumerate(proposals):
+            p_tags = set(self._extract_tags_from_proposal(p))
+            is_duplicate = False
+
+            # 与已保留的比较
+            for k in kept:
+                k_tags = set(self._extract_tags_from_proposal(k))
+                if p_tags and k_tags:
+                    inter = len(p_tags & k_tags)
+                    union = len(p_tags | k_tags)
+                    sim = inter / max(union, 1)
+                    if sim > similarity_threshold:
+                        is_duplicate = True
+                        break
+
+            # 与已存在的比较
+            if not is_duplicate:
+                for e in existing:
+                    e_tags = set(self._extract_tags_from_proposal(e))
+                    if p_tags and e_tags:
+                        inter = len(p_tags & e_tags)
+                        union = len(p_tags | e_tags)
+                        sim = inter / max(union, 1)
+                        if sim > similarity_threshold:
+                            is_duplicate = True
+                            break
+
+            if not is_duplicate:
+                kept.append(p)
+
+        return kept
+
+    def _legacy_recompose(self, grafted_materials: dict) -> list[dict]:
+        """Legacy recomposer: 当无边界/grafts 时的后备格式化。"""
+        proposals = []
         for graft in grafted_materials.get("grafts", []):
             proposals.append({
                 "title": f"Graft: {graft.get('primitive_a', '?')} × {graft.get('primitive_b', '?')}",
                 "hypothesis": graft.get("potential_breakthrough", ""),
-                "method_sketch": (
-                    f"1. Base: {graft.get('primitive_a', '?')}\n"
-                    f"2. Violate: {graft.get('violated_boundary', 'unknown')}\n"
-                    f"3. Counterfactual: {graft.get('counterfactual', 'TBD')}\n"
-                    f"4. Compare vs baseline"
-                ),
+                "method_sketch": f"Base: {graft.get('primitive_a', '?')}\nViolate: {graft.get('violated_boundary', 'unknown')}\nCounterfactual: {graft.get('counterfactual', 'TBD')}",
                 "primitives_used": [graft.get("primitive_a", ""), graft.get("primitive_b", "")],
                 "novelty_claim": f"Cross-domain graft via {graft.get('violated_boundary', 'unknown')}",
                 "proposal_type": "counterfactual_graft",
             })
-
         for mapping in grafted_materials.get("mappings", []):
             proposals.append({
                 "title": f"Map: {mapping.get('source_primitive', '?')} → {mapping.get('target_domain', '?')}",
                 "hypothesis": mapping.get("isomorphic_relation", ""),
-                "method_sketch": (
-                    f"1. Identify what works in {mapping.get('source_primitive', '?')}\n"
-                    f"2. Map isomorphic structure to {mapping.get('target_domain', '?')}\n"
-                    f"3. Adapt and test"
-                ),
+                "method_sketch": f"Map structural analogy from {mapping.get('source_primitive', '?')} to {mapping.get('target_domain', '?')}",
                 "primitives_used": [mapping.get("source_primitive", "")],
                 "novelty_claim": f"Isomorphic mapping (confidence: {mapping.get('confidence', 'N/A')})",
                 "proposal_type": "structural_mapping",
             })
-
-        for zone in grafted_materials.get("conflict_zones", []):
-            proposals.append({
-                "title": f"Resolve: {zone.get('atom_a', '?')} vs {zone.get('atom_b', '?')}",
-                "hypothesis": zone.get("resolution_opportunity", ""),
-                "method_sketch": "Reproduce conflict conditions → control variables → determine driver",
-                "primitives_used": [zone.get("atom_a", ""), zone.get("atom_b", "")],
-                "novelty_claim": "Conflict resolution experiment",
-                "proposal_type": "conflict_resolution",
-            })
-
         return proposals
 
     def step_evaluator(self, proposal: dict) -> dict:
-        """STEP_Evaluator: 三条公理判别 (均通过 LLM，这里提供 Python 预提取的对比材料)。
+        """STEP_Evaluator: 三条公理判别 (可计算，不依赖 LLM)。
 
-        Proposal: {title, hypothesis, method_sketch, primitives_used}
+        proposal: {title, hypothesis, method_sketch, primitives_used, violated_boundary, proposal_type}
+
+        三公理:
+        - Self-Recognition: Jaccard tag 重叠检查 (>0.4 → pseudo)
+        - Paraphrase Invariance: 关键词组合唯一性 + 抽象结构稳定性
+        - Cumulative Property: 是否填补 CC/Grid 的空白或解决矛盾
         """
-        # 从 CC 提取对比材料
+        sr = self._compute_self_recognition(proposal)
+        pi = self._compute_paraphrase_invariance(proposal)
+        cp = self._compute_cumulative_property(proposal)
+
+        scores = [sr["score"], pi["score"], cp["score"]]
+        passed = [sr["verdict"] == "novel", pi["verdict"] == "novel", cp["verdict"] == "novel"]
+
+        if all(passed):
+            overall = "novel"
+        elif sum(passed) >= 2:
+            overall = "borderline"
+        else:
+            overall = "pseudo"
+
+        return {
+            "proposal": proposal.get("title", ""),
+            "axioms": {
+                "self_recognition": sr,
+                "paraphrase_invariance": pi,
+                "cumulative_property": cp,
+            },
+            "verdict": overall,
+            "scores": scores,
+            "passed": passed,
+            "requires_llm_review": (overall == "borderline"),
+        }
+
+    def _compute_self_recognition(self, proposal: dict) -> dict:
+        """Self-Recognition 公理: 结构重叠检查 (无 LLM)。
+
+        Jaccard 相似度 = |proposal_tags ∩ existing_tags| / |proposal_tags ∪ existing_tags|
+        阈值: >0.4 → pseudo (与已有知识太相似)
+        """
+        proposal_tags = set(self._extract_tags_from_proposal(proposal))
+
+        atoms = self.cc.get_atoms(limit=200)
+        max_similarity = 0.0
+        most_similar_title = ""
+
+        for atom in atoms:
+            atom_tags = set(atom.get("tags", []))
+            if not atom_tags and not proposal_tags:
+                continue
+            intersection = len(proposal_tags & atom_tags)
+            union = len(proposal_tags | atom_tags)
+            similarity = intersection / max(union, 1)
+            if similarity > max_similarity:
+                max_similarity = similarity
+                most_similar_title = atom["title"]
+
+        novelty_score = 1.0 - max_similarity
+
+        return {
+            "description": "检查新基元组合是否与已有基元图高度重叠 (Jaccard tag overlap)",
+            "score": round(novelty_score, 4),
+            "max_similarity_found": round(max_similarity, 4),
+            "most_similar_existing": most_similar_title[:100],
+            "overlap_threshold": 0.4,
+            "verdict": "novel" if max_similarity <= 0.4 else "pseudo",
+            "requires_llm": False,
+        }
+
+    def _extract_tags_from_proposal(self, proposal: dict) -> list[str]:
+        """从 proposal 的多个字段提取代表性 tags。"""
+        tags = set()
+        for field in ["primitives_used", "tags"]:
+            vals = proposal.get(field, [])
+            if isinstance(vals, list):
+                for v in vals:
+                    tags.add(str(v).lower().replace(" ", "-")[:40])
+        # 从 title 提取关键词
+        title = proposal.get("title", "")
+        for word in title.replace(":", " ").replace("×", " ").replace("→", " ").split():
+            w = word.strip().lower()
+            if len(w) > 2:
+                tags.add(w)
+        # 从 hypothesis 提取关键词
+        hyp = proposal.get("hypothesis", "")
+        for word in hyp.replace(":", " ").replace(";", " ").split():
+            w = word.strip().lower()
+            if len(w) > 3 and w not in ("that", "this", "will", "with", "from", "than"):
+                tags.add(w[:30])
+        return sorted(tags)[:50]
+
+    def _compute_paraphrase_invariance(self, proposal: dict) -> dict:
+        """Paraphrase Invariance 公理: 关键词组合唯一性检查。
+
+        不依赖 LLM。检查:
+        1. proposal 中的关键词组合是否在任一个 CC atom 中出现过
+        2. primitives_used 的唯一性
+        3. violated_boundary 的新颖性
+        """
+        proposal_tags = set(self._extract_tags_from_proposal(proposal))
+        primitives = set(proposal.get("primitives_used", []))
+
         atoms = self.cc.get_atoms(limit=200)
         relations = self.cc.get_relations(limit=200)
 
-        # self_recognition 材料: 已有基元图
-        existing_primitives = []
-        for a in atoms:
-            if a["type"] in ("method", "fact"):
-                existing_primitives.append({
-                    "atom_id": a["id"],
-                    "title": a["title"],
-                    "tags": a.get("tags", []),
-                    "content_snippet": a.get("content", "")[:150],
-                })
+        # 检查1: 关键词组合是否在 CC 中已出现?
+        tag_overlap_count = 0
+        for atom in atoms:
+            atom_tags = set(atom.get("tags", []))
+            common = proposal_tags & atom_tags
+            if len(common) >= 3:  # 3个以上共同tag → 高度重叠
+                tag_overlap_count += 1
 
-        # cumulative_property 材料: contradicts + boundaries
-        contradictions = [
-            {"source_id": r["source_id"], "target_id": r["target_id"],
-             "evidence": r.get("evidence", "")}
-            for r in relations if r["type"] == "contradicts"
-        ]
-        boundaries = [
-            {"atom_id": r["source_id"], "evidence": r.get("evidence", ""),
-             "metadata": r.get("metadata", {})}
-            for r in relations if r["type"] == "boundary_of"
-        ]
+        # 检查2: primitives 组合是否已存在?
+        primitive_uniqueness = 1.0
+        existing_primitive_sets = []
+        for atom in atoms:
+            existing_primitive_sets.append(set(atom.get("tags", [])))
+
+        if primitives:
+            max_prim_overlap = 0.0
+            for eps in existing_primitive_sets:
+                intersection = len(primitives & eps)
+                union = len(primitives | eps)
+                overlap = intersection / max(union, 1)
+                max_prim_overlap = max(max_prim_overlap, overlap)
+            primitive_uniqueness = 1.0 - max_prim_overlap
+
+        # 检查3: violated_boundary 是否是新提出的?
+        violated_boundary = proposal.get("violated_boundary", "")
+        boundary_in_cc = False
+        if violated_boundary:
+            for r in relations:
+                if r["type"] == "boundary_of":
+                    evidence = r.get("evidence", "").lower()
+                    if any(kw in evidence for kw in violated_boundary.lower().split()):
+                        boundary_in_cc = True
+                        break
+
+        # 综合分数
+        uniqueness_score = (
+            (1.0 if tag_overlap_count == 0 else max(0, 1.0 - tag_overlap_count * 0.15)) * 0.4 +
+            primitive_uniqueness * 0.4 +
+            (1.0 if not boundary_in_cc else 0.5) * 0.2
+        )
 
         return {
-            "proposal": proposal,
-            "evaluation_materials": {
-                "existing_primitives": existing_primitives[:50],
-                "contradictions": contradictions[:20],
-                "boundaries": boundaries[:10],
-            },
-            "axioms": {
-                "self_recognition": {
-                    "description": "检查新基元组合是否与已有基元图高度重叠",
-                    "requires_llm": True,
-                },
-                "paraphrase_invariance": {
-                    "description": "换多种表述后重新拆解，检查是否依然独特",
-                    "requires_llm": True,
-                },
-                "cumulative_property": {
-                    "description": "是否解决了内在矛盾或提升了功能边界",
-                    "requires_llm": True,
-                },
-            },
-            "verdict": "pending_llm",  # "novel"|"borderline"|"pseudo"
-            "scores": [0.0, 0.0, 0.0],
-            "passed": [False, False, False],
+            "description": "换多种表述后重新拆解，检查关键词组合唯一性 + primitives 组合新颖性",
+            "score": round(uniqueness_score, 4),
+            "tag_overlap_count": tag_overlap_count,
+            "primitive_uniqueness": round(primitive_uniqueness, 4),
+            "boundary_already_in_cc": boundary_in_cc,
+            "stability_threshold": 0.5,
+            "verdict": "novel" if uniqueness_score >= 0.5 else "borderline",
+            "requires_llm": False,
+        }
+
+    def _compute_cumulative_property(self, proposal: dict) -> dict:
+        """Cumulative Property 公理: 是否填补 CC/Grid 空白或解决矛盾。
+
+        检查:
+        1. 目标空 cell? (Grid 中有对应的未探索区域)
+        2. 创建缺失的 CC atom 类型? (method/theorem/verification)
+        3. 解决已知矛盾? (CC 中的 contradicts 关系)
+        4. 扩展已知边界? (CC 中的 boundary_of 关系)
+        分数 = addressed_points / 4
+        """
+        addressed_gaps = []
+        resolved_contradictions = []
+
+        # 检查1: 目标空 cell?
+        empty_cells = self.grid.get_empty_cells()
+        proposal_tags = set(self._extract_tags_from_proposal(proposal))
+        for cell_key in empty_cells[:30]:
+            cell_parts = set(cell_key.split("+"))
+            if any(tag.lower() in part.lower() for tag in proposal_tags for part in cell_parts):
+                addressed_gaps.append(f"targets_empty_cell:{cell_key}")
+                break
+
+        # 检查2: 创建缺失的 CC atom 类型?
+        cc_summary = self.cc.get_graph_summary()
+        existing_types = set(cc_summary.get("atom_types", {}).keys())
+        proposal_type = proposal.get("proposal_type", "")
+        if proposal_type in ("counterfactual_graft", "structural_mapping") and "method" not in existing_types:
+            addressed_gaps.append("creates_missing_cc_type:method")
+        if proposal_type == "structural_mapping" and "theorem" not in existing_types:
+            addressed_gaps.append("creates_missing_cc_type:theorem")
+
+        # 检查3: 解决已知矛盾?
+        relations = self.cc.get_relations(limit=200)
+        contradictions = [r for r in relations if r["type"] == "contradicts"]
+        proposal_primitives = set(proposal.get("primitives_used", []))
+        for c in contradictions:
+            src = self.cc.get_atom(c["source_id"])
+            tgt = self.cc.get_atom(c["target_id"])
+            if src and tgt:
+                c_tags = set(src.get("tags", []) + tgt.get("tags", []))
+                if proposal_primitives & c_tags:
+                    resolved_contradictions.append(f"{src['title'][:50]} vs {tgt['title'][:50]}")
+                    break
+
+        # 检查4: 扩展已知边界?
+        boundaries = [r for r in relations if r["type"] == "boundary_of"]
+        proposal_boundary = proposal.get("violated_boundary", "")
+        for b in boundaries:
+            b_atom = self.cc.get_atom(b["source_id"])
+            if b_atom and proposal_boundary:
+                b_tags = set(b_atom.get("tags", []))
+                if any(tag in proposal_boundary for tag in b_tags):
+                    addressed_gaps.append(f"extends_boundary:{b_atom['title'][:50]}")
+                    break
+
+        addressed_count = len(set(addressed_gaps))
+        score = addressed_count / 4.0
+
+        return {
+            "description": "检查新概念是否真正填补 CC/Grid 空白或解决已知矛盾",
+            "score": round(score, 4),
+            "addressed_gaps": addressed_gaps,
+            "resolved_contradictions": resolved_contradictions,
+            "cumulative_threshold": 0.25,
+            "verdict": "novel" if score >= 0.25 else "pseudo",
+            "requires_llm": False,
         }
 
     # ── Web reconnaissance helpers ──
@@ -1253,9 +1860,8 @@ class PESController:
             queries.append("Novel actor-critic improvements beyond hyperparameter tuning")
             queries.append("Creative reinforcement learning techniques for continuous control")
         elif phase == PHASE_RESEARCH:
-            cc_summary = self.cc.get_graph_summary()
             queries.append("SOTA continuous control RL techniques beyond DDPG SAC TD3")
-        elif phase == PHASE_ELO:
+        elif phase == PHASE_IDEATE:
             gap = state.get("last_gap_analysis")
             if gap:
                 queries.append(f"How to improve RL agent from {gap.get('best_score')} to {gap.get('target_score')}")
@@ -1364,12 +1970,10 @@ class PESController:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# MCP Server
+# 工具函数 (不再作为 MCP Server 暴露)
 # ═══════════════════════════════════════════════════════════════════
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from pipeline_protocol import atomic_read, atomic_write, dashboard_write, dashboard_write_approval
 
 _controller: PESController | None = None
 
@@ -1383,164 +1987,62 @@ def get_controller(workspace_dir: str = "") -> PESController:
     return _controller
 
 
-TOOLS = [
-    Tool(
-        name="pes_controller_init",
-        description="初始化 PES 工作空间。创建目录结构、Claim Chain、Cell Grid。自动调用 W1 Intake。",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "workspace_dir": {"type": "string", "description": "项目工作目录"},
-                "research_topic": {"type": "string", "description": "研究问题"},
-                "part2_dimensions": {
-                    "type": "array", "items": {"type": "object"},
-                    "description": "Part2 任务相关维度 [{\"name\":\"method_family\",\"values\":[\"baseline\",\"ppo\"]}]",
-                },
-            },
-            "required": ["workspace_dir", "research_topic"],
-        },
-    ),
-    Tool(
-        name="pes_controller_resume",
-        description="崩溃恢复：读 PIPELINE_STATE.json，验证文件完整性，返回恢复状态。",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "workspace_dir": {"type": "string", "description": "项目工作目录"},
-            },
-            "required": ["workspace_dir"],
-        },
-    ),
-    Tool(
-        name="pes_controller_state",
-        description="只读状态快照：当前阶段、CC摘要、Grid覆盖率、Fitness趋势、里程碑。",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "workspace_dir": {"type": "string", "description": "项目工作目录"},
-            },
-            "required": ["workspace_dir"],
-        },
-    ),
-    Tool(
-        name="pes_controller_pre_loop",
-        description="状态切换准备。只返回基础状态管理信息（不注入Claim Chain数据）。",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "workspace_dir": {"type": "string", "description": "项目工作目录"},
-            },
-            "required": ["workspace_dir"],
-        },
-    ),
-    Tool(
-        name="pes_controller_sub_loop",
-        description="分步返回当前阶段的执行步骤。每次调用返回下一步。全部完成返回done=true。",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "workspace_dir": {"type": "string", "description": "项目工作目录"},
-            },
-            "required": ["workspace_dir"],
-        },
-    ),
-    Tool(
-        name="pes_controller_post_loop",
-        description="提交阶段结果 + 用户确认。按规则写入CC/Cell Grid/Evolution Memory/Island。",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "workspace_dir": {"type": "string", "description": "项目工作目录"},
-                "satisfied": {"type": "boolean", "description": "用户是否满意当前阶段结果"},
-                "chosen_next_phase": {"type": "string",
-                                       "description": "用户选择的下一个阶段（不满意时可选）"},
-                "notes": {"type": "string", "description": "用户备注"},
-                "cc_atoms": {
-                    "type": "array",
-                    "items": {"type": "object"},
-                    "description": "Claim Chain 原子列表（仅真实文献/实验结果）: [{type, title, content, tags}]",
-                },
-                "experiment_results": {
-                    "type": "array",
-                    "items": {"type": "object"},
-                    "description": "实验结果列表（W5专用）: [{variant_id, score, descriptor}]",
-                },
-            },
-            "required": ["workspace_dir", "satisfied"],
-        },
-    ),
-]
+def _start_http_server(port: int = 8421):
+    """启动 HTTP 服务器供 Dashboard 调用阶段流转 (保留兼容)。"""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
 
+    class TransitionHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path == "/api/transition":
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+                workspace = body.get("workspace_dir", os.getcwd())
+                action = body.get("action", "satisfied")
+                try:
+                    ctrl = get_controller(workspace)
+                    result = ctrl.transition_phase(action)
+                    code = 200
+                except Exception as e:
+                    result = {"error": str(e)}
+                    code = 500
+                payload = json.dumps(result, ensure_ascii=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            else:
+                self.send_response(404)
+                self.end_headers()
 
-async def handle_tool(name: str, arguments: dict) -> str:
-    ws = arguments.get("workspace_dir", os.getcwd())
-    ctrl = get_controller(ws)
+        def log_message(self, format, *args):
+            pass
 
-    if name == "pes_controller_init":
-        result = ctrl.init(
-            research_topic=arguments["research_topic"],
-            part2_dimensions=arguments.get("part2_dimensions"),
-        )
-    elif name == "pes_controller_resume":
-        result = ctrl.resume()
-    elif name == "pes_controller_state":
-        result = ctrl.get_state()
-    elif name == "pes_controller_pre_loop":
-        result = ctrl.pre_loop()
-    elif name == "pes_controller_sub_loop":
-        result = ctrl.sub_loop()
-    elif name == "pes_controller_post_loop":
-        result = ctrl.post_loop(
-            satisfied=arguments["satisfied"],
-            chosen_next_phase=arguments.get("chosen_next_phase", ""),
-            notes=arguments.get("notes", ""),
-            cc_atoms=arguments.get("cc_atoms"),
-            experiment_results=arguments.get("experiment_results"),
-        )
-    else:
-        result = {"error": f"Unknown tool: {name}"}
-
-    return json.dumps(result, indent=2, ensure_ascii=False)
-
-
-def create_server():
-    server = Server("pes-controller")
-
-    @server.list_tools()
-    async def list_tools() -> list[Tool]:
-        return TOOLS
-
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        result_text = await handle_tool(name, arguments)
-        return [TextContent(type="text", text=result_text)]
-
-    return server
-
-
-async def run_server():
-    server = create_server()
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream,
-                        server.create_initialization_options())
+    server = HTTPServer(("0.0.0.0", port), TransitionHandler)
+    print(f"[PES HTTP] Listening on port {port} for Dashboard transitions")
+    server.serve_forever()
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="PES Controller MCP Server")
-    parser.add_argument("--test", action="store_true", help="Print registered tools")
+    parser = argparse.ArgumentParser(description="PES Controller (非 MCP, Dashboard 直调)")
+    parser.add_argument("--test", action="store_true", help="Print phase/chains/transitions")
     args = parser.parse_args()
 
     if args.test:
-        print("PES Controller — MCP Server")
-        print(f"Tools: {len(TOOLS)}")
-        for tool in TOOLS:
-            print(f"  {tool.name}: {tool.description[:100]}")
-        print("\nAdd to Claude Code with:")
-        print("  claude mcp add pes-controller -- python tools/pes_controller.py")
+        print("PES Controller — Dashboard 直驱模式")
+        print(f"\nPhases: {PHASES}")
+        print(f"\nCHAIN_STEPS:")
+        for k, v in CHAIN_STEPS.items():
+            print(f"  {k}: {v}")
+        print(f"\nTRANSITIONS:")
+        for k, v in TRANSITIONS.items():
+            print(f"  {k} → {v}")
     else:
-        import asyncio
-        asyncio.run(run_server())
+        import threading
+        http_thread = threading.Thread(target=_start_http_server, daemon=True)
+        http_thread.start()
+        http_thread.join()
 
 
 if __name__ == "__main__":

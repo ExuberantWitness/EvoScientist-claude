@@ -107,6 +107,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <select id="sessionSelect"><option value="">-- Select Session --</option></select>
     <a id="navGraph" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Claim Chain</a>
     <a id="navGrid" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Evolve Grid</a>
+    <a id="navPipeline" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Pipeline</a>
     <span id="statusBadge" style="padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface)">idle</span>
     <button class="btn" id="btnRestart" onclick="restartDashboard()" title="Restart dashboard service">Restart</button>
   </div>
@@ -350,12 +351,13 @@ async function loadSessions() {
 }
 
 function updateNavLinks(sid) {
-  const g = $('#navGraph'), gr = $('#navGrid');
+  const g = $('#navGraph'), gr = $('#navGrid'), p = $('#navPipeline');
   if (sid) {
     g.href = '/sessions/' + sid + '/graph'; g.style.display = '';
     gr.href = '/sessions/' + sid + '/grid'; gr.style.display = '';
+    p.href = '/sessions/' + sid + '/pipeline'; p.style.display = '';
   } else {
-    g.style.display = 'none'; gr.style.display = 'none';
+    g.style.display = 'none'; gr.style.display = 'none'; p.style.display = 'none';
   }
 }
 
@@ -647,14 +649,15 @@ async function pollPipeline(sessionId) {
       $('#phaseDetail').style.display = 'none';
       return;
     }
-    const phase = state.phase || 0;
+    const PHASE_ORDER = {"W2 Plan":0,"W3 Research":1,"W3.5 Ideate":2,"W4 Code":3,"W5 Analyze":4,"W6 Write":5,"W7 Review":6,"已终止":7};
+    const phaseIdx = PHASE_ORDER[state.phase] !== undefined ? PHASE_ORDER[state.phase] : 0;
     const status = state.status || 'in_progress';
 
     $$('.phase').forEach(p => {
       const pPhase = parseFloat(p.dataset.phase);
-      if (pPhase < phase) {
+      if (pPhase < phaseIdx) {
         p.className = 'phase completed'; p.querySelector('.status-dot').className = 'status-dot completed';
-      } else if (pPhase === phase) {
+      } else if (pPhase === phaseIdx) {
         // Current phase — pick class based on status
         let cls = 'running', dotCls = 'running';
         if (status === 'awaiting_claude_code') { cls = 'awaiting'; dotCls = 'awaiting'; }

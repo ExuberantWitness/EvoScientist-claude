@@ -284,6 +284,61 @@ class ClaimChain:
             "relation_types": rel_type_counts,
         }
 
+    def get_atoms_index(self) -> dict:
+        """返回结构索引不含完整内容，供渐进式发现用。
+
+        Agent 看到结构形状（哪些类型存在/缺失、孤原子数量、tag词汇表），
+        但不直接看到数据。必须通过 pes_cli 查询才能获取详情。
+        """
+        atoms = self.get_atoms(status=None)
+        relations = self.get_relations()
+
+        type_counts = {}
+        for a in atoms:
+            t = a["type"]
+            type_counts[t] = type_counts.get(t, 0) + 1
+
+        related_ids = set()
+        for r in relations:
+            related_ids.add(r["source_id"])
+            related_ids.add(r["target_id"])
+
+        all_ids = {a["id"] for a in atoms}
+        orphan_count = len(all_ids - related_ids)
+
+        rel_type_counts = {}
+        for r in relations:
+            t = r["type"]
+            rel_type_counts[t] = rel_type_counts.get(t, 0) + 1
+
+        # Tag vocabulary
+        all_tags = set()
+        for a in atoms:
+            for tag in a.get("tags", []):
+                all_tags.add(tag)
+
+        # Missing atom types (common research pipeline types)
+        all_known_types = {"fact", "method", "theorem", "verification", "hypothesis", "observation"}
+        missing_types = sorted(all_known_types - set(type_counts.keys()))
+
+        # Missing relation types
+        all_known_rels = {"validates", "contradicts", "derives", "boundary_of", "motivates",
+                         "specializes", "compares_to", "causes"}
+        missing_rels = sorted(all_known_rels - set(rel_type_counts.keys()))
+
+        return {
+            "total_atoms": len(atoms),
+            "type_counts": type_counts,
+            "missing_atom_types": missing_types,
+            "total_relations": len(relations),
+            "relation_type_counts": rel_type_counts,
+            "missing_relation_types": missing_rels,
+            "orphan_atom_count": orphan_count,
+            "max_atom_id": max(all_ids) if all_ids else 0,
+            "tag_vocabulary": sorted(all_tags),
+            "empty": len(atoms) == 0,
+        }
+
     def export_dot(self) -> str:
         """Export the graph as a DOT format string for visualization."""
         atoms = self.get_atoms()

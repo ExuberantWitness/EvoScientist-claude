@@ -1,0 +1,55 @@
+{
+  "behavior_dims": [
+    {
+      "name": "lr_level",
+      "values": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    {
+      "name": "network_size",
+      "values": [
+        "small",
+        "medium",
+        "large"
+      ]
+    }
+  ],
+  "dim_names": [
+    "lr_level",
+    "network_size"
+  ],
+  "param_mapping": {
+    "lr_level": {
+      "high": {
+        "lr": 0.01
+      },
+      "medium": {
+        "lr": 0.003
+      },
+      "low": {
+        "lr": 0.001
+      }
+    },
+    "network_size": {
+      "small": {
+        "hidden": 8
+      },
+      "medium": {
+        "hidden": 32
+      },
+      "large": {
+        "hidden": 64
+      }
+    }
+  },
+  "training_command": "python train_a2c.py --lr {lr} --hidden {hidden} --gamma {gamma} --episodes {episodes} --seed {seed} --normalize-advantage",
+  "max_rounds": 20,
+  "exploit_ratio": 0.7,
+  "stagnation_window": 5,
+  "stagnation_threshold": 0.01,
+  "success_threshold": 195.0,
+  "archive_dir": "evolve_archive"
+}
