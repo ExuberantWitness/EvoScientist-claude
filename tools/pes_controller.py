@@ -46,8 +46,9 @@ PHASE_TERMINATED = "已终止"
 PHASES = [PHASE_PLAN, PHASE_RESEARCH, PHASE_IDEATE, PHASE_CODE,
           PHASE_ANALYZE, PHASE_WRITE, PHASE_REVIEW]
 
-# Phases that require Agent SDK subprocess (W4 Code, W6 Write, W7 Review)
-AGENT_SDK_PHASES = frozenset({PHASE_CODE, PHASE_WRITE, PHASE_REVIEW})
+# Phases that require Agent SDK subprocess (W6 Write, W7 Review)
+# W4 Code 改用 Plan-driven 模式 (generate_code_plan + wait_user_code)
+AGENT_SDK_PHASES = frozenset({PHASE_WRITE, PHASE_REVIEW})
 
 # Phase transitions (from → [legal next])
 TRANSITIONS = {
@@ -81,7 +82,9 @@ CHAIN_STEPS = {
         "elo_tournament", "evolution_memory",
     ],
     PHASE_CODE: [
-        "run_step_pipeline", "invoke_skill_code",
+        "run_step_pipeline",      # 加载 CC/EM 上下文
+        "generate_code_plan",     # 生成 implementation_plan.md
+        "wait_user_code",         # 等待用户通过 /evo-code-agent-post 完成
     ],
     PHASE_ANALYZE: [
         "run_step_pipeline", "scan_islands_rubrics",
@@ -368,6 +371,11 @@ class PESController:
                 "action": "wait_for_decision",
                 "message": "等待用户在 Dashboard (localhost:8420/pipeline) 做决策...",
             }
+
+        # W4 Code: 等待用户在 Claude Code 中完成实现
+        if state.get("status") == "awaiting_user_code":
+            return self._wait_user_code(state, state["phase"])
+
         phase = state["phase"]
         step_idx = state.get("sub_loop_step", 0)
         chain = CHAIN_STEPS.get(phase, [])
@@ -506,6 +514,12 @@ class PESController:
                     f"- 未探索 Cell: {guidance.get('unexplored_count', 0)}",
                     f"- **指令**: {guidance.get('directive', '')}",
                 ])
+
+            # ── 迭代上下文: 从 CC 提取上次实验结论 ──
+            iter_parts = self._build_iteration_context()
+            if iter_parts:
+                topic_parts.extend(iter_parts)
+
             return {
                 "done": False,
                 "phase": phase,
@@ -557,16 +571,11 @@ class PESController:
                            f"研究方向: {state.get('research_topic', '')}",
             }
 
-        elif step_name == "invoke_skill_code":
-            return {
-                "done": False,
-                "phase": phase,
-                "step": step_name,
-                "step_index": state.get("sub_loop_step", 0) - 1,
-                "action": "invoke_skill",
-                "skill": "/evo-code",
-                "argument": "基于plan.md实现实验代码。单Agent模式。",
-            }
+        elif step_name == "generate_code_plan":
+            return self._generate_code_plan(state, phase)
+
+        elif step_name == "wait_user_code":
+            return self._wait_user_code(state, phase)
 
         elif step_name == "ingest_results":
             results = self._auto_ingest_results()
@@ -655,6 +664,415 @@ class PESController:
             }
 
         return {"done": True, "phase": phase}
+
+    # ═══════════════════════════════════════════════════════════════
+    # W4 Code — Plan-driven 模式: generate_code_plan + wait_user_code
+    # ═══════════════════════════════════════════════════════════════
+
+    def _generate_code_plan(self, state: dict, phase: str) -> dict:
+        """生成 implementation_plan.md，从 CC/plan/research_notes 自动提取交付物清单。"""
+        import uuid
+        from datetime import datetime
+
+        workspace = self.workspace
+        plan_id = str(uuid.uuid4())
+        session_id = state.get("session_id", "")
+        research_topic = state.get("research_topic", "")
+        iteration = state.get("iteration", 0)
+
+        # ── 收集上下文 ──
+        context_parts = []
+        plan_text = ""
+
+        plan_md = workspace / "plan.md"
+        if plan_md.exists():
+            plan_text = plan_md.read_text(encoding='utf-8')[:5000]
+            context_parts.append(f"## 实验计划\n{plan_text}")
+
+        # Claim Chain atoms
+        cc_atoms = []
+        cc_dir = workspace / "claim_chain"
+        if cc_dir.exists():
+            atoms_path = cc_dir / "atoms.jsonl"
+            if atoms_path.exists():
+                raw = atoms_path.read_text(encoding='utf-8')
+                context_parts.append(f"## Claim Chain 原子\n{raw[:3000]}")
+                for line in raw.strip().split("\n"):
+                    try:
+                        cc_atoms.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+
+        rn_text = ""
+        rn_path = workspace / "research_notes.md"
+        if rn_path.exists():
+            rn_text = rn_path.read_text(encoding='utf-8')[:3000]
+            context_parts.append(f"## 文献调研笔记\n{rn_text}")
+
+        em_summary = self._load_evolution_memory_summary()
+        if em_summary:
+            context_parts.append(f"## Evolution Memory\n{json.dumps(em_summary, indent=2)[:2000]}")
+
+        context = "\n\n".join(context_parts) if context_parts else "(空工作空间，请从零开始)"
+
+        # ── 从 CC 提取方法/实验/提案 ──
+        methods = []
+        baselines = []
+        experiments = []
+        for a in cc_atoms:
+            title = a.get("title", "")
+            tags = a.get("tags", [])
+            content = a.get("content", "")[:200]
+            if a.get("type") == "fact" and any(
+                t in tags for t in ["next-iteration", "method", "literature", "SOTA_2026"]
+            ):
+                methods.append({"title": title, "tags": tags, "content": content})
+            elif a.get("type") == "fact" and any(
+                t in tags for t in ["benchmark", "baseline", "SAC", "TD3", "PPO", "DDPG"]
+            ):
+                baselines.append({"title": title, "tags": tags, "content": content})
+            elif a.get("type") == "fact" and "experiment" in tags:
+                experiments.append({"title": title, "tags": tags, "content": content})
+
+        # 去重
+        seen = set()
+        unique_methods = []
+        for m in methods:
+            if m["title"] not in seen:
+                seen.add(m["title"])
+                unique_methods.append(m)
+
+        # ── 生成交付物清单 ──
+        deliverables = []
+        specs = []
+
+        # 基础设施 (总是需要)
+        deliverables.append("- [ ] artifacts/config.py — 超参数配置 (环境名/Hopper-v4, 种子, 网络结构, 训练参数)")
+        deliverables.append("- [ ] artifacts/networks.py — Actor/Critic 网络定义 (MLP, 层数可配)")
+        deliverables.append("- [ ] artifacts/buffer.py — Replay Buffer (支持 state/action/reward/done 存储)")
+        deliverables.append("- [ ] artifacts/trainer.py — 通用训练器 (支持多算法, WandB 日志, checkpoint 保存)")
+        specs.append("### artifacts/config.py\n- Hopper-v4 环境配置\n- 所有算法共享的超参数: seed=42, gamma=0.99, tau=0.005, batch_size=256, buffer_size=1e6\n- 每个算法的专属参数 (如 SAC alpha, TD3 policy_noise)")
+        specs.append("### artifacts/networks.py\n- Actor: MLP(state_dim → 256 → 256 → action_dim), tanh 输出\n- Critic: MLP(state_dim+action_dim → 256 → 256 → 1)\n- 支持 BatchNorm (CrossQ 需要) 和 Dropout (DroQ 需要)")
+
+        # ── 迭代感知基线选择 ──
+        # 读取上次实验结论：哪些算法已验证/矛盾
+        experiment_atoms = [a for a in cc_atoms
+                          if "experiment" in a.get("tags", [])]
+        tested_algos = {}  # algo_name → {"score": mean, "status": "validated"|"contradicted"}
+        for a in experiment_atoms:
+            for tag in a.get("tags", []):
+                if tag.upper() in ("SAC", "TD3", "PPO", "DDPG", "REDQ", "BSRS", "EMTD3", "CROSSQ"):
+                    tested_algos[tag.upper()] = {
+                        "score": a.get("metadata", {}).get("score", a.get("content", "")),
+                        "title": a.get("title", ""),
+                    }
+
+        # 读 CC relations: 找 validates/contradicts
+        cc_relations = []
+        cc_dir = workspace / "claim_chain"
+        if (cc_dir / "relations.jsonl").exists():
+            for line in (cc_dir / "relations.jsonl").read_text().split("\n"):
+                if line.strip():
+                    try:
+                        cc_relations.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+
+        _meta = {"experiment", "w5-analyze", "benchmark", "literature", "method", "survey",
+                 "continuous-control", "actor_critic", "exploration", "next-iteration"}
+        validated_algos = set()
+        contradicted_algos = set()
+        for r in cc_relations:
+            if r.get("type") == "validates":
+                src = next((a for a in cc_atoms if a.get("id") == r["source_id"]), None)
+                if src:
+                    for tag in src.get("tags", []):
+                        if tag.lower() not in _meta:
+                            validated_algos.add(tag.upper())
+            elif r.get("type") == "contradicts":
+                tgt = next((a for a in cc_atoms if a.get("id") == r["target_id"]), None)
+                if tgt:
+                    for tag in tgt.get("tags", []):
+                        if tag.lower() not in _meta:
+                            contradicted_algos.add(tag.upper())
+
+        # 决定基线: 首次迭代用 SAC+TD3，后续迭代跳过已验证的，加入 ELO 提案
+        base_algos = set()
+        baseline_notes = []
+        if not experiment_atoms:
+            # 首次迭代
+            base_algos.update(["SAC", "TD3"])
+            baseline_notes.append("首次迭代: SAC + TD3 基线")
+        else:
+            baseline_notes.append(f"上次已测: {sorted(tested_algos.keys())}")
+            if validated_algos:
+                baseline_notes.append(f"已验证有效: {sorted(validated_algos)}")
+            if contradicted_algos:
+                baseline_notes.append(f"已验证矛盾: {sorted(contradicted_algos)}")
+            # 保留已验证的作为 baseline (用于对照)
+            base_algos.update(validated_algos)
+            # 核心基线不能少
+            if "SAC" not in base_algos and "TD3" not in base_algos:
+                base_algos.update(["SAC", "TD3"])
+                baseline_notes.append("保留 SAC+TD3 作为 baseline 对照")
+
+        # 追踪已用文件名避免重复 (需在 ELO 循环前初始化)
+        used_fnames = {a.lower() for a in base_algos}
+        used_fnames.update({"config", "networks", "buffer", "trainer", "train_all", "analyze", "smoke_test"})
+
+        # 加入 ELO 排名 Top-3 提案方法
+        tournament = state.get("last_tournament_result", {})
+        ranked = tournament.get("ranked", [])
+        elo_added = 0
+        for r_item in ranked[:3]:
+            r_title = r_item.get("title", "")
+            if r_title and elo_added < 3:
+                abbr = r_title.split(":")[0].strip().split()[0].lower()[:20]
+                if abbr not in used_fnames:
+                    base_algos.add(abbr.upper())
+                    used_fnames.add(abbr.lower())
+                    baseline_notes.append(f"ELO Top-{elo_added+1}: {r_title[:60]}")
+                    elo_added += 1
+
+        for algo in sorted(base_algos):
+            fname = algo.lower()
+            if algo in tested_algos:
+                score_info = str(tested_algos[algo]['score'])
+                if len(score_info) > 60:
+                    score_info = score_info[:57] + '...'
+                deliverables.append(f"- [ ] artifacts/{fname}.py — {algo} [KEEP] 上次已验证")
+            elif algo in contradicted_algos:
+                deliverables.append(f"- [ ] artifacts/{fname}.py — {algo} [RESOLVE] 上次矛盾，需修正")
+            else:
+                deliverables.append(f"- [ ] artifacts/{fname}.py — {algo} [NEW] 新提案")
+            specs.append(f"### artifacts/{fname}.py\n- 与 trainer.py 接口兼容")
+        used_fnames.update({"config", "networks", "buffer", "trainer", "train_all", "analyze", "smoke_test"})
+
+        # 提案方法 (从 CC unique_methods 提取)
+        _skip_tags = {"literature", "experiment", "benchmark", "survey", "method",
+                      "exploration", "next-iteration", "continuous-control",
+                      "actor_critic", "overestimation", "evaluation", "diagnosis"}
+        proposal_count = 0
+        for m in unique_methods[:5]:  # 最多 5 个提案
+            title = m["title"]
+            # Step 1: 从 tags 找未占用的算法简称
+            algo_abbr = None
+            for tag in m.get("tags", []):
+                if (tag.isupper() and 2 <= len(tag) <= 12
+                        and tag.lower() not in _skip_tags
+                        and not tag.startswith(("ICML", "AAAI", "NeurIPS", "ICLR", "IEEE", "ACM", "202"))):
+                    abbr = tag.lower()
+                    if abbr not in used_fnames:
+                        algo_abbr = abbr
+                        break
+            # Step 2: fallback — 从 title 提取
+            if not algo_abbr:
+                first_word = title.split(":")[0].strip().split()[0]
+                algo_abbr = first_word.lower().replace("-", "_").replace("(", "").replace(")", "")[:25]
+            # Step 3: 如果还冲突，加数字后缀
+            orig = algo_abbr
+            counter = 1
+            while algo_abbr in used_fnames:
+                algo_abbr = f"{orig}{counter}"
+                counter += 1
+            if algo_abbr:
+                used_fnames.add(algo_abbr)
+                deliverables.append(f"- [ ] artifacts/{algo_abbr}.py — {title[:80]}")
+                specs.append(f"### artifacts/{algo_abbr}.py\n- 来源: {title}\n- 摘要: {m['content'][:200]}\n- 与 trainer.py 接口兼容")
+                proposal_count += 1
+
+        # ELO 最高提案
+        tournament = state.get("last_tournament_result", {})
+        winner = tournament.get("winner", "")
+        if winner and proposal_count == 0:
+            winner_short = winner.split(":")[0].strip().lower().replace(" ", "_")[:30]
+            deliverables.append(f"- [ ] artifacts/{winner_short}.py — ELO 冠军: {winner[:80]}")
+            specs.append(f"### artifacts/{winner_short}.py\n- ELO 冠军提案: {winner}\n- 与 trainer.py 接口兼容")
+
+        # 运行脚本
+        deliverables.append("- [ ] artifacts/train_all.py — 一键训练所有算法的 master 脚本")
+        deliverables.append("- [ ] artifacts/analyze.py — 结果分析脚本 (学习曲线, 性能对比表, 统计检验)")
+        deliverables.append("- [ ] artifacts/smoke_test.py — Smoke test (1 episode, 检查无 NaN/维度错误)")
+
+        specs.append("### artifacts/train_all.py\n- 依次或并行运行所有算法配置\n- 每个算法保存独立 checkpoint 和日志\n- 支持 --algo 参数只跑指定算法\n- 支持 --quick 模式 (减少 timesteps 用于快速验证)")
+        specs.append("### artifacts/analyze.py\n- 读取所有算法日志, 绘制学习曲线\n- 输出性能对比表 (mean ± std over seeds)\n- Welch's t-test 显著性检验\n- 输出 analysis_report.md")
+
+        # ── 生成验收标准 ──
+        acceptance = """1. `python artifacts/smoke_test.py` 所有算法通过 (无 import 错误, 无 NaN, 无维度 mismatch)
+2. `python artifacts/train_all.py --quick` 所有算法在 5000 steps 内不崩溃
+3. SAC 和 TD3 基线在 Hopper-v4 上 200k steps 达到已知性能范围 (SAC: ~2000-3000, TD3: ~2000-3500)
+4. 至少一个提案方法在 200k steps 内超越最强基线 >5%
+5. `python artifacts/analyze.py` 正常输出分析报告"""
+
+        deliverables_str = "\n".join(deliverables)
+        specs_str = "\n\n".join(specs)
+
+        # 迭代上下文
+        iter_context = ""
+        if experiment_atoms:
+            iter_context = f"""## 迭代上下文 (来自上次 W5 Analyze)
+- 迭代: {iteration}
+- 上次已测算法: {len(tested_algos)} 个 ({', '.join(sorted(tested_algos.keys()))})
+- 上次基线评估: {'; '.join(baseline_notes) if baseline_notes else '首次迭代'}
+- CC experiment atoms: {len(experiment_atoms)} 个
+- CC relations: {len(cc_relations)} 条
+- ELO 锦标赛排名: Top-1 = {ranked[0].get('title', 'N/A')[:80] if ranked else 'N/A'}
+
+"""
+        else:
+            iter_context = f"""## 迭代上下文
+- 首次迭代 (iteration={iteration})
+- CC experiment atoms: 0 — 无上次实验数据
+- 将从零建立基线
+
+"""
+
+        plan_content = f"""# Implementation Plan: {research_topic}
+plan_id: {plan_id}
+workspace: {workspace}
+session_id: {session_id}
+created_at: {datetime.now().isoformat()}
+iteration: {iteration}
+session_folder: ""
+
+{iter_context}
+## 上下文
+{context}
+
+## 交付物清单
+{deliverables_str}
+
+## 规格说明
+{specs_str}
+
+## 验收标准
+{acceptance}
+"""
+
+        plan_path = workspace / "implementation_plan.md"
+        plan_path.write_text(plan_content, encoding="utf-8")
+
+        # 更新 state
+        state["status"] = "awaiting_user_code"
+        self._write_state(state)
+
+        return {
+            "done": False,
+            "phase": phase,
+            "step": "generate_code_plan",
+            "step_index": state.get("sub_loop_step", 0) - 1,
+            "action": "generate_code_plan",
+            "plan_path": str(plan_path),
+            "plan_id": plan_id,
+            "deliverable_count": len(deliverables),
+            "instruction": (
+                "implementation_plan.md 已生成。请在 VS Code Claude Code 中依次执行:\n"
+                "  1. /evo-code-agent-pre " + str(plan_path) + "\n"
+                "  2. [实现代码...]\n"
+                "  3. /evo-code-agent-check " + str(plan_path) + "\n"
+                "  4. [修正...]\n"
+                "  5. /evo-code-agent-post " + str(plan_path) + "\n"
+                "完成后 Dashboard 将检测到完成信号并进入 W5 Analyze。"
+            ),
+        }
+
+    def _build_iteration_context(self) -> list[str]:
+        """从 CC 提取上次 W5 Analyze 的实验结论，插入 multi_agent_discuss topic。
+
+        纯 CC 驱动，不加 PIPELINE_STATE 额外字段。
+        返回 topic_parts 追加列表 (可能为空)。
+        """
+        parts = []
+        try:
+            atoms = self.cc.get_atoms(limit=200)
+            relations = self.cc.get_relations(limit=200)
+
+            experiment_atoms = [a for a in atoms
+                              if "experiment" in a.get("tags", [])]
+            if not experiment_atoms:
+                return parts  # 无实验数据, 不追加
+
+            parts.append("")
+            parts.append("## 上次迭代结论 (来自 Claim Chain + W5 Analyze)")
+            parts.append("")
+
+            # 实验 atoms
+            parts.append("### 已验证实验")
+            for a in experiment_atoms[:10]:
+                parts.append(f"- {a['title']}")
+
+            # relations: validates/contradicts
+            validates = [r for r in relations if r.get("type") == "validates"]
+            contradicts = [r for r in relations if r.get("type") == "contradicts"]
+            implements = [r for r in relations if r.get("type") == "implements"]
+
+            if validates:
+                parts.append("")
+                parts.append("### 验证关系 (A validates B = A 优于 B)")
+                for r in validates[:5]:
+                    src = self.cc.get_atom(r["source_id"])
+                    tgt = self.cc.get_atom(r["target_id"])
+                    if src and tgt:
+                        parts.append(f"- {src['title']} → validates → {tgt['title']}")
+
+            if contradicts:
+                parts.append("")
+                parts.append("### 矛盾关系 (预期不符)")
+                for r in contradicts[:5]:
+                    src = self.cc.get_atom(r["source_id"])
+                    tgt = self.cc.get_atom(r["target_id"])
+                    if src and tgt:
+                        parts.append(f"- {src['title']} ←→ contradicts ←→ {tgt['title']}")
+
+            if implements:
+                parts.append("")
+                parts.append("### 代码归档 (code ↔ CC 关联)")
+                for r in implements[:5]:
+                    parts.append(f"- atom_{r['source_id']} → implements → {r.get('evidence', '?')[:80]}")
+
+            # Grid 状态
+            grid_idx = self.grid.get_discovery_index()
+            filled = grid_idx.get("filled_cells", 0)
+            total = grid_idx.get("total_cells", 0)
+            if filled > 0:
+                parts.append("")
+                parts.append(f"### Grid 状态: {filled}/{total} cells 填充")
+
+        except Exception:
+            pass  # CC/Grid 不可用时静默跳过
+
+        return parts
+
+    def _wait_user_code(self, state: dict, phase: str) -> dict:
+        """等待用户通过 /evo-code-agent-post 完成代码实现。
+        通过检测 PIPELINE_STATE.json 中的 code_phase_status == 'completed'。
+        """
+        code_status = state.get("code_phase_status", "")
+        if code_status == "completed":
+            return {"done": True, "phase": phase}
+
+        # 还在等待中 — 回退 sub_loop_step 以在下次 sub_loop 时重试此步骤
+        chain = CHAIN_STEPS.get(phase, [])
+        wait_idx = 0
+        try:
+            wait_idx = chain.index("wait_user_code")
+        except ValueError:
+            pass
+        state["sub_loop_step"] = wait_idx
+        self._write_state(state)
+
+        return {
+            "done": False,
+            "phase": phase,
+            "step": "wait_user_code",
+            "step_index": wait_idx,
+            "action": "wait_user_code",
+            "status": "awaiting_user",
+            "instruction": (
+                "等待用户在 VS Code Claude Code 中完成代码实现。\n"
+                "完成后运行 /evo-code-agent-post 回传结果。"
+            ),
+        }
 
     # ═══════════════════════════════════════════════════════════════
     # MCP Tool: post_loop

@@ -9,7 +9,7 @@ Atom types (OpenResearch-compatible):
   fact, method, theorem, verification
 
 Relation types:
-  motivates, derives, validates, contradicts,
+  motivates, derives, validates, contradicts, implements,
   compares_to, causes, boundary_of, specializes
 
 Usage:
@@ -111,7 +111,7 @@ class ClaimChain:
             The created Relation dict with assigned id.
         """
         valid_types = (
-            "motivates", "derives", "validates", "contradicts",
+           "motivates", "derives", "validates", "contradicts", "implements",
             "compares_to", "causes", "boundary_of", "specializes",
         )
         assert type in valid_types, f"Invalid relation type: {type}"
@@ -323,7 +323,7 @@ class ClaimChain:
 
         # Missing relation types
         all_known_rels = {"validates", "contradicts", "derives", "boundary_of", "motivates",
-                         "specializes", "compares_to", "causes"}
+                         "specializes", "compares_to", "causes", "implements"}
         missing_rels = sorted(all_known_rels - set(rel_type_counts.keys()))
 
         return {

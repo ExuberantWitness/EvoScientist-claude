@@ -250,22 +250,53 @@ def main():
             cwd=str(workspace),
         )
 
-        # 运行 agent
+        # 运行 agent (带重试和容错)
         import asyncio
         async def _run():
-            _current_step = "agent_running"
-            agent_write_report(_state_path, "agent_running", f"开始执行 {config['phase']}")
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                try:
+                    _current_step = "agent_running"
+                    agent_write_report(_state_path, "agent_running",
+                                       f"开始执行 {config['phase']} (尝试 {attempt}/{max_retries})")
 
-            async with ClaudeSDKClient(options=options) as client:
-                await client.query(f"请执行 {config['phase']} 任务:\n\n{context}")
-                async for msg in client.receive_response():
-                    # 流式输出，agent 在工作中
-                    # 具体的进度汇报由 agent 主动调 report_progress 完成
-                    pass
+                    async with ClaudeSDKClient(options=options) as client:
+                        await client.query(f"请执行 {config['phase']} 任务:\n\n{context}")
+                        async for msg in client.receive_response():
+                            # 流式输出，agent 在工作中
+                            pass
 
-            _current_step = "completed"
-            agent_write_report(_state_path, "agent_completed", f"{config['phase']} 完成")
-            print(f"[Agent Task] {config['phase']} 完成。")
+                    _current_step = "completed"
+                    agent_write_report(_state_path, "agent_completed",
+                                       f"{config['phase']} 完成")
+                    print(f"[Agent Task] {config['phase']} 完成。")
+                    return  # 成功退出
+
+                except json.JSONDecodeError as e:
+                    err_msg = f"JSON解析失败 (尝试 {attempt}/{max_retries}): {e}"
+                    print(f"[Agent Task] {err_msg}", file=sys.stderr)
+                    agent_write_report(_state_path, "agent_error", err_msg)
+                    if attempt < max_retries:
+                        wait_s = attempt * 5
+                        print(f"[Agent Task] {wait_s}s 后重试...", file=sys.stderr)
+                        time.sleep(wait_s)
+                    else:
+                        agent_write_report(_state_path, "agent_failed",
+                                           f"JSON解析连续失败 {max_retries} 次，退出。"
+                                           f"请检查 LLM API 是否正常，或改用 /evo-code-agent-pre 手动模式。")
+
+                except Exception as e:
+                    err_msg = f"Agent执行异常 (尝试 {attempt}/{max_retries}): {type(e).__name__}: {e}"
+                    print(f"[Agent Task] {err_msg}", file=sys.stderr)
+                    agent_write_report(_state_path, "agent_error", err_msg)
+                    if attempt < max_retries:
+                        wait_s = attempt * 10
+                        print(f"[Agent Task] {wait_s}s 后重试...", file=sys.stderr)
+                        time.sleep(wait_s)
+                    else:
+                        agent_write_report(_state_path, "agent_failed",
+                                           f"执行连续失败 {max_retries} 次，退出。"
+                                           f"请检查 LLM API 是否正常，或改用 /evo-code-agent-pre 手动模式。")
 
         asyncio.run(_run())
 

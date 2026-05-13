@@ -25,6 +25,7 @@ if _TOOLS_DIR not in sys.path:
 from pipeline_protocol import (
     atomic_read, atomic_write, dashboard_write,
     dashboard_write_approval, dashboard_heartbeat_age,
+    dashboard_get_heartbeat,
 )
 from pes_controller import (
     PESController, PHASE_PLAN, PHASE_CODE, PHASE_WRITE, PHASE_REVIEW,
@@ -38,8 +39,8 @@ _manager_ref = None
 _bridge_ref = None
 _watchdog_ref = None
 
-# Agent SDK 需要子进程的阶段
-AGENT_SDK_PHASES = {PHASE_CODE, PHASE_WRITE, PHASE_REVIEW}
+# Agent SDK 子进程的阶段 (W4 Code 改为 Plan-driven 模式，不再用 SDK)
+AGENT_SDK_PHASES = {PHASE_WRITE, PHASE_REVIEW}
 
 
 def set_watchdog(watchdog):
@@ -743,6 +744,9 @@ a:hover{color:var(--text)}
   <div id="gap-content"></div>
 </div>
 
+<!-- W4 Code 用户操作指引 (generate_code_plan / wait_user_code 时显示) -->
+<div class="steps-section" id="code-instruction" style="display:none"></div>
+
 <!-- 命令行输入区 -->
 <div class="cmd-bar" id="cmd-bar">
   <span class="prompt">></span>
@@ -761,6 +765,9 @@ a:hover{color:var(--text)}
     <button class="btn-unsatisfied" id="btn-unsatisfied" onclick="doTransition('unsatisfied')">不满意 → 重做</button>
     <button class="btn-write" id="btn-write" onclick="doTransition('jump_to_write')">跳到写作</button>
     <button class="btn-terminate" id="btn-terminate" onclick="doTransition('terminate')">终止管线</button>
+  </div>
+  <div class="btn-row" style="margin-top:8px">
+    <button class="btn-next" style="background:#3a3a1a;color:var(--yellow);border-color:var(--yellow)" id="btn-back-plan" onclick="doTransition('jump_to_plan')">回到 Plan</button>
   </div>
   <div class="cmd-status" id="cmd-status" style="display:none"></div>
 </div>
@@ -870,6 +877,7 @@ function updateControls(status, phase, cmd, taskRunning, activeTask) {
   document.getElementById('btn-satisfied').disabled = !awaiting;
   document.getElementById('btn-write').disabled = !awaiting || terminated;
   document.getElementById('btn-terminate').disabled = terminated;
+  document.getElementById('btn-back-plan').disabled = terminated;
 
   // 命令/任务状态指示器
   var statusEl = document.getElementById('cmd-status');
@@ -908,7 +916,7 @@ function execCmd() {
       refreshState();
     });
   } else {
-    var actionMap = {next:'sub_loop', satisfied:'transition', unsatisfied:'transition', jump_write:'transition', terminate:'transition'};
+    var actionMap = {next:'sub_loop', satisfied:'transition', unsatisfied:'transition', jump_write:'transition', terminate:'transition', jump_plan:'transition'};
     var cmd = input.replace(/^\//, '');
     var action = actionMap[cmd] || 'sub_loop';
 
@@ -944,8 +952,19 @@ function execNext() {
       addLog('⏳ 讨论进行中，等待完成后自动解锁...', 'info');
     } else if (d.agent_spawned) {
       addLog('Agent SDK 子进程已启动: ' + d.task, 'info');
+    } else if (d.waiting_for_user) {
+      addLog('⏳ 等待用户完成代码实现...', 'info');
+      if (d.instruction) {
+        showCodeInstruction(d.instruction);
+      }
+    } else if (d.plan_path) {
+      addLog('Plan已生成: ' + d.plan_path, 'success');
+      if (d.instruction) {
+        showCodeInstruction(d.instruction);
+      }
     } else if (d.step_done) {
       addLog('阶段完成: ' + d.message, 'info');
+      hideCodeInstruction();
     } else if (d.executed) {
       addLog('已执行: ' + (d.detail || d.step || 'OK'), 'info');
     } else {
@@ -957,6 +976,18 @@ function execNext() {
     addLog('请求失败: ' + e.message, 'error');
     refreshState();
   });
+}
+
+function showCodeInstruction(text) {
+  var panel = document.getElementById('code-instruction');
+  if (!panel) return;
+  panel.style.display = '';
+  panel.innerHTML = '<h2>W4 Code — 用户操作指引</h2><pre style=\"white-space:pre-wrap;font-size:13px;color:var(--accent);background:rgba(88,166,255,0.08);padding:12px;border-radius:6px;border:1px solid var(--accent);\">' + text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
+}
+
+function hideCodeInstruction() {
+  var panel = document.getElementById('code-instruction');
+  if (panel) panel.style.display = 'none';
 }
 
 async function loadWorkspace() {
@@ -1088,7 +1119,7 @@ function renderWatchdog(alerts) {
 
 async function doTransition(action) {
   if (!workspaceDir) { addLog('workspace 未加载', 'error'); return; }
-  const labels = {satisfied:'满意-下一步', unsatisfied:'不满意-重做', jump_to_write:'强制进入写作', terminate:'终止管线'};
+  const labels = {satisfied:'满意-下一步', unsatisfied:'不满意-重做', jump_to_write:'强制进入写作', terminate:'终止管线', jump_to_plan:'回到 Plan'};
   addLog('备用控制: ' + labels[action], 'info');
   try {
     const resp = await fetch('/api/pipeline/transition', {
@@ -1202,6 +1233,18 @@ async def pes_pipeline_transition_api(request):
         state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
         return JSONResponse({"transitioned": False, "phase": state["phase"],
                             "message": f"重做阶段 '{state['phase']}'"})
+
+    elif action == "jump_to_plan":
+        state["phase"] = "W2 Plan"
+        state["sub_loop_step"] = 0
+        state["status"] = "in_progress"
+        state["iteration"] = state.get("iteration", 0) + 1
+        # 清理残留的 agent 状态
+        for stale_key in ("command", "agent_heartbeat", "agent_report",
+                          "approval_request", "approval_response", "active_task"):
+            state.pop(stale_key, None)
+        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        return JSONResponse({"transitioned": True, "to": "W2 Plan", "iteration": state["iteration"]})
 
     elif action == "jump_to_write":
         gap = state.get("last_gap_analysis")
@@ -1583,19 +1626,395 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
 
     elif action == "invoke_skill":
         skill = step.get("skill", "")
-        _push_internal_event(session_id, "skill_invoked",
-                             {"phase": phase, "skill": skill})
-        result["detail"] = f"Skill {skill} 已调用"
+        # ── W5 Analyze: 三个关键步骤的实际执行 ──
+        if skill == "/evo-analyze":
+            result = await _do_scan_islands_rubrics(step, ws_path, session_id, state_path, mgr, result)
+        elif skill == "/evo-claim":
+            result = await _do_write_claim_chain(step, ws_path, session_id, state_path, result)
+        elif skill == "/evo-iterate":
+            result = await _do_island_assign(step, ws_path, session_id, state_path, result)
+        else:
+            _push_internal_event(session_id, "skill_invoked",
+                                 {"phase": phase, "skill": skill})
+            result["detail"] = f"Skill {skill} 已调用"
 
     elif action == "ingest_results":
         state = atomic_read(state_path)
         ingested = state.get("ingested_results", [])
         result["detail"] = f"已扫描 {len(ingested)} 个实验结果"
 
+    elif action == "generate_code_plan":
+        plan_path = step.get("plan_path", "")
+        result["detail"] = "implementation_plan.md 已生成"
+        result["plan_path"] = plan_path
+        result["plan_id"] = step.get("plan_id", "")
+        result["instruction"] = step.get("instruction", "")
+        _push_internal_event(session_id, "code_plan_generated",
+                             {"phase": phase, "plan_path": plan_path})
+
+    elif action == "wait_user_code":
+        result["detail"] = "等待用户完成代码实现"
+        result["waiting_for_user"] = True
+        result["instruction"] = step.get("instruction", "")
+
     else:
         result["detail"] = f"未识别的action: {action}"
 
     return result
+
+
+# ── W5 Analyze 辅助函数 ──
+
+async def _do_scan_islands_rubrics(step: dict, ws_path: Path, session_id: str,
+                                     state_path: Path, mgr, result: dict) -> dict:
+    """W5 Analyze Step 1: 扫描实验结果，生成结构化分析，调 agents 评判。
+
+    Python 硬编码编排流程:
+    1. 读 PIPELINE_STATE.code_results (由 /evo-code-agent-post 写入)
+    2. 按算法/种子分组，计算统计量
+    3. 组装分析 prompt → 调 mgr.discuss() 让 agents 评判
+    4. Parse agent 回复 → 提取结论 → 写 state["analysis_summary"]
+    """
+    state = atomic_read(state_path)
+    code_results = state.get("code_results", [])
+
+    if not code_results:
+        # 尝试从 fitness_tracker.jsonl 读取
+        ft_path = ws_path / "memory" / "fitness_history.jsonl"
+        if ft_path.exists():
+            code_results = _parse_fitness_history(ft_path)
+
+    if not code_results:
+        result["warning"] = "无实验结果数据 (code_results 空, fitness_history 空)"
+        return result
+
+    # 计算统计量
+    algo_stats = {}
+    for r in code_results:
+        name = r.get("algorithm", "unknown")
+        score = r.get("score_mean", r.get("score", 0))
+        if name not in algo_stats:
+            algo_stats[name] = {"scores": [], "status": r.get("status", "?")}
+        algo_stats[name]["scores"].append(float(score))
+
+    algo_summary = []
+    for name, data in sorted(algo_stats.items()):
+        scores = data["scores"]
+        algo_summary.append({
+            "algorithm": name,
+            "mean": round(sum(scores) / len(scores), 2),
+            "min": round(min(scores), 2),
+            "max": round(max(scores), 2),
+            "n": len(scores),
+            "status": data["status"],
+        })
+
+    # 组装分析 prompt，调 agents 评判
+    if mgr and session_id in mgr.sessions:
+        summary_json = json.dumps(algo_summary, indent=2, ensure_ascii=False)
+        analysis_prompt = (
+            f"[W5 Analyze] 实验数据分析。以下是 {len(algo_summary)} 个算法的实验结果:\n\n"
+            f"{summary_json}\n\n"
+            "请分析:\n"
+            "1. 排名: 哪个算法最强? 是否有统计显著差异?\n"
+            "2. 矛盾: 是否有预期之外的失败? (预期应好的算法实际差了)\n"
+            "3. 异常: 是否有天花板效应, 高方差, 或异常行为?\n"
+            "4. 建议: 下一轮迭代应重点探索什么方向?\n"
+            "请用结构化格式回复，以便 Python parse。"
+        )
+        try:
+            await mgr.discuss(session_id=session_id, topic=analysis_prompt,
+                             agents=["analyst"], exclude_agents=["code-agent", "debug-agent"])
+            # 简版轮询
+            for _ in range(200):
+                await asyncio.sleep(3)
+                status = await mgr.get_status(session_id)
+                if status.get("status") in ("completed", "error"):
+                    break
+            sess = mgr.sessions.get(session_id)
+            agent_conclusion = sess.last_response[:3000] if sess else ""
+
+            # 尝试 parse agent 回复 → 提取结构化结论
+            validated, contradicted, ceiling = _parse_agent_conclusion(
+                agent_conclusion, algo_summary)
+        except Exception as e:
+            agent_conclusion = f"Agent 分析失败: {e}"
+            validated, contradicted, ceiling = [], [], []
+            logger.warning(f"scan_islands_rubrics agent discussion failed: {e}")
+
+        # 写分析摘要到 state (保留已有的 validated/contradicted/ceiling)
+        state = atomic_read(state_path)
+        existing = state.get("analysis_summary", {})
+        state["analysis_summary"] = {
+            "algorithms": algo_summary,
+            "agent_conclusion": agent_conclusion[:3000],
+            "validated": validated if validated else existing.get("validated", []),
+            "contradicted": contradicted if contradicted else existing.get("contradicted", []),
+            "ceiling_effects": ceiling if ceiling else existing.get("ceiling_effects", []),
+            "timestamp": time.time(),
+        }
+        atomic_write(state_path, state)
+        result["detail"] = f"实验分析完成: {len(algo_summary)} 个算法, {len(code_results)} 条结果"
+    else:
+        # 无 AgentManager 时只用统计量
+        validated, contradicted, ceiling = [], [], []
+        state = atomic_read(state_path)
+        existing = state.get("analysis_summary", {})
+        state["analysis_summary"] = {
+            "algorithms": algo_summary,
+            "agent_conclusion": "(无 AgentManager, 仅统计)",
+            "validated": validated if validated else existing.get("validated", []),
+            "contradicted": contradicted if contradicted else existing.get("contradicted", []),
+            "ceiling_effects": ceiling if ceiling else existing.get("ceiling_effects", []),
+            "timestamp": time.time(),
+        }
+        atomic_write(state_path, state)
+        result["detail"] = f"实验统计完成: {len(algo_summary)} 个算法 (无 AgentManager)"
+
+    _push_internal_event(session_id, "analysis_completed",
+                         {"phase": "W5 Analyze", "algorithms": len(algo_summary)})
+    return result
+
+
+async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
+                                  state_path: Path, result: dict) -> dict:
+    """W5 Analyze Step 4: 写入 CC atoms + relations。
+
+    Python 硬编码:
+    1. 读 state["analysis_summary"]
+    2. 每个算法 → CC.add_atom(type="fact", tags=["experiment", algo_name])
+    3. Pairwise 比较 → CC.add_relation(type="validates"/"contradicts")
+    4. 代码路径 → CC.add_relation(type="implements")
+    """
+    from claim_chain import ClaimChain
+    cc = ClaimChain(str(ws_path))
+
+    state = atomic_read(state_path)
+    analysis = state.get("analysis_summary", {})
+    code_results = state.get("code_results", [])
+    algorithms = analysis.get("algorithms", [])
+
+    if not algorithms:
+        result["warning"] = "无 analysis_summary, 跳过 CC 写入"
+        return result
+
+    written_atoms = []
+    written_relations = []
+    atom_id_map = {}  # algorithm_name → atom_id
+
+    # 写入 experiment atoms
+    for algo in algorithms:
+        name = algo["algorithm"]
+        code_path = ""
+        for r in code_results:
+            if r.get("algorithm") == name:
+                code_path = r.get("code_path", "")
+                break
+
+        content = json.dumps(algo, ensure_ascii=False)
+        atom = cc.add_atom(
+            type="fact",
+            title=f"{name}: score={algo['mean']} (n={algo['n']})",
+            content=content,
+            tags=["experiment", name.lower(), "w5-analyze"],
+            evidence_level="experiment",
+        )
+        written_atoms.append(atom["id"])
+        atom_id_map[name] = atom["id"]
+
+        # 存储 metadata (代码路径), implements 在 island_assign 时创建
+        pass  # atom metadata 通过 add_atom 写入, implements relation 在 _do_island_assign 中创建
+
+    # Pairwise validates/contradicts relations
+    for i in range(len(algorithms)):
+        for j in range(i + 1, len(algorithms)):
+            a = algorithms[i]
+            b = algorithms[j]
+            a_id = atom_id_map.get(a["algorithm"])
+            b_id = atom_id_map.get(b["algorithm"])
+            if not a_id or not b_id:
+                continue
+            # 简单规则: mean 差距 > 10% → validates (强者 validates 胜弱者)
+            if a["mean"] > b["mean"] * 1.10:
+                rel = cc.add_relation(type="validates", source_id=a_id, target_id=b_id,
+                                      evidence=f"{a['algorithm']}({a['mean']}) > {b['algorithm']}({b['mean']})")
+                written_relations.append(rel["id"])
+            elif b["mean"] > a["mean"] * 1.10:
+                rel = cc.add_relation(type="validates", source_id=b_id, target_id=a_id,
+                                      evidence=f"{b['algorithm']}({b['mean']}) > {a['algorithm']}({a['mean']})")
+                written_relations.append(rel["id"])
+
+    # 特殊发现: ceiling_effects → boundary_of relations
+    ceiling_effects = analysis.get("ceiling_effects", [])
+    if ceiling_effects:
+        for algo in algorithms:
+            atom_id = atom_id_map.get(algo["algorithm"])
+            if atom_id:
+                try:
+                    cc.add_relation(
+                        type="boundary_of",
+                        source_id=atom_id,
+                        target_id=atom_id,
+                        evidence=f"ceiling_effect: 所有方法收敛到相似性能，差异不显著。{algo['algorithm']}({algo['mean']})"
+                    )
+                    written_relations.append(-1)  # count it
+                except Exception:
+                    pass
+
+    result["detail"] = f"CC 写入: {len(written_atoms)} atoms, {len(written_relations)} relations"
+    _push_internal_event(session_id, "cc_written",
+                         {"phase": "W5 Analyze", "atoms": len(written_atoms),
+                          "relations": len(written_relations)})
+    return result
+
+
+async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
+                              state_path: Path, result: dict) -> dict:
+    """W5 Analyze Step 5: 代码归档到 island + Grid 分配。
+
+    使用真实 API: IslandManager.detect_and_assign() + CellGrid.record_result()
+    + set_claim_atom_id() 建立 CC↔island 关联。
+    """
+    from cell_grid import CellGrid
+    from island_manager import IslandManager
+    from claim_chain import ClaimChain
+
+    state = atomic_read(state_path)
+    analysis = state.get("analysis_summary", {})
+    code_results = state.get("code_results", [])
+    algorithms = analysis.get("algorithms", [])
+
+    if not algorithms:
+        result["warning"] = "无 analysis_summary, 跳过 Island 分配"
+        return result
+
+    grid = CellGrid(str(ws_path))
+    islands = IslandManager(ws_path / "evolve_archive")
+    cc = ClaimChain(str(ws_path))
+    assigned = 0
+
+    # 读 CC atoms 找匹配的 experiment atom_id
+    cc_atoms = cc.get_atoms(limit=200)
+    _meta_tags = {"experiment", "w5-analyze", "benchmark", "literature", "method", "survey"}
+    algo_atom_map = {}  # algorithm_name → atom_id
+    for a in cc_atoms:
+        if "experiment" in a.get("tags", []):
+            for tag in a.get("tags", []):
+                if tag.lower() not in _meta_tags:
+                    algo_atom_map[tag.upper()] = a["id"]
+
+    for algo in algorithms:
+        name = algo["algorithm"]
+        score = algo["mean"]
+
+        # 找代码路径和 CC atom
+        code_path = ""
+        for r in code_results:
+            if r.get("algorithm") == name:
+                code_path = r.get("code_path", "")
+                break
+        atom_id = algo_atom_map.get(name.upper())
+
+        variant_id = f"v_{name.lower()}_{int(time.time())}"
+
+        # Island 分配
+        try:
+            # 尝试基于 method_family 匹配 cell key
+            cell_key = f"*+*+*+{name.lower()}"  # fallback cell key
+            island_id = islands.detect_and_assign(
+                variant_id=variant_id,
+                cell_key=cell_key,
+                score=score,
+                dims={},
+                method_family=name,
+            )
+            # 建立 CC atom ↔ island 关联
+            if atom_id and island_id:
+                try:
+                    islands.set_claim_atom_id(island_id, variant_id, atom_id)
+                except Exception:
+                    pass
+            assigned += 1
+        except Exception as e:
+            logger.warning(f"Island assign failed for {name}: {e}")
+            continue
+
+        # Grid 分配
+        try:
+            grid.record_result(
+                variant_id=variant_id,
+                score=score,
+                descriptor={"algorithm": name, "source": "w5-analyze"},
+                claim_conditions={"code_path": code_path},
+            )
+        except Exception as e:
+            logger.warning(f"Grid record failed for {name}: {e}")
+
+        # CC implements relation: atom → island
+        if atom_id:
+            try:
+                cc.add_relation(
+                    type="implements",
+                    source_id=atom_id,
+                    target_id=atom_id,  # target 是 island_id, 但 CC relations 只支持 atom_id
+                    evidence=f"island={island_id}, variant={variant_id}, code={code_path}",
+                )
+            except Exception:
+                pass
+
+    # 检测 milestones 和 anomalies
+    try:
+        grid.detect_milestones()
+    except Exception:
+        pass
+
+    result["detail"] = f"Island 分配: {assigned}/{len(algorithms)} 个算法"
+    _push_internal_event(session_id, "island_assigned",
+                         {"phase": "W5 Analyze", "assigned": assigned})
+    return result
+
+
+def _parse_fitness_history(ft_path: Path) -> list[dict]:
+    """从 fitness_tracker.jsonl 解析实验结果。"""
+    results = []
+    with open(ft_path, "r") as f:
+        for line in f:
+            try:
+                entry = json.loads(line.strip())
+                results.append({
+                    "algorithm": entry.get("method", entry.get("algorithm", "unknown")),
+                    "score_mean": entry.get("score", 0),
+                    "status": "success" if entry.get("score", 0) > -1e9 else "failed",
+                    "code_path": entry.get("code_path", ""),
+                })
+            except (json.JSONDecodeError, KeyError):
+                pass
+    return results
+
+
+def _parse_agent_conclusion(agent_text: str, algo_summary: list[dict]) -> tuple[list, list, list]:
+    """从 agent 回复中提取结构化结论。
+
+    返回 (validated, contradicted, ceiling_effects) 三个列表。
+    """
+    validated = []
+    contradicted = []
+    ceiling = []
+
+    text_lower = agent_text.lower()
+    algo_names = [a["algorithm"].lower() for a in algo_summary]
+
+    # 简单关键词匹配
+    for name in algo_names:
+        if f"{name}" in text_lower and ("最佳" in text_lower or "最强" in text_lower or "best" in text_lower or "排名第一" in text_lower):
+            validated.append(name.upper())
+        if f"{name}" in text_lower and ("矛盾" in text_lower or "预期不符" in text_lower or "contradict" in text_lower or "未超越" in text_lower):
+            contradicted.append(name.upper())
+
+    if "天花板" in text_lower or "ceiling" in text_lower:
+        ceiling.append("ceiling_effect_detected")
+
+    return validated, contradicted, ceiling
 
 
 def _ensure_session_registered(session_id: str, workspace: str):
