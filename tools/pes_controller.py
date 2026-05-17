@@ -71,6 +71,7 @@ CHAIN_STEPS = {
     PHASE_PLAN: [
         "run_step_pipeline", "multi_agent_discuss",
         "elo_tournament", "evolution_memory",
+        "write_claim_chain",      # 将 proposals 写入 CC, 供后续阶段读取
     ],
     PHASE_RESEARCH: [
         "run_step_pipeline", "multi_agent_discuss",
@@ -80,9 +81,11 @@ CHAIN_STEPS = {
     PHASE_IDEATE: [
         "run_step_pipeline", "multi_agent_discuss",
         "elo_tournament", "evolution_memory",
+        "write_claim_chain",      # 将 ELO 排名结果写入 CC, 供 W4 Code 读取
     ],
     PHASE_CODE: [
-        "run_step_pipeline",      # 加载 CC/EM 上下文
+        "run_step_pipeline",      # 加载 CC/EM 上下文, 生成 proposals
+        "write_claim_chain",      # 将 proposals 写入 CC (确保 generate_code_plan 可读取)
         "generate_code_plan",     # 生成 implementation_plan.md
         "wait_user_code",         # 等待用户通过 /evo-code-agent-post 完成
     ],
@@ -121,33 +124,56 @@ _PHASE_MIGRATION = {
 class PESController:
     """单一状态机 + 五步渐进式发现管线。"""
 
-    def __init__(self, workspace_dir: str | Path):
+    def __init__(self, workspace_dir: str | Path, session_id: str = ""):
         self.workspace = Path(workspace_dir)
-        self.state_path = self.workspace / "PIPELINE_STATE.json"
-        self.cc = ClaimChain(self.workspace)
-        self.grid = CellGrid(self.workspace / "evolve_archive")
+        # session_dir: 所有产物隔离到 sessions/{sid}/ 下
+        # 如果 workspace_dir 已经是 session 目录 (有 PIPELINE_STATE.json 或 vault/), 不嵌套
+        _is_session_dir = (
+            (self.workspace / "PIPELINE_STATE.json").exists() or
+            (self.workspace / "vault").is_dir()
+        )
+        if session_id and not _is_session_dir:
+            self.session_dir = self.workspace / "sessions" / session_id
+        else:
+            self.session_dir = self.workspace
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        # 所有数据统一在 vault/ 下
+        self.vault_dir = self.session_dir / "vault"
+        self.index_dir = self.vault_dir / "_index"
+        self.index_dir.mkdir(parents=True, exist_ok=True)
+        self.state_path = self.session_dir / "PIPELINE_STATE.json"
+        self.cc = ClaimChain(self.session_dir, base_dir=self.index_dir)
+        self.grid = CellGrid(self.vault_dir / "evolve_archive")
         self.rubric = RubricScheduler(self.cc)
-        self.islands = IslandManager(self.workspace / "evolve_archive")
-        self.fitness = FitnessTracker(self.workspace)
+        self.islands = IslandManager(self.vault_dir / "evolve_archive")
+        self.fitness = FitnessTracker(self.vault_dir / "_index")
 
     # ═══════════════════════════════════════════════════════════════
     # 状态读写
     # ═══════════════════════════════════════════════════════════════
 
     def _read_state(self) -> dict:
-        """原子读 + 旧中文阶段名自动迁移。"""
+        """原子读 + 旧中文阶段名自动迁移。损坏文件自动回退到默认状态。"""
+        _default = {
+            "protocol_version": 1,
+            "phase": PHASE_PLAN,
+            "iteration": 0,
+            "sub_loop_step": 0,
+            "status": "not_initialized",
+            "timestamp": None,
+            "session_id": None,
+            "config": {},
+        }
         if not self.state_path.exists():
-            return {
-                "protocol_version": 1,
-                "phase": PHASE_PLAN,
-                "iteration": 0,
-                "sub_loop_step": 0,
-                "status": "not_initialized",
-                "timestamp": None,
-                "session_id": None,
-                "config": {},
-            }
-        state = atomic_read(self.state_path)
+            return _default
+        try:
+            state = atomic_read(self.state_path)
+        except (json.JSONDecodeError, ValueError, OSError):
+            # 损坏的 state file — 重命名为备份并用默认值恢复
+            backup = self.state_path.with_suffix(".json.corrupted")
+            self.state_path.rename(backup)
+            atomic_write(self.state_path, _default)
+            return _default
         if "phase" not in state:
             state["phase"] = PHASE_PLAN
         phase = state.get("phase", PHASE_PLAN)
@@ -169,13 +195,19 @@ class PESController:
     # ═══════════════════════════════════════════════════════════════
 
     def init(self, research_topic: str, part2_dimensions: list[dict] | None = None) -> dict:
-        """初始化工作空间。"""
-        # 目录结构
-        for d in ["claim_chain", "evolve_archive", "memory", "artifacts"]:
-            (self.workspace / d).mkdir(parents=True, exist_ok=True)
+        """初始化工作空间。创建 vault/ 下完整目录树。"""
+        for d in ["evolve_archive", "artifacts",
+                  "Algorithms", "Bottlenecks", "Islands", "Iterations",
+                  "_index", "_pipeline", "_memory"]:
+            (self.vault_dir / d).mkdir(parents=True, exist_ok=True)
 
-        # Claim Chain (空)
+        # Claim Chain — create empty JSONL files so vault structure is visible
         self.cc.get_graph_summary()
+        # touch empty files if they don't exist
+        if not self.cc.atoms_path.exists():
+            self.cc.atoms_path.write_text("", encoding="utf-8")
+        if not self.cc.relations_path.exists():
+            self.cc.relations_path.write_text("", encoding="utf-8")
 
         # Cell Grid: Part1(内置) + Part2(用户定义)
         dims = part2_dimensions or []
@@ -312,29 +344,51 @@ class PESController:
         return streak
 
     def _load_evolution_memory_summary(self) -> dict:
-        """加载 Evolution Memory 概要。"""
-        em_path = self.workspace / "memory" / "evolution_memory.jsonl"
-        if not em_path.exists():
-            return {"last_ide_session": None, "prior_failures": []}
+        """加载 Evolution Memory 概要（读取新格式 directions.jsonl + strategies.jsonl）。"""
+        directions_path = self.workspace / "memory" / "ideation" / "directions.jsonl"
+        strategies_path = self.workspace / "memory" / "experiment" / "strategies.jsonl"
 
-        entries = []
-        with open(em_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        entries.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+        promising = []
+        failures = []
+        strategies = []
 
-        ide_entries = [e for e in entries if e.get("type") in ("ide", "IDE")]
-        failure_entries = [e for e in entries
-                          if e.get("type") in ("ive", "IVE") and
-                          e.get("metadata", {}).get("outcome") == "contradicted"]
+        for path, collector in [(directions_path, "directions"), (strategies_path, "strategies")]:
+            if not path.exists():
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        status = entry.get("status", "")
+                        if collector == "directions":
+                            if status == "PROMISING":
+                                promising.append(entry)
+                            elif status == "FAILED":
+                                failures.append(entry)
+                        elif collector == "strategies":
+                            strategies.append(entry)
+            except Exception:
+                pass
+
+        # Sort by score descending, take top/bottom
+        promising.sort(key=lambda e: e.get("score", 0), reverse=True)
+        failures.sort(key=lambda e: e.get("score", 0), reverse=True)
+        strategies.sort(key=lambda e: e.get("score", 0), reverse=True)
 
         return {
-            "last_ide_session": ide_entries[-1].get("summary", "") if ide_entries else None,
-            "prior_failures": [e.get("summary", "") for e in failure_entries[-3:]],
+            "last_ide_session": promising[0].get("direction", "")[:300] if promising else None,
+            "top_directions": [e.get("direction", "")[:120] for e in promising[:3]],
+            "prior_failures": [e.get("direction", "")[:120] for e in failures[-5:]],
+            "best_strategies": [e.get("strategy", e.get("direction", ""))[:120] for e in strategies[:3]],
+            "promising_count": len(promising),
+            "failure_count": len(failures),
+            "strategy_count": len(strategies),
         }
 
     def _generate_user_prompt(self, state: dict) -> str:
@@ -344,14 +398,25 @@ class PESController:
         best = fs.get("global", {}).get("max_score", 0)
         ft = self.fitness.get_trend()
 
+        # Include Evolution Memory context
+        em = self._load_evolution_memory_summary()
+        em_parts = []
+        if em.get("top_directions"):
+            em_parts.append(f"Top directions: {'; '.join(em['top_directions'][:3])}")
+        if em.get("prior_failures"):
+            em_parts.append(f"Prior failures: {'; '.join(em['prior_failures'][:3])}")
+        if em.get("best_strategies"):
+            em_parts.append(f"Best strategies: {'; '.join(em['best_strategies'][:3])}")
+        em_suffix = "\n  EM: " + "\n  EM: ".join(em_parts) if em_parts else ""
+
         prompts = {
-            PHASE_PLAN: f"第{iteration+1}轮·W2 Plan。当前最佳{best:.1f}，趋势{ft['direction']}。制定实验方案。",
-            PHASE_RESEARCH: f"第{iteration+1}轮·W3 Research。调研文献收集真实论文数据。",
-            PHASE_IDEATE: f"第{iteration+1}轮·W3.5 Ideate。ELO锦标赛排序候选方案。",
-            PHASE_CODE: f"第{iteration+1}轮·W4 Code。单Agent代码实现。",
-            PHASE_ANALYZE: f"第{iteration+1}轮·W5 Analyze。当前最佳{best:.1f}。Judge+Rubrics评分。",
-            PHASE_WRITE: f"W6 Write。基于实验结果撰写论文报告。",
-            PHASE_REVIEW: f"W7 Review。外部审阅评估论文质量。",
+            PHASE_PLAN: f"第{iteration+1}轮·W2 Plan。当前最佳{best:.1f}，趋势{ft['direction']}。制定实验方案。{em_suffix}",
+            PHASE_RESEARCH: f"第{iteration+1}轮·W3 Research。调研文献收集真实论文数据。{em_suffix}",
+            PHASE_IDEATE: f"第{iteration+1}轮·W3.5 Ideate。ELO锦标赛排序候选方案。{em_suffix}",
+            PHASE_CODE: f"第{iteration+1}轮·W4 Code。单Agent代码实现。{em_suffix}",
+            PHASE_ANALYZE: f"第{iteration+1}轮·W5 Analyze。当前最佳{best:.1f}。Judge+Rubrics评分。{em_suffix}",
+            PHASE_WRITE: f"W6 Write。基于实验结果撰写论文报告。{em_suffix}",
+            PHASE_REVIEW: f"W7 Review。外部审阅评估论文质量。{em_suffix}",
         }
         return prompts.get(phase, f"当前阶段: {phase}")
 
@@ -689,19 +754,18 @@ class PESController:
             plan_text = plan_md.read_text(encoding='utf-8')[:5000]
             context_parts.append(f"## 实验计划\n{plan_text}")
 
-        # Claim Chain atoms
+        # Claim Chain atoms (from vault/_index/ — canonical CC location)
         cc_atoms = []
-        cc_dir = workspace / "claim_chain"
-        if cc_dir.exists():
-            atoms_path = cc_dir / "atoms.jsonl"
-            if atoms_path.exists():
-                raw = atoms_path.read_text(encoding='utf-8')
-                context_parts.append(f"## Claim Chain 原子\n{raw[:3000]}")
-                for line in raw.strip().split("\n"):
-                    try:
-                        cc_atoms.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
+        cc_dir = self.index_dir  # vault/_index/
+        atoms_path = cc_dir / "atoms.jsonl"
+        if atoms_path.exists():
+            raw = atoms_path.read_text(encoding='utf-8')
+            context_parts.append(f"## Claim Chain 原子\n{raw[:3000]}")
+            for line in raw.strip().split("\n"):
+                try:
+                    cc_atoms.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
 
         rn_text = ""
         rn_path = workspace / "research_notes.md"
@@ -723,15 +787,19 @@ class PESController:
             title = a.get("title", "")
             tags = a.get("tags", [])
             content = a.get("content", "")[:200]
-            if a.get("type") == "fact" and any(
+            atom_type = a.get("type", "")
+            # Proposals from write_claim_chain (type="method" with "proposal" tag)
+            if atom_type == "method" and "proposal" in tags:
+                methods.append({"title": title, "tags": tags, "content": content})
+            elif atom_type == "fact" and any(
                 t in tags for t in ["next-iteration", "method", "literature", "SOTA_2026"]
             ):
                 methods.append({"title": title, "tags": tags, "content": content})
-            elif a.get("type") == "fact" and any(
+            elif atom_type == "fact" and any(
                 t in tags for t in ["benchmark", "baseline", "SAC", "TD3", "PPO", "DDPG"]
             ):
                 baselines.append({"title": title, "tags": tags, "content": content})
-            elif a.get("type") == "fact" and "experiment" in tags:
+            elif atom_type == "fact" and "experiment" in tags:
                 experiments.append({"title": title, "tags": tags, "content": content})
 
         # 去重
@@ -741,6 +809,9 @@ class PESController:
             if m["title"] not in seen:
                 seen.add(m["title"])
                 unique_methods.append(m)
+
+        # Collect proposal atoms (used in baseline selection below)
+        proposal_atoms = [a for a in cc_atoms if a.get("type") == "method" and "proposal" in a.get("tags", [])]
 
         # ── 生成交付物清单 ──
         deliverables = []
@@ -755,74 +826,135 @@ class PESController:
         specs.append("### artifacts/networks.py\n- Actor: MLP(state_dim → 256 → 256 → action_dim), tanh 输出\n- Critic: MLP(state_dim+action_dim → 256 → 256 → 1)\n- 支持 BatchNorm (CrossQ 需要) 和 Dropout (DroQ 需要)")
 
         # ── 迭代感知基线选择 ──
-        # 读取上次实验结论：哪些算法已验证/矛盾
+        # Meta tags that describe atom type/category, NOT algorithm names
+        _META_TAGS = {"experiment", "w5-analyze", "benchmark", "literature", "method", "survey",
+                      "continuous-control", "actor_critic", "exploration", "next-iteration",
+                      "overestimation", "evaluation", "diagnosis", "baseline",
+                      "hub", "ideas", "index", "proposal", "ideation", "sota_2026"}
+        # Non-algorithm tag patterns (skip when extracting algo names)
+        _SKIP_TAG_PREFIXES = ("ICML", "AAAI", "NeurIPS", "ICLR", "IEEE", "ACM", "202")
+
+        def _is_algo_tag(tag: str) -> bool:
+            """Check if a tag looks like an algorithm name (not a meta/category tag)."""
+            t = tag.lower()
+            if t in _META_TAGS:
+                return False
+            if tag.upper().startswith(_SKIP_TAG_PREFIXES):
+                return False
+            # Skip rank_N, graft_N, dup_N tags from CC proposal storage
+            if t.startswith("rank_") or t.startswith("graft_") or t.startswith("dup_"):
+                return False
+            return True
+
+        # 读取实验结论：从 experiment atom 的 tags 自动提取算法名
         experiment_atoms = [a for a in cc_atoms
                           if "experiment" in a.get("tags", [])]
-        tested_algos = {}  # algo_name → {"score": mean, "status": "validated"|"contradicted"}
+        tested_algos = {}  # algo_name → {"score": ..., "title": ..., "atom": ...}
         for a in experiment_atoms:
+            title = a.get("title", "")
+            content = a.get("content", "")
+            # Extract score from title like "sac: score=985.7 (n=3)"
+            import re as _re
+            score_match = _re.search(r'score[=:\s]*(\d+\.?\d*)', title + " " + content)
+            score_val = float(score_match.group(1)) if score_match else 0.0
             for tag in a.get("tags", []):
-                if tag.upper() in ("SAC", "TD3", "PPO", "DDPG", "REDQ", "BSRS", "EMTD3", "CROSSQ"):
-                    tested_algos[tag.upper()] = {
-                        "score": a.get("metadata", {}).get("score", a.get("content", "")),
-                        "title": a.get("title", ""),
-                    }
+                if _is_algo_tag(tag):
+                    upper = tag.upper()
+                    if upper not in tested_algos or score_val > tested_algos[upper].get("score", 0):
+                        tested_algos[upper] = {
+                            "score": score_val,
+                            "title": title[:120],
+                            "atom": a,
+                        }
 
-        # 读 CC relations: 找 validates/contradicts
+        # 读 CC relations: 找 validates/contradicts (from vault/_index/)
         cc_relations = []
-        cc_dir = workspace / "claim_chain"
-        if (cc_dir / "relations.jsonl").exists():
-            for line in (cc_dir / "relations.jsonl").read_text().split("\n"):
+        rel_path = self.index_dir / "relations.jsonl"
+        if rel_path.exists():
+            for line in rel_path.read_text().split("\n"):
                 if line.strip():
                     try:
                         cc_relations.append(json.loads(line))
                     except json.JSONDecodeError:
                         pass
 
-        _meta = {"experiment", "w5-analyze", "benchmark", "literature", "method", "survey",
-                 "continuous-control", "actor_critic", "exploration", "next-iteration"}
         validated_algos = set()
         contradicted_algos = set()
         for r in cc_relations:
             if r.get("type") == "validates":
                 src = next((a for a in cc_atoms if a.get("id") == r["source_id"]), None)
-                if src:
+                # Only extract algorithm names from method/fact atoms (not observation/index)
+                if src and src.get("type") in ("method", "fact"):
                     for tag in src.get("tags", []):
-                        if tag.lower() not in _meta:
+                        if _is_algo_tag(tag):
                             validated_algos.add(tag.upper())
             elif r.get("type") == "contradicts":
                 tgt = next((a for a in cc_atoms if a.get("id") == r["target_id"]), None)
-                if tgt:
+                if tgt and tgt.get("type") in ("method", "fact"):
                     for tag in tgt.get("tags", []):
-                        if tag.lower() not in _meta:
+                        if _is_algo_tag(tag):
                             contradicted_algos.add(tag.upper())
 
-        # 决定基线: 首次迭代用 SAC+TD3，后续迭代跳过已验证的，加入 ELO 提案
+        # 决定基线: 首次迭代用 SAC+TD3，后续迭代加入上次提案 + ELO 冠军
+        # 追踪上一轮已提出但未测试的算法 (从 ELO 结果和 pipeline proposals)
+        proposed_algos = set()
+        tournament = state.get("last_tournament_result", {})
+        ranked = []
+        if isinstance(tournament, dict):
+            raw_ranked = tournament.get("ranked", [])
+            if isinstance(raw_ranked, list):
+                ranked = raw_ranked
+                for r_item in ranked[:10]:
+                    if isinstance(r_item, dict):
+                        r_title = r_item.get("title", "")
+                        if r_title:
+                            abbr = r_title.split(":")[0].strip().split()[0].upper()[:10]
+                            proposed_algos.add(abbr)
+        # Also extract from pipeline context proposals
+        pipeline_ctx = state.get("last_pipeline_context", {})
+        if isinstance(pipeline_ctx, dict):
+            for p in pipeline_ctx.get("proposals", [])[:10]:
+                if not isinstance(p, dict):
+                    continue
+                p_title = p.get("title", "")
+                if p_title:
+                    abbr = p_title.split(":")[0].strip().split()[0].upper()[:10]
+                    proposed_algos.add(abbr)
+
         base_algos = set()
         baseline_notes = []
-        if not experiment_atoms:
-            # 首次迭代
+        if not experiment_atoms and not proposal_atoms:
+            # 真正首次迭代
             base_algos.update(["SAC", "TD3"])
-            baseline_notes.append("首次迭代: SAC + TD3 基线")
+            baseline_notes.append("首次: SAC + TD3 基线")
+        elif not experiment_atoms and proposal_atoms:
+            # 有提案但无实验 — 上次计划未执行
+            base_algos.update(["SAC", "TD3"])
+            baseline_notes.append("有提案未执行: SAC + TD3 基线 + 上次提案")
         else:
             baseline_notes.append(f"上次已测: {sorted(tested_algos.keys())}")
             if validated_algos:
                 baseline_notes.append(f"已验证有效: {sorted(validated_algos)}")
             if contradicted_algos:
-                baseline_notes.append(f"已验证矛盾: {sorted(contradicted_algos)}")
+                baseline_notes.append(f"已验证矛盾 (需修正): {sorted(contradicted_algos)}")
+            if proposed_algos - set(tested_algos.keys()):
+                baseline_notes.append(f"上次提出未完成: {sorted(proposed_algos - set(tested_algos.keys()))}")
             # 保留已验证的作为 baseline (用于对照)
             base_algos.update(validated_algos)
+            # Also include tested algos that performed well
+            for algo, info in tested_algos.items():
+                if info.get("score", 0) > 0:
+                    base_algos.add(algo)
             # 核心基线不能少
             if "SAC" not in base_algos and "TD3" not in base_algos:
                 base_algos.update(["SAC", "TD3"])
                 baseline_notes.append("保留 SAC+TD3 作为 baseline 对照")
 
-        # 追踪已用文件名避免重复 (需在 ELO 循环前初始化)
+        # 追踪已用文件名避免重复
         used_fnames = {a.lower() for a in base_algos}
         used_fnames.update({"config", "networks", "buffer", "trainer", "train_all", "analyze", "smoke_test"})
 
         # 加入 ELO 排名 Top-3 提案方法
-        tournament = state.get("last_tournament_result", {})
-        ranked = tournament.get("ranked", [])
         elo_added = 0
         for r_item in ranked[:3]:
             r_title = r_item.get("title", "")
@@ -831,36 +963,94 @@ class PESController:
                 if abbr not in used_fnames:
                     base_algos.add(abbr.upper())
                     used_fnames.add(abbr.lower())
+                    proposed_algos.add(abbr.upper())
                     baseline_notes.append(f"ELO Top-{elo_added+1}: {r_title[:60]}")
                     elo_added += 1
 
+        # 生成 baseline 交付物 + 详细 spec
         for algo in sorted(base_algos):
             fname = algo.lower()
-            if algo in tested_algos:
-                score_info = str(tested_algos[algo]['score'])
-                if len(score_info) > 60:
-                    score_info = score_info[:57] + '...'
-                deliverables.append(f"- [ ] artifacts/{fname}.py — {algo} [KEEP] 上次已验证")
-            elif algo in contradicted_algos:
-                deliverables.append(f"- [ ] artifacts/{fname}.py — {algo} [RESOLVE] 上次矛盾，需修正")
+            info = tested_algos.get(algo, {})
+            score_val = info.get("score", 0)
+
+            # 标签逻辑: KEEP > RESOLVE > RETRY > NEW
+            if algo in contradicted_algos:
+                label = "[RESOLVE] 上次矛盾，需修正"
+            elif algo in tested_algos and score_val > 0:
+                label = f"[KEEP] 已验证 (score={score_val:.0f})"
+            elif algo in tested_algos:
+                label = "[WEAK] 效果不达预期"
+            elif algo in proposed_algos:
+                label = "[RETRY] 上次未完成"
             else:
-                deliverables.append(f"- [ ] artifacts/{fname}.py — {algo} [NEW] 新提案")
-            specs.append(f"### artifacts/{fname}.py\n- 与 trainer.py 接口兼容")
+                label = "[NEW] 新提案"
+
+            deliverables.append(f"- [ ] artifacts/{fname}.py — {algo} {label}")
+
+            # 生成有意义的 spec
+            spec_lines = [f"### artifacts/{fname}.py"]
+            if info.get("title"):
+                spec_lines.append(f"- 上次实验: {info['title'][:120]}")
+            # Try to get method sketch from pipeline proposals
+            if algo in proposed_algos:
+                for r_item in ranked[:5]:
+                    if r_item.get("title", "").split(":")[0].strip().upper()[:10] == algo[:10]:
+                        sketch = r_item.get("method_sketch", "")[:400]
+                        if sketch:
+                            spec_lines.append(f"- 方法思路: {sketch}")
+                        break
+            # Add atom content if available
+            atom = info.get("atom")
+            if atom and atom.get("content", "").strip():
+                content_preview = atom["content"][:300].replace("\n", " ")
+                spec_lines.append(f"- CC 记录: {content_preview}")
+            elif algo in tested_algos:
+                spec_lines.append(f"- 分数: {score_val:.1f}")
+                spec_lines.append("- 与 trainer.py 接口兼容")
+            else:
+                spec_lines.append("- 与 trainer.py 接口兼容")
+            specs.append("\n".join(spec_lines))
+
+        used_fnames.update({a.lower() for a in base_algos})
         used_fnames.update({"config", "networks", "buffer", "trainer", "train_all", "analyze", "smoke_test"})
 
-        # 提案方法 (从 CC unique_methods 提取)
-        _skip_tags = {"literature", "experiment", "benchmark", "survey", "method",
-                      "exploration", "next-iteration", "continuous-control",
-                      "actor_critic", "overestimation", "evaluation", "diagnosis"}
+        # 提案方法 (从 CC unique_methods 和 pipeline_context.proposals 提取)
         proposal_count = 0
-        for m in unique_methods[:5]:  # 最多 5 个提案
+        # Build lookup from pipeline proposals for method sketches
+        pipeline_proposals = []
+        if isinstance(pipeline_ctx, dict):
+            raw = pipeline_ctx.get("proposals", [])
+            if isinstance(raw, list):
+                pipeline_proposals = raw
+        # Filter out non-dict entries
+        pipeline_proposals = [p for p in pipeline_proposals if isinstance(p, dict)]
+        prop_by_title = {p.get("title", ""): p for p in pipeline_proposals}
+
+        # Primary source: CC atoms. Fallback: pipeline proposals from state.
+        if unique_methods:
+            proposal_source = unique_methods
+        else:
+            # Build synthetic method entries from pipeline proposals
+            proposal_source = []
+            for p in pipeline_proposals[:5]:
+                title = p.get("title", "")
+                if title:
+                    proposal_source.append({
+                        "title": title,
+                        "tags": p.get("primitives_used", []),
+                        "content": json.dumps({
+                            "hypothesis": p.get("hypothesis", ""),
+                            "method_sketch": p.get("method_sketch", "")[:500],
+                        }, ensure_ascii=False),
+                    })
+
+        for m in proposal_source[:5]:  # 最多 5 个提案
             title = m["title"]
             # Step 1: 从 tags 找未占用的算法简称
             algo_abbr = None
             for tag in m.get("tags", []):
                 if (tag.isupper() and 2 <= len(tag) <= 12
-                        and tag.lower() not in _skip_tags
-                        and not tag.startswith(("ICML", "AAAI", "NeurIPS", "ICLR", "IEEE", "ACM", "202"))):
+                        and _is_algo_tag(tag)):
                     abbr = tag.lower()
                     if abbr not in used_fnames:
                         algo_abbr = abbr
@@ -877,17 +1067,40 @@ class PESController:
                 counter += 1
             if algo_abbr:
                 used_fnames.add(algo_abbr)
-                deliverables.append(f"- [ ] artifacts/{algo_abbr}.py — {title[:80]}")
-                specs.append(f"### artifacts/{algo_abbr}.py\n- 来源: {title}\n- 摘要: {m['content'][:200]}\n- 与 trainer.py 接口兼容")
+                deliverables.append(f"- [ ] artifacts/{algo_abbr}.py — {title[:80]} [PROPOSED]")
+                # Generate detailed spec: prefer pipeline proposal method_sketch > CC content
+                spec_parts = [f"### artifacts/{algo_abbr}.py", f"- 来源: {title}"]
+                pp = prop_by_title.get(title) or {}
+                sketch = pp.get("method_sketch", "")[:400]
+                if sketch:
+                    spec_parts.append(f"- 方法思路: {sketch}")
+                elif m.get("content", "").strip():
+                    spec_parts.append(f"- 摘要: {m['content'][:300]}")
+                spec_parts.append("- 与 trainer.py 接口兼容")
+                specs.append("\n".join(spec_parts))
                 proposal_count += 1
+                proposed_algos.add(algo_abbr.upper())
 
-        # ELO 最高提案
-        tournament = state.get("last_tournament_result", {})
-        winner = tournament.get("winner", "")
+        # ELO 最高提案 (仅在无其他提案时作为 fallback)
+        winner = ""
+        if isinstance(state.get("last_tournament_result"), dict):
+            winner = state["last_tournament_result"].get("winner", "")
         if winner and proposal_count == 0:
             winner_short = winner.split(":")[0].strip().lower().replace(" ", "_")[:30]
-            deliverables.append(f"- [ ] artifacts/{winner_short}.py — ELO 冠军: {winner[:80]}")
-            specs.append(f"### artifacts/{winner_short}.py\n- ELO 冠军提案: {winner}\n- 与 trainer.py 接口兼容")
+            if winner_short not in used_fnames:
+                deliverables.append(f"- [ ] artifacts/{winner_short}.py — ELO 冠军: {winner[:80]}")
+                # Extract method sketch from ranked list
+                winner_sketch = ""
+                for r_item in ranked[:1]:
+                    if r_item.get("title", "") == winner or r_item.get("title", "").startswith(winner[:30]):
+                        winner_sketch = r_item.get("method_sketch", "")[:400]
+                        break
+                spec_parts = [f"### artifacts/{winner_short}.py", f"- ELO 冠军提案: {winner}"]
+                if winner_sketch:
+                    spec_parts.append(f"- 方法思路: {winner_sketch}")
+                spec_parts.append("- 与 trainer.py 接口兼容")
+                specs.append("\n".join(spec_parts))
+                used_fnames.add(winner_short)
 
         # 运行脚本
         deliverables.append("- [ ] artifacts/train_all.py — 一键训练所有算法的 master 脚本")
@@ -909,27 +1122,38 @@ class PESController:
 
         # 迭代上下文
         iter_context = ""
-        if experiment_atoms:
-            iter_context = f"""## 迭代上下文 (来自上次 W5 Analyze)
+        proposal_atoms = [a for a in cc_atoms if a.get("type") == "method" and "proposal" in a.get("tags", [])]
+        has_prior_data = experiment_atoms or proposal_atoms or cc_relations
+        if has_prior_data:
+            parts = [f"""## 迭代上下文 (来自上次迭代)
 - 迭代: {iteration}
-- 上次已测算法: {len(tested_algos)} 个 ({', '.join(sorted(tested_algos.keys()))})
-- 上次基线评估: {'; '.join(baseline_notes) if baseline_notes else '首次迭代'}
-- CC experiment atoms: {len(experiment_atoms)} 个
-- CC relations: {len(cc_relations)} 条
-- ELO 锦标赛排名: Top-1 = {ranked[0].get('title', 'N/A')[:80] if ranked else 'N/A'}
-
-"""
+- CC atoms: {len(cc_atoms)} 个 (experiment: {len(experiment_atoms)}, proposal: {len(proposal_atoms)})
+- CC relations: {len(cc_relations)} 条"""]
+            if tested_algos:
+                parts.append(f"- 上次已测算法: {len(tested_algos)} 个 ({', '.join(sorted(tested_algos.keys()))})")
+            if validated_algos:
+                parts.append(f"- 已验证有效: {sorted(validated_algos)}")
+            if contradicted_algos:
+                parts.append(f"- 已验证矛盾 (需修正): {sorted(contradicted_algos)}")
+            if proposal_atoms:
+                parts.append(f"- 上次提案: {len(proposal_atoms)} 个 ({', '.join(p.get('title','')[:40] for p in proposal_atoms[:5])})")
+            if baseline_notes:
+                parts.append(f"- 基线策略: {'; '.join(baseline_notes)}")
+            if ranked:
+                parts.append(f"- ELO 锦标赛 Top-1: {ranked[0].get('title', 'N/A')[:80] if ranked else 'N/A'}")
+            parts.append("")
+            iter_context = "\n".join(parts)
         else:
             iter_context = f"""## 迭代上下文
 - 首次迭代 (iteration={iteration})
-- CC experiment atoms: 0 — 无上次实验数据
+- CC atoms: 0 — 无上次实验数据
 - 将从零建立基线
 
 """
 
         plan_content = f"""# Implementation Plan: {research_topic}
 plan_id: {plan_id}
-workspace: {workspace}
+workspace: {self.session_dir}
 session_id: {session_id}
 created_at: {datetime.now().isoformat()}
 iteration: {iteration}
@@ -949,7 +1173,8 @@ session_folder: ""
 {acceptance}
 """
 
-        plan_path = workspace / "implementation_plan.md"
+        plan_path = self.session_dir / "iterations" / str(iteration) / "implementation_plan.md"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
         plan_path.write_text(plan_content, encoding="utf-8")
 
         # 更新 state
@@ -2396,12 +2621,12 @@ from pipeline_protocol import atomic_read, atomic_write, dashboard_write, dashbo
 _controller: PESController | None = None
 
 
-def get_controller(workspace_dir: str = "") -> PESController:
+def get_controller(workspace_dir: str = "", session_id: str = "") -> PESController:
     global _controller
     if _controller is None and workspace_dir:
-        _controller = PESController(workspace_dir)
+        _controller = PESController(workspace_dir, session_id=session_id)
     elif _controller is None:
-        _controller = PESController(os.getcwd())
+        _controller = PESController(os.getcwd(), session_id=session_id)
     return _controller
 
 

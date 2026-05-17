@@ -48,15 +48,16 @@ def create_agent(
         _add_core_to_path(base_dir)
 
     # Lazy import after path is set up
-    from EvoScientist.config.settings import get_effective_config
+    from EvoScientist.config.settings import get_effective_config, apply_config_to_env
     from EvoScientist.llm.models import get_chat_model
     from EvoScientist.prompts import get_system_prompt
     from EvoScientist.utils import load_subagents
     # SKILLS_DIR is defined in EvoScientist.py, not paths.py
     SKILLS_DIR = str(Path(base_dir) / "evoscientist_core" / "EvoScientist" / "skills")
 
-    # Load config
+    # Load config and push API keys to environment variables
     cfg = get_effective_config()
+    apply_config_to_env(cfg)
     if model:
         cfg.model = model
     if provider:
@@ -164,7 +165,12 @@ def create_agent(
     if checkpointer is None:
         try:
             from langgraph.checkpoint.memory import InMemorySaver
-            checkpointer = InMemorySaver()
+            from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+            # Enable pickle_fallback to handle ToolMessage objects with non-serializable
+            # artifacts (e.g. LsResult, GrepResult from deepagents filesystem middleware)
+            # that msgpack cannot natively serialize.
+            serde = JsonPlusSerializer(pickle_fallback=True)
+            checkpointer = InMemorySaver(serde=serde)
         except ImportError:
             pass
 

@@ -164,19 +164,22 @@ class PipelineBridge:
 
     # ── active_task 锁 (PIPELINE_STATE.json) ──
 
-    def _get_state_path(self) -> Path | None:
+    def _get_state_path(self, session_id: str = "") -> Path | None:
         """获取 PIPELINE_STATE.json 路径。"""
         if not self._workspace_dir:
-            # 尝试从 mgr 获取
+            # 尝试从 mgr 获取，优先匹配指定 session_id
             if self._mgr:
-                for sid, session in getattr(self._mgr, 'sessions', {}).items():
+                sessions = getattr(self._mgr, 'sessions', {})
+                if session_id and session_id in sessions:
+                    return Path(sessions[session_id].workspace_dir) / "PIPELINE_STATE.json"
+                for sid, session in sessions.items():
                     return Path(session.workspace_dir) / "PIPELINE_STATE.json"
             return None
         return Path(self._workspace_dir) / "PIPELINE_STATE.json"
 
     def _write_active_task_lock(self, session_id: str, task_info: dict):
         """在 PIPELINE_STATE.json 中写入 active_task 锁。"""
-        state_path = self._get_state_path()
+        state_path = self._get_state_path(session_id)
         if not state_path or not state_path.exists():
             return
         try:
@@ -190,7 +193,7 @@ class PipelineBridge:
 
     def _clear_active_task_lock(self, session_id: str):
         """清除 PIPELINE_STATE.json 中的 active_task 锁。"""
-        state_path = self._get_state_path()
+        state_path = self._get_state_path(session_id)
         if not state_path or not state_path.exists():
             return
         try:

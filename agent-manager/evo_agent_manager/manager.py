@@ -252,10 +252,14 @@ class AgentManager:
             try:
                 import aiosqlite
                 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+                from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
                 db_path = Path(self.base_dir) / ".evo_checkpoints.db"
                 db_path.parent.mkdir(parents=True, exist_ok=True)
                 self._checkpoint_conn = await aiosqlite.connect(str(db_path))
-                self._checkpointer = AsyncSqliteSaver(self._checkpoint_conn)
+                # Enable pickle_fallback to handle ToolMessage objects with
+                # non-serializable artifacts from deepagents filesystem middleware.
+                serde = JsonPlusSerializer(pickle_fallback=True)
+                self._checkpointer = AsyncSqliteSaver(self._checkpoint_conn, serde=serde)
                 logger.info(f"AsyncSqliteSaver initialized at {db_path}")
             except (ImportError, Exception) as e:
                 logger.warning(f"Checkpointer unavailable ({e}), using InMemorySaver")
@@ -581,6 +585,9 @@ class AgentManager:
             code_proposals = self._extract_code_proposals(response, excluded)
             session._task = None  # cleared when done
 
+            # 直接清除 PIPELINE_STATE.json 中的 active_task 锁 (绕过 HookEmitter)
+            self._clear_pipeline_lock(session)
+
             # Hook: 发射 task_done 事件
             self._hook.emit("task_done", session.session_id, {
                 "task_type": "discuss",
@@ -601,6 +608,9 @@ class AgentManager:
             session._task = None
             self._save_session_meta(session)
 
+            # 直接清除 PIPELINE_STATE.json 中的 active_task 锁
+            self._clear_pipeline_lock(session)
+
             # Hook: 发射 task_error 事件
             self._hook.emit("task_error", session.session_id, {
                 "task_type": "discuss",
@@ -608,6 +618,20 @@ class AgentManager:
             })
 
             logger.error(f"Background discuss failed for {session.session_id}: {e}", exc_info=True)
+
+    def _clear_pipeline_lock(self, session: AgentSession) -> None:
+        """直接清除 PIPELINE_STATE.json 中的 active_task 锁。
+        HookEmitter socket 不可达时的可靠后备。
+        """
+        try:
+            state_path = Path(session.workspace_dir) / "PIPELINE_STATE.json"
+            if state_path.exists():
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                if "active_task" in state:
+                    del state["active_task"]
+                    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        except Exception:
+            pass
 
     def _extract_code_proposals(self, transcript: str, excluded: set[str]) -> list[str]:
         """Extract code/debug proposals from transcript text."""

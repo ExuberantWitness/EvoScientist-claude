@@ -194,9 +194,12 @@ class PipelineWatchdog:
         self._update_state_alerts(new_alerts)
         return new_alerts
 
-    def get_alerts(self, limit: int = 50) -> list[dict]:
-        """Get recent alert dicts."""
-        alerts = sorted(self._alerts, key=lambda a: a.timestamp, reverse=True)
+    def get_alerts(self, limit: int = 50, session_id: str | None = None) -> list[dict]:
+        """Get recent alert dicts, optionally filtered by session_id."""
+        alerts = self._alerts
+        if session_id:
+            alerts = [a for a in alerts if a.session_id == session_id]
+        alerts = sorted(alerts, key=lambda a: a.timestamp, reverse=True)
         return [_alert_to_dict(a) for a in alerts[:limit]]
 
     def get_stats(self) -> dict:
@@ -551,9 +554,13 @@ class PipelineWatchdog:
 
     def _discover_workspaces(self):
         """Discover workspaces from session registry and agent_manager sessions."""
+        self._workspaces.clear()  # Reset to avoid accumulating stale entries
+        # Prune stale session watches (session no longer in agent manager)
+        active_sids = set()
         # From agent_manager sessions
         if self._agent_manager:
             for sid, session in self._agent_manager.sessions.items():
+                active_sids.add(sid)
                 ws = getattr(session, "workspace_dir", "")
                 if ws and Path(ws).exists():
                     self._workspaces.add(ws)
@@ -565,15 +572,21 @@ class PipelineWatchdog:
                 if rpath.exists():
                     try:
                         registry = json.loads(rpath.read_text(encoding="utf-8"))
-                        for ws in registry.values():
+                        for sid, ws in registry.items():
                             if isinstance(ws, str) and Path(ws).exists():
                                 self._workspaces.add(ws)
+                                active_sids.add(sid)
                     except Exception:
                         pass
 
         # Fallback: monitor workspace_dir itself
         if not self._workspaces and (self.workspace_dir / "PIPELINE_STATE.json").exists():
             self._workspaces.add(str(self.workspace_dir))
+
+        # Prune stale session watches that no longer exist
+        stale_sids = [sid for sid in self._sessions if sid not in active_sids]
+        for sid in stale_sids:
+            del self._sessions[sid]
 
     def _read_state(self, workspace: str) -> dict:
         """Read PIPELINE_STATE.json from a workspace."""
@@ -589,9 +602,17 @@ class PipelineWatchdog:
     def _get_or_create_watch(self, sid: str, state: dict) -> SessionWatch:
         """Get or create per-session tracking."""
         if sid not in self._sessions:
+            # Use session_dir from state, fallback to workspace_dir from session metadata
+            ws = state.get("session_dir") or state.get("workspace_dir", "")
+            if not ws:
+                # Try to find from agent manager
+                if self._agent_manager:
+                    sess = self._agent_manager.sessions.get(sid)
+                    if sess:
+                        ws = getattr(sess, "workspace_dir", "")
             sw = SessionWatch(
                 session_id=sid,
-                workspace=str(self.workspace_dir),
+                workspace=ws or str(self.workspace_dir),
             )
             self._sessions[sid] = sw
 
@@ -660,10 +681,11 @@ class PipelineWatchdog:
                 if not state_path.exists():
                     continue
                 state = json.loads(state_path.read_text(encoding="utf-8"))
-                # Only include alerts for sessions in this workspace
+                state_sid = state.get("session_id", "")
+                # Only include alerts for THIS session (match by session_id in state file)
                 ws_alerts = [
                     _alert_to_dict(a) for a in alerts[:20]
-                    if a.session_id in self._sessions
+                    if a.session_id == state_sid
                 ]
                 state["watchdog_alerts"] = ws_alerts
                 tmp = state_path.with_suffix(".json.tmp")

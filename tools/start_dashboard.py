@@ -29,6 +29,17 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8420)
     args = parser.parse_args()
 
+    # Ensure API keys are available (same defaults as server.py)
+    _defaults = {
+        "OPENAI_API_KEY": "sk-d56c7dbcd28c44b689773a3f544486b2",
+        "OPENAI_BASE_URL": "https://api.deepseek.com/v1",
+        "OPENAI_API_BASE": "https://api.deepseek.com/v1",
+        "DEEPSEEK_API_KEY": "sk-d56c7dbcd28c44b689773a3f544486b2",
+        "TAVILY_API_KEY": "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",
+    }
+    for k, v in _defaults.items():
+        os.environ.setdefault(k, v)
+
     from evo_agent_manager.manager import AgentManager
     from evo_agent_manager.dashboard import set_manager, set_bridge, start_dashboard
     from evo_agent_manager.pipeline_bridge import PipelineBridge

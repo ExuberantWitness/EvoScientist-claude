@@ -27,13 +27,35 @@ from pathlib import Path
 class ClaimChain:
     """File-based Atom Graph with JSONL storage."""
 
-    def __init__(self, workspace_dir: str | Path):
-        self.base_dir = Path(workspace_dir) / "claim_chain"
+    def __init__(self, workspace_dir: str | Path, base_dir: str | Path | None = None):
+        if base_dir:
+            self.base_dir = Path(base_dir)
+        else:
+            self.base_dir = Path(workspace_dir) / "claim_chain"
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.atoms_path = self.base_dir / "atoms.jsonl"
         self.relations_path = self.base_dir / "relations.jsonl"
-        self._next_atom_id = self._count_lines(self.atoms_path) + 1
-        self._next_rel_id = self._count_lines(self.relations_path) + 1
+        self._next_atom_id = self._max_numeric_id(self.atoms_path) + 1
+        self._next_rel_id = self._max_numeric_id(self.relations_path) + 1
+
+    @staticmethod
+    def _max_numeric_id(path: Path) -> int:
+        """Find the maximum numeric ID in a JSONL file (handles mixed int/str IDs)."""
+        if not path.exists():
+            return 0
+        max_id = 0
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                    n = int(d.get("id", 0))
+                    if n > max_id:
+                        max_id = n
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+        return max_id
 
     @staticmethod
     def _count_lines(path: Path) -> int:
@@ -303,7 +325,12 @@ class ClaimChain:
             related_ids.add(r["source_id"])
             related_ids.add(r["target_id"])
 
-        all_ids = {a["id"] for a in atoms}
+        all_ids = set()
+        for a in atoms:
+            try:
+                all_ids.add(int(a["id"]))
+            except (ValueError, TypeError):
+                pass  # skip non-numeric IDs from Markdown parser
         orphan_count = len(all_ids - related_ids)
 
         rel_type_counts = {}

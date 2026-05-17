@@ -31,3 +31,10 @@ agent-manager/.evo_checkpoints.db*
 agent-manager/.evo_session_registry.json
 *.log
 PIPELINE_STATE.json
+
+# Runtime data (large, not to be committed)
+sessions/
+.evo_sessions/
+agent-manager/.evo_sessions/
+agent-manager/.evo_checkpoints.db*
+agent-manager/.evo_checkpoints.db-*

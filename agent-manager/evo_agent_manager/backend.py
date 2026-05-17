@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 class _LsResult:
-    """Result wrapper for als() that deepagents expects (has .error attribute)."""
+    """Result wrapper for als() that deepagents expects (entries as dicts with 'path' key)."""
     def __init__(self, entries: list[str], error: str | None):
-        self.entries = entries
+        self.entries = [{"path": e} for e in entries]
         self.error = error
     def __iter__(self):
         return iter(self.entries)
@@ -155,14 +155,22 @@ class UnrestrictedBackend:
         except Exception as e:
             return _LsResult([], error=str(e))
 
-    async def aread(self, path: str) -> str:
+    async def aread(self, path: str, offset: int = 0, limit: int = -1) -> str:
         """Read file contents (async). Required by deepagents."""
         try:
-            return self._resolve_path(path).read_text(encoding="utf-8")
+            text = self._resolve_path(path).read_text(encoding="utf-8")
+            if offset or limit > 0:
+                lines = text.splitlines(keepends=True)
+                if offset:
+                    lines = lines[offset:]
+                if limit > 0:
+                    lines = lines[:limit]
+                return "".join(lines)
+            return text
         except Exception:
             return ""
 
-    async def agrep(self, pattern: str, *, path: str = ".", glob: str | None = None):
+    async def agrep(self, pattern: str, path: str = ".", glob: str | None = None):
         """Grep search (async). Required by deepagents filesystem middleware."""
         try:
             cmd = f"grep -rn '{pattern}' '{path}'"
