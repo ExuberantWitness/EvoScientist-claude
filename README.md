@@ -4,9 +4,11 @@
 
 [English](#english) | 中文
 
-> 📰 **v0.2.0** (2026-05-02) — NEW 🧬 Four-Layer Architecture: Claim Chain (Atom Graph) + MAP-Elites Grid + evo-evolve PES Loop + vis.js Dashboard Visualization. 15 Skills.
+> 📰 **v0.2.1** (2026-05-25) — NEW: Tavily Search + Direct LLM Pipeline, Dashboard Live Persona Events, Session Recovery, Watchdog Disabled. 详见 [Updates & Bug Fixes](#-updates--bug-fixes--更新进展与缺陷修复).
 >
-> 📰 **v0.1.0** (2026-04-09) — 首次发布：14 个 Skills + 多 Agent MCP 管理系统 + 3 个跨模型审稿桥接
+> 📰 **v0.2.0** (2026-05-02) — Four-Layer Architecture: Claim Chain + MAP-Elites Grid + evo-evolve PES Loop + vis.js Dashboard. 15 Skills.
+>
+> 📰 **v0.1.0** (2026-04-09) — 首次发布：14 Skills + Agent Manager MCP + 3 跨模型审稿桥接
 
 ---
 
@@ -433,6 +435,57 @@ EvoScientist-claude/
 - [ ] **论文写作增强** — LaTeX 生成、DBLP 实时引用、venue 格式模板
 - [ ] **Rebuttal Skill** — 审稿意见解析 + 安全回复生成
 - [ ] **Meta-Optimize** — 自我优化：分析 Skill 使用模式，自动改进提示词
+
+---
+
+## 🔧 Updates & Bug Fixes / 更新进展与缺陷修复
+
+### v0.2.1 (2026-05-25)
+
+**Pipeline 核心修复：**
+
+| 修复 | 说明 |
+|------|------|
+| **Tavily 搜索 + Direct LLM 两步法** | `invoke_agent()` 先用 Tavily API 搜索论文，再将结果注入 prompt，最后用 direct LLM 生成可靠 JSON。解决了 agent 框架工具调用不稳定导致空输出和搜索不可见的问题 |
+| **Session 恢复机制** | Dashboard 重启后 `invoke_agent()` 自动调用 `_load_sessions_from_disk()` 恢复 session，修复 "Session not found" 错误 |
+| **产物验证放宽** | `research_notes.md` 缺失时自动创建空文件，不再阻断 W3→W3.5 的 phase 转换。改为 warning 而非 error |
+| **Watchdog 超时告警禁用** | 所有 step/phase/stall/nag 超时阈值设为 999999s，不再弹出 `"Step 'elo_tournament' 已运行 301s"` 等干扰告警 |
+
+**Dashboard 增强：**
+
+| 功能 | 说明 |
+|------|------|
+| **实时 Persona 调用事件** | SSE 流推送 `persona_started`/`persona_done`/`persona_error` 事件，Agent Log 实时显示 "agent searching web..." 和 "agent done: title" |
+| **Pipeline 产物展示** | 主 Dashboard 的 `renderPipelineDetail()` 从 REST API 拉取 proposals、ELO 排名、verification verdict，自动展示在 Agent Log 中 |
+| **Phase 时间线修复** | `data-phase` 属性对齐 `PHASE_ORDER` 索引（W2.1=0, W2.2=1, W2.3=2），主 Dashboard Pipeline 时间线现在正确显示当前 phase |
+| **addLog null 安全** | `addLog()` 增加 `#log` 元素 null 检查，防止 JS 崩溃导致页面空白 |
+| **pollPipeline 错误日志** | `catch(e){}` 改为 `addLogEntry('PIPELINE', 'error', ...)` ，管道轮询失败现在可见 |
+
+**ELO 验证与重跑：**
+
+| 修复 | 说明 |
+|------|------|
+| **Phase 维度匹配** | `run_tournament()` 传入 `phase` 参数，ELO 维度与 plan 一致（W2.1=[clarity,reasonableness,product_satisfaction], W2.2=[reasonableness,product_satisfaction], W2.3=[detail,...]） |
+| **Regeneration 上限** | `verify_products` 增加 `MAX_REGEN=2` 限制，超过后 force-pass，杜绝无限重跑循环 |
+| **产物清理增强** | `invoke_personas` 的 JSON 提取修复：贪婪匹配嵌套 JSON、大括号计数、trailing comma 修复、短响应检测 |
+
+**前端增强：**
+
+| 修复 | 说明 |
+|------|------|
+| **Agent 调用过程展示** | `handleEvent` 新增 `pipeline_step`/`persona_started`/`persona_done`/`persona_error`/`elo_completed` 事件处理 |
+| **CSS 深色主题优化** | 新增 `pipeline_det` 系列 Log Tag 样式（proposal/elo/verify），Agent Log 更易读 |
+| **Phase 标签中文化** | Pipeline 时间线显示中文标签（问题分析/方案方向/检索策略），拆分 W2 为三个独立 phase 节点 |
+
+### v0.2.0 (2026-05-02)
+
+- 🧬 Four-Layer Architecture: Claim Chain + MAP-Elites Grid + evo-evolve PES Loop + vis.js Dashboard
+- 15 Skills 全流程覆盖
+- Agent Manager 8 个 MCP tools
+
+### v0.1.0 (2026-04-09)
+
+- 首次发布：14 Skills + 多 Agent MCP + 3 跨模型审稿桥接
 
 ---
 
