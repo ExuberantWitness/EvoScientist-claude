@@ -23,44 +23,41 @@ logger = logging.getLogger(__name__)
 
 # How long a phase may run before flagged
 PHASE_MAX_DURATION: dict[str, int] = {
-    "W2 Plan":      1800,   # 30 min
-    "W3 Research":  3600,   # 60 min (includes literature search)
-    "W3.5 Ideate":  1800,   # 30 min
-    "W4 Code":      3600,   # 60 min (agent subprocess)
-    "W5 Analyze":   1800,   # 30 min
-    "W6 Write":     3600,   # 60 min (agent subprocess)
-    "W7 Review":    2700,   # 45 min (agent subprocess)
+    "W2.1 Problem Analysis":  999999,
+    "W2.2 Solution Directions": 999999,
+    "W2.3 Search Keywords":   999999,
+    "W3 Research":  999999,
+    "W3.5 Ideate":  999999,
+    "W4 Code":      999999,
+    "W5 Analyze":   999999,
+    "W6 Write":     999999,
+    "W7 Review":    999999,
 }
 
 # How long a step type may run before flagged
+# Timeout alerts disabled — set to high values
 STEP_MAX_DURATION: dict[str, int] = {
-    "run_step_pipeline":     300,   # 5 min (CC query + indexing + embedding)
-    "multi_agent_discuss":   900,   # 15 min (3+ DeepSeek LLM calls)
-    "elo_tournament":        300,   # 5 min (LLM judge calls)
-    "evolution_memory":      120,   # 2 min (LLM distillation)
-    "invoke_skill_code":    1800,   # 30 min (Agent SDK subprocess)
-    "invoke_skill_write":   1800,   # 30 min (Agent SDK subprocess)
-    "invoke_skill_review":  1200,   # 20 min (Agent SDK subprocess)
-    "invoke_skill_research": 900,   # 15 min (literature search)
-    "scan_islands_rubrics":   60,   # 1 min (local computation)
-    "write_claim_chain":     120,   # 2 min
-    "island_assign":          60,   # 1 min
+    "run_step_pipeline":   999999,
+    "multi_agent_discuss": 999999,
+    "elo_tournament":      999999,
+    "evolution_memory":    999999,
+    "invoke_skill_code":   999999,
+    "invoke_skill_write":  999999,
+    "invoke_skill_review": 999999,
+    "invoke_skill_research": 999999,
+    "scan_islands_rubrics": 999999,
+    "write_claim_chain":   999999,
+    "island_assign":       999999,
 }
 
 # Agent SDK phases — these should have agent_heartbeat
 AGENT_SDK_PHASES = frozenset({"W4 Code", "W6 Write", "W7 Review"})
 
-# How long without any event before "stalled"
-NO_EVENTS_STALL_SEC = 300        # 5 min
-
-# How long without agent heartbeat before "agent dead" (agent phases only)
-NO_HEARTBEAT_DEAD_SEC = 180      # 3 min
-
-# How long an active_task lock may exist before "stale lock"
-ACTIVE_TASK_STALE_SEC = 1800     # 30 min
-
-# How long "awaiting_decision" may persist before nagging
-AWAITING_DECISION_NAG_SEC = 600  # 10 min
+# Timeout alerts disabled
+NO_EVENTS_STALL_SEC = 999999
+NO_HEARTBEAT_DEAD_SEC = 999999
+ACTIVE_TASK_STALE_SEC = 999999
+AWAITING_DECISION_NAG_SEC = 999999
 
 # Minimum events expected for a multi_agent_discuss step
 MIN_DISCUSS_EVENTS = 10

@@ -1,10 +1,9 @@
-"""VaultManager: Obsidian vault 目录树管理 + Markdown 文件操作.
+"""SessionStore: Session 目录树管理 + Markdown 文件操作.
 
-Phase A 核心模块. 提供:
-  - 创建 sessions/{sid}/vault/ 完整目录树
+提供:
+  - 创建 sessions/{sid}/ 完整目录树 (无中间 vault/ 层)
   - 从模板初始化 Markdown 文件
   - [[wiki-link]] 规范校验
-  - Obsidian .obsidian 配置生成
 """
 
 import json
@@ -35,216 +34,184 @@ VALID_EDGE_TYPES = {
 }
 
 
-class VaultManager:
-    """管理 Obsidian vault 目录树和 Markdown 文件的创建/读取/更新."""
+class SessionStore:
+    """管理 Session 目录树和 Markdown 文件的创建/读取/更新。
+
+    所有子目录直接建在 session_dir 下，无中间 vault/ 层。
+    """
 
     def __init__(self, session_dir: str | Path):
         self.session_dir = Path(session_dir)
-        self.vault_dir = self.session_dir / "vault"
-        self.index_dir = self.vault_dir / "_index"
-        self.pipeline_dir = self.vault_dir / "_pipeline"
+        # _index/ lives directly under session_dir (no vault/ intermediate)
+        self.index_dir = self.session_dir / "_index"
+        self.pipeline_dir = self.session_dir / "_pipeline"
 
     # ── 初始化 ──
 
-    def init_vault(self, session_id: str, research_topic: str = "") -> dict:
-        """创建完整 vault 目录树 + .obsidian 配置."""
+    def init_dirs(self, session_id: str, research_topic: str = "") -> dict:
+        """创建完整 session 目录树。"""
         dirs = [
-            "Algorithms", "Bottlenecks", "Islands",
-            "Literature", "Iterations",
-            "_index", "_pipeline", "_memory", "artifacts",
+            "Algorithms",
+            "Bottlenecks",
+            "Islands",
+            "Literature",
+            "Iterations",
+            "_index",
+            "_pipeline",
+            "_memory",
+            "artifacts",
+            "evolve_archive",
         ]
         for d in dirs:
-            (self.vault_dir / d).mkdir(parents=True, exist_ok=True)
-
-        # .obsidian 配置
-        obsidian_config = self.vault_dir / ".obsidian"
-        obsidian_config.mkdir(parents=True, exist_ok=True)
-        (obsidian_config / "app.json").write_text(json.dumps({
-            "showLineNumber": False, "defaultViewMode": "source",
-            "livePreview": True, "showUnsupportedFiles": True,
-        }, indent=2))
-
-        # Graph view 配置 (显示所有节点, depth=3)
-        (obsidian_config / "graph.json").write_text(json.dumps({
-            "search": "", "showOrphans": True, "showTags": True,
-            "collapse-filter": False, "depth": 3, "linkStrength": 1.0,
-        }, indent=2))
+            (self.session_dir / d).mkdir(parents=True, exist_ok=True)
 
         # Pipeline state
         state = {
             "session_id": session_id,
             "research_topic": research_topic,
-            "vault_dir": str(self.vault_dir),
+            "session_dir": str(self.session_dir),
             "created_at": time.time(),
             "iteration": 0,
-            "phase": "W2 Plan",
+            "phase": "W2.1 Problem Analysis",
+            "status": "ready",
+            "config": {
+                "domain": {
+                    "domain_name": "general",
+                    "research_topic": research_topic,
+                },
+                "gate": {
+                    "enabled": True,
+                    "min_score": 0.3,
+                    "enforce_for_types": ["method"],
+                    "block_on_failure": False,
+                },
+            },
         }
-        (self.pipeline_dir / "PIPELINE_STATE.json").write_text(
-            json.dumps(state, indent=2, ensure_ascii=False))
 
-        return {
-            "vault_dir": str(self.vault_dir),
-            "directories": [str(self.vault_dir / d) for d in dirs],
-            "state": state,
-        }
+        state_path = self.session_dir / "PIPELINE_STATE.json"
+        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        return state
 
-    # ── Algorithm SPEC.md ──
+    # ── Markdown 文件操作 ──
 
-    def create_algorithm(self, algo_id: str, name: str, *,
-                         parent_id: str = "", bottleneck: str = "",
-                         tags: list[str] | None = None,
-                         mechanism: str = "", tradeoff: str = "") -> Path:
-        """创建 Algorithm SPEC.md 文件."""
-        algo_dir = self.vault_dir / "Algorithms"
+    def create_algorithm(self, algo_id: str, title: str, parent_id: str = "",
+                         bottleneck: str = "", mechanism: str = "",
+                         tags: list[str] | None = None) -> Path:
+        """创建算法 Markdown 文件."""
+        algo_dir = self.session_dir / "Algorithms"
         algo_dir.mkdir(parents=True, exist_ok=True)
         filepath = algo_dir / f"{algo_id}.md"
 
-        template = (TEMPLATES_DIR / "SPEC_TEMPLATE.md").read_text(encoding="utf-8")
-        content = template.format(
-            algo_id=algo_id,
-            parent_id=parent_id or "none",
-            display_name=name,
-            created_date=datetime.now().strftime("%Y-%m-%d"),
-            target_bottleneck=f"[[{bottleneck}]]" if bottleneck else "(待确定)",
-            mechanism=mechanism or "(待确定)",
-            tradeoff=tradeoff or "(待确定)",
-            evidence="(尚无实验证据)",
-            relations=f"- extends ← [[{parent_id}]]" if parent_id else "- (尚无关系)",
-            experiment_history=f"### {datetime.now().strftime('%Y-%m-%d')}: 创建\n- 状态: PROPOSED\n",
+        lines = [
+            "---",
+            f"id: {algo_id}",
+            f"parent: {parent_id}" if parent_id else "parent: null",
+            "status: PROPOSED",
+            f"bottleneck: {bottleneck}" if bottleneck else "",
+            f"created: {datetime.now().strftime('%Y-%m-%d')}",
+            f"tags: [{', '.join(tags or [])}]",
+            "---",
+            "",
+            f"# {title}",
+            "",
+            "## 当前理解",
+            "",
+            f"### 机制: {mechanism}" if mechanism else "",
+            "",
+            "## 关系图",
+        ]
+        filepath.write_text("\n".join(line for line in lines if line), encoding="utf-8")
+        return filepath
+
+    def create_bottleneck(self, bn_id: str, category: str,
+                          description: str = "") -> Path:
+        """创建瓶颈 Markdown 文件."""
+        bn_dir = self.session_dir / "Bottlenecks"
+        bn_dir.mkdir(parents=True, exist_ok=True)
+        filepath = bn_dir / f"{bn_id}.md"
+
+        content = (
+            f"---\nid: {bn_id}\ncategory: {category}\n---\n\n"
+            f"# {bn_id}\n\n## 描述\n{description}\n\n## 解决方案\n"
         )
         filepath.write_text(content, encoding="utf-8")
         return filepath
 
-    # ── Bottleneck ──
-
-    def create_bottleneck(self, bottleneck_id: str, title: str, *,
-                          category: str = "training_instability",
-                          discovered_in: str = "", evidence: str = "",
-                          affected_methods: list[str] | None = None) -> Path:
-        """创建 Bottleneck Markdown 文件."""
-        if category not in BOTTLENECK_CATEGORIES:
-            raise ValueError(f"Invalid bottleneck category: {category}. "
-                           f"Must be one of {sorted(BOTTLENECK_CATEGORIES)}")
-
-        bottleneck_dir = self.vault_dir / "Bottlenecks"
-        bottleneck_dir.mkdir(parents=True, exist_ok=True)
-        filepath = bottleneck_dir / f"{bottleneck_id}.md"
-
-        template = (TEMPLATES_DIR / "BOTTLENECK_TEMPLATE.md").read_text(encoding="utf-8")
-        affected = ", ".join(affected_methods or [])
-        content = template.format(
-            bottleneck_id=bottleneck_id,
-            category=category,
-            display_name=title,
-            discovered_in=discovered_in or "(unknown)",
-            description="(待补充)",
-            evidence=evidence or "(尚无证据)",
-            relations=(f"- affects → [[{'; ]], [['.join(affected_methods)}]]"
-                       if affected_methods else "- (尚无关系)"),
-        )
-        filepath.write_text(content, encoding="utf-8")
-        return filepath
-
-    # ── Island ──
-
-    def create_island(self, island_id: str, name: str, *,
-                      method_family: str = "default",
-                      member_algos: list[str] | None = None,
-                      claim_atom_id: str = "none") -> Path:
-        """创建 Island STATE.md 文件."""
-        island_dir = self.vault_dir / "Islands"
+    def create_island(self, island_name: str, member_algos: list[str]) -> Path:
+        """创建方法家族文件."""
+        island_dir = self.session_dir / "Islands"
         island_dir.mkdir(parents=True, exist_ok=True)
-        filepath = island_dir / f"{island_id}.md"
+        filepath = island_dir / f"{island_name}.md"
 
-        template = (TEMPLATES_DIR / "ISLAND_STATE_TEMPLATE.md").read_text(encoding="utf-8")
-        members = "\n".join(f"| {a} | - | - | - |" for a in (member_algos or []))
-        relations = "\n".join(f"- member_of ← [[{a}]]" for a in (member_algos or []))
-        content = template.format(
-            island_id=island_id, method_family=method_family,
-            display_name=name, claim_atom_id=claim_atom_id,
-            created_date=datetime.now().strftime("%Y-%m-%d"),
-            relations=relations or "- (尚无关系)",
-        ).replace("| algo_id | status | best_score | bottleneck |\n|---|---|---|---|\n| - | - | - | - |",
-                  f"| algo_id | status | best_score | bottleneck |\n|---|---|---|---|\n{members}")
+        members = "\n".join(f"- [[{a}]]" for a in member_algos)
+        content = f"---\nname: {island_name}\n---\n\n# {island_name}\n\n## 成员\n{members}\n"
         filepath.write_text(content, encoding="utf-8")
         return filepath
 
-    # ── Iteration ──
-
-    def create_iteration(self, n: int, session_id: str, *,
-                         research_topic: str = "",
-                         parent_iter_id: str = "",
-                         new_algos: list[str] | None = None,
-                         experiments: list[str] | None = None,
-                         promoted: str = "", refuted: str = "",
-                         new_claims: str = "", dead_ends: str = "",
-                         open_problems: str = "",
-                         discussion: str = "") -> Path:
-        """创建 Iteration Markdown 文件."""
-        iter_dir = self.vault_dir / "Iterations"
+    def create_iteration(self, iteration_num: int, new_algos: list[str],
+                         results: dict | None = None) -> Path:
+        """创建迭代记录文件."""
+        iter_dir = self.session_dir / "Iterations"
         iter_dir.mkdir(parents=True, exist_ok=True)
-        iter_id = f"iter_{session_id}_{n}"
-        filepath = iter_dir / f"Iteration_{n}.md"
+        filepath = iter_dir / f"Iteration_{iteration_num}.md"
 
-        template = (TEMPLATES_DIR / "ITERATION_TEMPLATE.md").read_text(encoding="utf-8")
-        content = template.format(
-            iter_id=iter_id, n=n, session_id=session_id,
-            parent_iter_id=parent_iter_id or "none",
-            research_topic=research_topic,
-            created_date=datetime.now().strftime("%Y-%m-%d"),
-            new_algos="\n".join(f"- [[{a}]]" for a in (new_algos or [])) or "- (none)",
-            experiments="\n".join(f"- {e}" for e in (experiments or [])) or "- (none)",
-            promoted=promoted or "- (none)", refuted=refuted or "- (none)",
-            new_claims=new_claims or "- (none)", dead_ends=dead_ends or "- (none)",
-            open_problems=open_problems or "- (none)",
-            discussion=discussion or "(待讨论)",
-            relations="",
+        algos_str = "\n".join(f"- [[{a}]]" for a in new_algos)
+        results_str = json.dumps(results, indent=2, ensure_ascii=False) if results else ""
+        content = (
+            f"---\niteration: {iteration_num}\n---\n\n"
+            f"# Iteration {iteration_num}\n\n"
+            f"## 新算法\n{algos_str}\n\n"
+            f"## 结果\n{results_str}\n"
         )
         filepath.write_text(content, encoding="utf-8")
         return filepath
 
-    # ── [[wiki-link]] 规范校验 ──
+    # ── Wiki-link 校验 ──
 
     def validate_links(self, filepath: Path) -> list[str]:
-        """校验文件中所有 [[wiki-link]] 的目标是否存在. 返回 unresolved 列表."""
+        """校验文件中的 [[wiki-link]] 目标存在。返回断链列表。"""
         import re
         text = filepath.read_text(encoding="utf-8")
-        links = re.findall(r'\[\[([^\]]+)\]\]', text)
-        unresolved = []
-        for link in links:
-            # Clean the link target (remove leading annotations like "CC Atom 5: ")
-            clean = link.split(":")[-1].strip() if ":" in link else link.strip()
-            # Try with underscores and spaces
-            candidates = [
-                self.vault_dir / "Algorithms" / f"{clean.replace(' ', '_')}.md",
-                self.vault_dir / "Bottlenecks" / f"{clean.replace(' ', '_')}.md",
-                self.vault_dir / "Islands" / f"{clean.replace(' ', '_')}.md",
-                self.vault_dir / "Algorithms" / f"{clean}.md",
-                self.vault_dir / "Bottlenecks" / f"{clean}.md",
-            ]
-            if not any(c.exists() for c in candidates):
-                unresolved.append(link)
-        return unresolved
+        links = re.findall(r"\[\[([^\]|#]+)(?:[|#][^\]]+)?\]\]", text)
+
+        broken = []
+        for target in links:
+            target_clean = target.strip()
+            found = False
+            for subdir in ["Algorithms", "Bottlenecks", "Islands"]:
+                candidate = self.session_dir / subdir / f"{target_clean}.md"
+                if candidate.exists():
+                    found = True
+                    break
+            if not found:
+                broken.append(target_clean)
+        return broken
 
     def validate_all_links(self) -> dict[str, list[str]]:
-        """扫描整个 vault, 返回所有打破的链接."""
-        all_unresolved = {}
-        for md_file in self.vault_dir.rglob("*.md"):
-            if md_file.parent.name.startswith("_") or md_file.parent.name.startswith("."):
-                continue
-            unresolved = self.validate_links(md_file)
-            if unresolved:
-                rel = str(md_file.relative_to(self.vault_dir))
-                all_unresolved[rel] = unresolved
-        return all_unresolved
+        """扫描所有 Markdown 的断链。返回 {filepath: [broken_links]}."""
+        broken_map = {}
+        for md_file in self.session_dir.rglob("*.md"):
+            broken = self.validate_links(md_file)
+            if broken:
+                broken_map[str(md_file.relative_to(self.session_dir))] = broken
+        return broken_map
 
 
-# ── 便捷工厂函数 ──
+# ── Factory ──
 
-def create_session_vault(workspace_root: str, session_id: str,
-                         research_topic: str = "") -> VaultManager:
-    """在 EvoScientist-claude/sessions/{sid}/ 下创建完整 vault."""
-    base = Path(workspace_root) / "EvoScientist-claude" / "sessions" / session_id
-    mgr = VaultManager(base)
-    mgr.init_vault(session_id, research_topic)
-    return mgr
+def create_session_store(base_dir: str | Path,
+                         research_topic: str = "") -> "SessionStore":
+    """创建新 session 的 SessionStore 并初始化目录。"""
+    import uuid
+    base = Path(base_dir)
+    session_id = f"sess_{uuid.uuid4().hex[:8]}"
+    session_dir = base / "sessions" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    store = SessionStore(session_dir)
+    store.init_dirs(session_id, research_topic)
+    return store
+
+
+# Backward-compat alias
+VaultManager = SessionStore

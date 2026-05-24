@@ -85,6 +85,9 @@ python /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude/to
 
 ## 步骤 3: 展示 Dashboard URL
 
+**禁止提及 Obsidian、Vault、知识图谱等词。** 可视化通过 Dashboard HTML (vis-network) 完成。
+只输出 bootstrap.py 的实际 stdout，不要添加额外解释。
+
 ```
 "================================================"
 "Pipeline 已就绪。请在浏览器中打开:"
@@ -92,3 +95,33 @@ python /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude/to
 "后续所有操作都在 Dashboard 网页端完成。"
 "================================================"
 ```
+
+## Phase Map (Phase 4 — 新增 W3.3 + W3.7-W4.1)
+
+当前 7 阶段流程 + 新增子阶段:
+
+```
+W1  Intake      → /evo-intake — 解析提案, 提取域参数 → DomainConfig
+W2  Plan        → /evo-planner — 实验计划 + 成功信号
+W3  Research    → /evo-research — 文献调研
+W3.3 LitIngest  → lit_ingest.py — PDF→Markdown→manifest (NEW, Phase 3.5)
+W3.5 Ideate     → /evo-ideation — Idea Tree Search + Elo tournament
+W3.7 Refine     → /evo-refine — idea→algorithm 翻译, 输出 RefinedAtom JSON (NEW)
+W3.8 Verify     → verify_atom.py L2 — 独立验证, 失败→retry max 3 (NEW)
+W3.9 Review     → /evo-review --mode atom — 跨模型审稿 (NEW)
+W4  Code        → /evo-code — 实现实验代码
+W4.1 VerifyPlan → verify_plan.py — plan 具体性检查 (NEW)
+W5  Analyze     → /evo-analyze — 指标/图表/统计
+W6  Write       → /evo-write — 论文级报告
+W7  Review      → /evo-review — 跨模型审稿循环
+```
+
+## Dry-Run Mode (Phase 4 — 新增)
+
+开发期只跑到 refine+verify+review, 不进 W4 Code:
+
+```bash
+python /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude/tools/bootstrap.py '$ARGUMENTS' ... --dry-run-from W3.7
+```
+
+Dry-run 产物写入 `sessions/{sid}/_dry_runs/{timestamp}/` — 完全沙盒化, 不写 CC v2, 不写 PIPELINE_STATE.json, 不与真实运行混淆。

@@ -194,5 +194,47 @@ Everything in Medium, plus:
 ```
 /evo-write "report"       ← produces final_report.md
 /evo-review "report"      ← you are here
+/evo-review --mode atom   ← NEW — atom-level review (W3.9)
 /evo-memory update        ← extract learnings after review
 ```
+
+## ATOM Mode (Phase 4 — ARIS cross-model mechanism)
+
+Trigger: `/evo-review --mode atom --target refined_proposals/<atom_id>.json [--reviewer mimo|gpt|gemini]`
+
+Atom mode reviews algorithm proposals for concreteness using a **DIFFERENT model** than the one that wrote the refine output.
+
+### Model Rotation Rule
+
+```
+REFINE_MODEL → ATOM_REVIEWER:
+  claude-*   → mimo-*  or gpt-*   (NEVER claude-*: self-review undetectable)
+  mimo-*     → claude-* or gpt-*
+  gpt-*      → claude-* or mimo-*
+
+On model collision → FAIL FAST (don't silently degrade).
+```
+
+**Model**: Xiaomi MiMo `mimo-v2.5-pro` (OpenAI-compatible, `https://api.xiaomimimo.com/v1`, `MIMO_API_KEY` env var).
+
+### 5-Axis Review Prompt
+
+```
+You are a senior ML reviewer. Score this algorithm proposal:
+
+Axis 1 — Algorithm specificity (25%): Can a coder implement without inventing details?
+Axis 2 — Differentiation (20%): Are novelty_vs_artifacts claims verifiable?
+Axis 3 — Literature grounding (20%): Do verbatim_quotes support what they cite?
+Axis 4 — Trainer integration (15%): Real line numbers, real method signature?
+Axis 5 — Novelty vs published (20%): Search Semantic Scholar. If >70% overlap → REJECT.
+
+PASS only if ALL 5 axes >= 8.
+```
+
+### Cost Controls
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| ATOM_REVIEW_BATCH_SIZE | 5 | Review N atoms per API call |
+| ATOM_REVIEW_SAMPLING_RATE | 1.0 | 0.3 during MAP-Elites evolution |
+| ATOM_REVIEW_MAX_PER_SESSION | 200 | Budget cap → exceed → verify-only |

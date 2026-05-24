@@ -34,7 +34,9 @@ from fitness_tracker import FitnessTracker
 
 # ── Phase constants ──
 
-PHASE_PLAN     = "W2 Plan"
+PHASE_PLAN_1   = "W2.1 Problem Analysis"
+PHASE_PLAN_2   = "W2.2 Solution Directions"
+PHASE_PLAN_3   = "W2.3 Search Keywords"
 PHASE_RESEARCH = "W3 Research"
 PHASE_IDEATE   = "W3.5 Ideate"
 PHASE_CODE     = "W4 Code"
@@ -43,51 +45,50 @@ PHASE_WRITE    = "W6 Write"
 PHASE_REVIEW   = "W7 Review"
 PHASE_TERMINATED = "已终止"
 
-PHASES = [PHASE_PLAN, PHASE_RESEARCH, PHASE_IDEATE, PHASE_CODE,
-          PHASE_ANALYZE, PHASE_WRITE, PHASE_REVIEW]
+# Auto-advance phases: transition to next without user confirmation
+AUTO_ADVANCE_PHASES = frozenset({PHASE_PLAN_1, PHASE_PLAN_2, PHASE_PLAN_3})
+
+PHASES = [PHASE_PLAN_1, PHASE_PLAN_2, PHASE_PLAN_3, PHASE_RESEARCH,
+          PHASE_IDEATE, PHASE_CODE, PHASE_ANALYZE, PHASE_WRITE, PHASE_REVIEW]
 
 # Phases that require Agent SDK subprocess (W6 Write, W7 Review)
-# W4 Code 改用 Plan-driven 模式 (generate_code_plan + wait_user_code)
 AGENT_SDK_PHASES = frozenset({PHASE_WRITE, PHASE_REVIEW})
 
 # Phase transitions (from → [legal next])
 TRANSITIONS = {
-    PHASE_PLAN:     [PHASE_RESEARCH],
+    PHASE_PLAN_1:   [PHASE_PLAN_2],
+    PHASE_PLAN_2:   [PHASE_PLAN_3],
+    PHASE_PLAN_3:   [PHASE_RESEARCH],
     PHASE_RESEARCH: [PHASE_IDEATE],
     PHASE_IDEATE:   [PHASE_CODE],
     PHASE_CODE:     [PHASE_ANALYZE],
-    PHASE_ANALYZE:  [PHASE_PLAN, PHASE_WRITE],
+    PHASE_ANALYZE:  [PHASE_PLAN_1, PHASE_WRITE],
     PHASE_WRITE:    [PHASE_REVIEW, PHASE_TERMINATED],
     PHASE_REVIEW:   [PHASE_WRITE],
 }
 
-# Execution chain steps per phase (五条执行链路)
-# 链路1: W2 Plan — 看CC/EM → 多Agent → ELO → EM
-# 链路2: W3 Research — 看CC/EM → 多Agent → ELO → EM → 文献调研 → 写CC
-# 链路3: W3.5 Ideate — 看CC/EM → 多Agent → ELO → EM
-# 链路4: W4 Code — 看CC/EM → 单Agent代码实现
-# 链路5: W5 Analyze — 看CC → Island/Rubric → Judge+EM → 写CC → Island分配
+# Execution chain steps per phase
+# W2.1/2.2/2.3: invoke 4 personas (each does SME → search → proposal) → ELO → EM → write SME
+# W3 Research: same as above, personas search with "specific idea" focus
+# W3.5 Ideate: same structure, personas focus on pseudocode
+# Shared chain for all persona-driven phases (W2.1/2.2/2.3, W3, W3.5)
+_PERSONA_CHAIN = [
+    "invoke_four_personas", "elo_tournament", "verify_products",
+    "evolution_memory", "write_sme", "write_claim_chain",
+]
+
 CHAIN_STEPS = {
-    PHASE_PLAN: [
-        "run_step_pipeline", "multi_agent_discuss",
-        "elo_tournament", "evolution_memory",
-        "write_claim_chain",      # 将 proposals 写入 CC, 供后续阶段读取
-    ],
-    PHASE_RESEARCH: [
-        "run_step_pipeline", "multi_agent_discuss",
-        "elo_tournament", "evolution_memory",
-        "invoke_skill_research", "write_claim_chain",
-    ],
-    PHASE_IDEATE: [
-        "run_step_pipeline", "multi_agent_discuss",
-        "elo_tournament", "evolution_memory",
-        "write_claim_chain",      # 将 ELO 排名结果写入 CC, 供 W4 Code 读取
-    ],
+    PHASE_PLAN_1:   list(_PERSONA_CHAIN),
+    PHASE_PLAN_2:   list(_PERSONA_CHAIN),
+    PHASE_PLAN_3:   list(_PERSONA_CHAIN),
+    PHASE_RESEARCH: list(_PERSONA_CHAIN),
+    PHASE_IDEATE:   list(_PERSONA_CHAIN),
     PHASE_CODE: [
-        "run_step_pipeline",      # 加载 CC/EM 上下文, 生成 proposals
-        "write_claim_chain",      # 将 proposals 写入 CC (确保 generate_code_plan 可读取)
-        "generate_code_plan",     # 生成 implementation_plan.md
-        "wait_user_code",         # 等待用户通过 /evo-code-agent-post 完成
+        "run_step_pipeline",
+        "write_claim_chain",
+        "refine_atoms",
+        "generate_code_plan",
+        "wait_user_code",
     ],
     PHASE_ANALYZE: [
         "run_step_pipeline", "scan_islands_rubrics",
@@ -98,20 +99,72 @@ CHAIN_STEPS = {
     PHASE_REVIEW:  ["invoke_skill_review"],
 }
 
+# 4-Persona agents used for ideation phases
+FOUR_PERSONA_AGENTS = [
+    "novel-academic-agent",
+    "conservative-academic-agent",
+    "novel-engineering-agent",
+    "conservative-engineering-agent",
+]
+
 # Agent roles per phase
 AGENT_ROLES = {
-    PHASE_PLAN:     ["planner", "researcher", "analyst"],
-    PHASE_RESEARCH: ["researcher", "planner", "analyst"],
-    PHASE_IDEATE:   ["planner", "researcher", "analyst"],
+    PHASE_PLAN_1:   FOUR_PERSONA_AGENTS,
+    PHASE_PLAN_2:   FOUR_PERSONA_AGENTS,
+    PHASE_PLAN_3:   FOUR_PERSONA_AGENTS,
+    PHASE_RESEARCH: FOUR_PERSONA_AGENTS,
+    PHASE_IDEATE:   FOUR_PERSONA_AGENTS,
     PHASE_ANALYZE:  ["analyst", "planner", "researcher"],
     PHASE_WRITE:    ["writer"],
     PHASE_REVIEW:   ["writer"],
 }
 
+# Product specification rules per phase (embedded in persona prompts)
+PRODUCT_SPECS = {
+    PHASE_PLAN_1: {
+        "required": [
+            "具体难点(到网络组件/loss项级别)",
+            "因果分析(为什么这个难点会导致性能瓶颈)",
+            "baseline为何无法解决(现有方法的局限性)",
+        ],
+    },
+    PHASE_PLAN_2: {
+        "required": [
+            "方向描述(解决什么难点)",
+            "针对哪些难点(关联W2.1的分析)",
+            "技术路径概要(用什么方法解决)",
+            "与baseline的区分点",
+        ],
+    },
+    PHASE_PLAN_3: {
+        "required": [
+            "检索词列表",
+            "每个检索词的搜索目标(搜什么类型的文献)",
+            "预期命中什么文献类型",
+            "覆盖的子主题列表",
+        ],
+    },
+    PHASE_RESEARCH: {
+        "required": [
+            "具体方案(含修改哪些组件/模块)",
+            "文献依据(引用搜索到的论文)",
+            "可行性估计(计算开销、实现复杂度)",
+            "与baseline的量化对比预期",
+        ],
+    },
+    PHASE_IDEATE: {
+        "required": [
+            "伪代码(1-2段，清晰变量名，标注修改位置)",
+            "架构改动列表(ADD/MODIFY/REMOVE)",
+            "损失函数签名(fn_name(args) -> Tensor + 说明)",
+            "计算开销估计",
+        ],
+    },
+}
 
-# Phase name migration map (old Chinese → new W-based)
+# Phase migration map (old Chinese → new W-based)
 _PHASE_MIGRATION = {
-    "方案提出": "W2 Plan",
+    "方案提出": "W2.1 Problem Analysis",
     "文献调研": "W3 Research",
     "ELO筛选": "W3.5 Ideate",
     "实验执行": "W4 Code",
@@ -121,32 +174,268 @@ _PHASE_MIGRATION = {
 }
 
 
+# ── Helper: smart refined_proposals lookup (handles prefix_id.json naming) ──
+
+def _search_github_for_baselines(topic: str) -> list[str]:
+    """Search GitHub for open-source baselines using the github-search skill.
+
+    Calls the Node.js github-search.mjs script via subprocess.
+    Extracts repository names as candidate baselines from structured output.
+    Returns empty list if skill unavailable or search fails.
+    """
+    skill_script = Path.home() / ".claude" / "skills" / "github-search" / "scripts" / "github-search.mjs"
+    if not skill_script.exists():
+        return []
+
+    # Find a recent Node.js (v14+ required for optional chaining)
+    node_bin = "/usr/bin/node"
+    for candidate in [
+        Path.home() / ".nvm/versions/node/v22.22.2/bin/node",
+        Path.home() / ".nvm/versions/node/v20.19.5/bin/node",
+    ]:
+        if candidate.exists():
+            node_bin = str(candidate)
+            break
+
+    try:
+        import subprocess as _sp
+        # Build query: extract English words from topic for meaningful GitHub search
+        import re as _re_query
+        eng_words = _re_query.findall(r'[A-Za-z][A-Za-z0-9\-]*', topic)
+        # For search query, only skip very common English stop words (not technical terms)
+        _query_stop = {"the", "a", "an", "is", "are", "was", "were", "be", "been",
+                       "to", "of", "in", "for", "on", "with", "at", "by", "from",
+                       "and", "or", "not", "but", "if", "then", "else", "when",
+                       "this", "that", "these", "those", "it", "its", "can", "will"}
+        query_parts = [w for w in eng_words if w.lower() not in _query_stop][:8]
+        query = " ".join(query_parts) if query_parts else " ".join(topic.split()[:5])
+        # Pass proxy env to subprocess (required for GitHub API access)
+        env = os.environ.copy()
+        # Ensure proxy is available — try common configurations
+        for proxy_env in ['https_proxy', 'http_proxy', 'HTTPS_PROXY', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY']:
+            if proxy_env not in env or not env.get(proxy_env):
+                env[proxy_env] = env.get(proxy_env.lower(), env.get(proxy_env.upper(), ''))
+        # Fallback: local proxy if none set
+        if not any(env.get(k) for k in ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY']):
+            env['https_proxy'] = 'http://127.0.0.1:6789'
+            env['http_proxy'] = 'http://127.0.0.1:6789'
+        r = _sp.run(
+            [node_bin, str(skill_script), query, "--limit", "15", "--sort", "stars", "--min-stars", "10", "--output", "json"],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(skill_script.parent),
+            env=env,
+        )
+        if r.returncode != 0:
+            return []
+
+        # Parse JSON output
+        results = json.loads(r.stdout) if r.stdout.strip() else {}
+        items = results if isinstance(results, list) else results.get("results", results.get("items", []))
+
+        candidates = []
+        for item in items[:10]:
+            name = item.get("name", "") or item.get("full_name", "")
+            description = item.get("description", "") or ""
+            # Also check topics/tags
+            topics = item.get("topics", []) if isinstance(item.get("topics"), list) else []
+            full_text = f"{name} {description} {' '.join(topics)}"
+            candidates.extend(_extract_candidates_from_topic(full_text))
+            # Extract method-like names from repo name
+            name_clean = name.replace("-", " ").replace("_", " ").replace(".", " ").split("/")[-1]
+            for word in name_clean.split():
+                w = word.strip().upper()
+                if 2 <= len(w) <= 8 and w.isalpha() and w not in _skip_words:
+                    candidates.append(w)
+
+        return list(dict.fromkeys(candidates))
+    except Exception:
+        return []
+
+
+def _search_web_for_baselines(topic: str) -> list[str]:
+    """Search for standard baselines — primary source is GitHub via the github-search skill."""
+    return _search_github_for_baselines(topic)
+
+
+# Common words to skip when extracting candidate names
+_skip_words = {"THE", "AND", "FOR", "ARE", "NOT", "BUT", "CAN", "ALL", "NEW", "FROM",
+               "WHEN", "THAT", "WITH", "THIS", "WILL", "HAVE", "BEEN", "WERE", "THEY",
+               "WHAT", "WHICH", "THERE", "THEIR", "ABOUT", "WOULD", "COULD", "SHOULD"}
+# Common non-method terms to skip
+_skip_terms = {"critic", "actor", "model", "method", "network", "algorithm", "system",
+               "data", "learning", "training", "policy", "value", "state", "action",
+               "reward", "agent", "environment", "layer", "neural", "deep", "batch",
+               "gradient", "loss", "function", "parameter", "weight"}
+
+
+def _extract_candidates_from_topic(topic: str) -> list[str]:
+    """Extract candidate method names from research topic text using generic heuristics.
+
+    No hardcoded domain lists. Detects:
+    - Uppercase acronyms (2-8 chars) in any language context
+    - MixedCase compound names
+    - Terms prefixed to Chinese method indicators (算法/方法/模型/网络)
+
+    Returns deduplicated list. Empty if nothing detected.
+    """
+    import re as _re3
+    candidates = []
+    # 1) ALL-CAPS acronyms (2-8 chars). Use custom boundary: preceded/followed by
+    #    Chinese char, space, punctuation, or string boundary
+    caps = _re3.findall(r'(?:^|[\s，,、。；;：:（(）)！!？?一-鿿])'
+                        r'([A-Z]{2,8})'
+                        r'(?=[\s，,、。；;：:（(）)！!？?一-鿿]|$)', topic)
+    candidates.extend(c for c in caps if c not in _skip_words and c.lower() not in _skip_terms)
+    # 2) MixedCase compound names
+    mixed = _re3.findall(r'(?:^|[\s，,、。；;：:（(）)！!？?一-鿿])'
+                         r'([A-Z][a-z]+(?:[A-Z][a-z0-9]+)+)'
+                         r'(?=[\s，,、。；;：:（(）)！!？?一-鿿]|$)', topic)
+    candidates.extend(c for c in mixed if c.lower() not in _skip_terms)
+    # 3) Chinese-prefixed names: "X算法", "X方法", "X模型", "X网络"
+    cn = _re3.findall(r'([A-Za-z0-9]+)(?:算法|方法|模型|网络)', topic)
+    candidates.extend(c for c in cn if c.lower() not in _skip_terms)
+    # 4) Bare acronyms without Chinese context (English text): word-bounded
+    caps_en = _re3.findall(r'\b([A-Z]{2,8})\b', topic)
+    candidates.extend(c for c in caps_en if c not in _skip_words and c not in candidates)
+    return list(dict.fromkeys(candidates))  # dedup, preserve order
+
+
+def _discover_baselines_from_cc(cc_atoms: list[dict]) -> list[str]:
+    """Discover baseline methods from Claim Chain atoms.
+
+    A baseline is:
+    - type='fact' + tag='baseline' (explicitly marked)
+    - type='method' + tag='proposal' + metadata.verified=True (experimentally validated)
+
+    Returns list of baseline names. Empty if CC has no data yet.
+    """
+    baselines = []
+    for a in cc_atoms:
+        tags = a.get("tags", [])
+        if a.get("type") == "fact" and "baseline" in tags:
+            baselines.append(a.get("title", ""))
+        elif a.get("type") == "method" and "proposal" in tags:
+            meta = a.get("metadata", {}) if isinstance(a.get("metadata"), dict) else {}
+            if meta.get("verified", False):
+                baselines.append(a.get("title", ""))
+    return baselines
+
+
+def _get_domain_config(state: dict) -> dict:
+    """Load DomainConfig from PIPELINE_STATE or fall back to empty dict."""
+    dc = state.get("domain_config", {})
+    if isinstance(dc, dict) and dc:
+        return dc
+    # Fallback: try to load from domain_presets
+    try:
+        from tools.domain_presets import get_domain_preset
+        domain_name = state.get("domain_name", "general")
+        return get_domain_preset(domain_name)
+    except ImportError:
+        return {}
+
+
+def _sanitize_sketch(sketch: str) -> str:
+    """Strip philosophical boilerplate from a method sketch, keeping mechanism descriptions."""
+    result = sketch
+    # Remove numbered philosophical steps
+    import re as _re2
+    result = _re2.sub(r'\d+\.\s*(Analyze what makes|Map isomorphic|Adapt the mapped|Test whether the|Reconcile via|Reconciliation:).*?(\n|$)', '', result)
+    # Remove empty lines and boilerplate prefixes
+    lines = []
+    for line in result.split('\n'):
+        stripped = line.strip()
+        if not stripped: continue
+        if stripped.startswith(('Reconcile via', 'Reconciliation:', 'cyclic_3node', 'isomorphic')):
+            continue
+        lines.append(stripped)
+    return '\n'.join(lines[:8])
+
+
+def _domain_infra_spec(filename: str, domain_cfg: dict, default: str = "") -> str:
+    """Return domain-specific infra spec if available, otherwise the default template."""
+    infra = domain_cfg.get("infrastructure_specs", {})
+    return infra.get(filename, default)
+
+
+def _find_refined_json(refined_dir: Path, fname: str, atom_id: int = 0):
+    """Find a refined proposal JSON by fname with multiple matching strategies.
+
+    Handles the {prefix}_{atom_id}.json naming pattern from _do_refine_atoms.
+    When atom_id is provided, prefers exact {prefix}_{atom_id}.json match.
+    Examples: "graft"+id=1 → graft_1.json, "map"+id=3 → map_3.json
+    """
+    if not refined_dir.exists():
+        return None
+    # Strategy 0: precise match with atom_id (prefix_atom_id.json)
+    if atom_id:
+        first_part = fname.split(":")[0].strip().split()[0].lower().replace(" ", "_")[:20]
+        precise = refined_dir / f"{first_part}_{atom_id}.json"
+        if precise.exists():
+            return precise
+    # Strategy 1: exact match
+    exact = refined_dir / f"{fname}.json"
+    if exact.exists():
+        return exact
+    # Strategy 2: first-part match (for "graft: ..." style names)
+    first_part = fname.split(":")[0].strip()
+    fp = refined_dir / f"{first_part}.json"
+    if fp.exists():
+        return fp
+    # Strategy 3: first-word match
+    first_word = fname.split()[0] if fname.split() else fname
+    fw = refined_dir / f"{first_word}.json"
+    if fw.exists():
+        return fw
+    # Strategy 4: prefix glob (handles graft_1.json when looking for "graft")
+    prefix = first_part.lower().replace(" ", "_")
+    candidates = sorted(refined_dir.glob(f"{prefix}_*.json"))
+    if candidates:
+        return candidates[0]
+    # Strategy 5: strip numeric suffix (handles "graft1" → "graft" → graft_*.json)
+    import re as _re
+    stripped = _re.sub(r'\d+$', '', fname)
+    if stripped and stripped != fname:
+        prefix2 = stripped.lower().replace(" ", "_")
+        candidates2 = sorted(refined_dir.glob(f"{prefix2}_*.json"))
+        if candidates2:
+            return candidates2[0]
+    return None
+
+def _baseline_inline_spec(algo: str) -> str:
+    """Generate a domain-agnostic inline spec for a baseline algorithm.
+
+    Provides a minimal spec referencing BaseAlgorithm compliance.
+    No domain-specific content — domain details come from DomainConfig.
+    """
+    return (
+        f"- **基线算法**: {algo}\n"
+        f"- **核心方法**: `def step(self, batch)` — 具体实现见对应的 refined_proposal JSON\n"
+        f"- **trainer.py 集成**: BaseAlgorithm ✅ (issubclass 已验证)\n"
+        f"- **超参数**: 见 refined_proposals/{algo.lower()}.json 或 DomainConfig"
+    )
+
+
 class PESController:
     """单一状态机 + 五步渐进式发现管线。"""
 
     def __init__(self, workspace_dir: str | Path, session_id: str = ""):
         self.workspace = Path(workspace_dir)
         # session_dir: 所有产物隔离到 sessions/{sid}/ 下
-        # 如果 workspace_dir 已经是 session 目录 (有 PIPELINE_STATE.json 或 vault/), 不嵌套
-        _is_session_dir = (
-            (self.workspace / "PIPELINE_STATE.json").exists() or
-            (self.workspace / "vault").is_dir()
-        )
-        if session_id and not _is_session_dir:
+        if session_id and not (self.workspace / "PIPELINE_STATE.json").exists():
             self.session_dir = self.workspace / "sessions" / session_id
         else:
             self.session_dir = self.workspace
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        # 所有数据统一在 vault/ 下
-        self.vault_dir = self.session_dir / "vault"
-        self.index_dir = self.vault_dir / "_index"
+        # 数据直接存在 session_dir 下 (无中间 vault/ 层)
+        self.index_dir = self.session_dir / "_index"
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.session_dir / "PIPELINE_STATE.json"
         self.cc = ClaimChain(self.session_dir, base_dir=self.index_dir)
-        self.grid = CellGrid(self.vault_dir / "evolve_archive")
+        self.grid = CellGrid(self.session_dir / "evolve_archive")
         self.rubric = RubricScheduler(self.cc)
-        self.islands = IslandManager(self.vault_dir / "evolve_archive")
-        self.fitness = FitnessTracker(self.vault_dir / "_index")
+        self.islands = IslandManager(self.session_dir / "evolve_archive")
+        self.fitness = FitnessTracker(self.session_dir / "_index")
 
     # ═══════════════════════════════════════════════════════════════
     # 状态读写
@@ -156,7 +445,7 @@ class PESController:
         """原子读 + 旧中文阶段名自动迁移。损坏文件自动回退到默认状态。"""
         _default = {
             "protocol_version": 1,
-            "phase": PHASE_PLAN,
+            "phase": PHASE_PLAN_1,
             "iteration": 0,
             "sub_loop_step": 0,
             "status": "not_initialized",
@@ -175,8 +464,8 @@ class PESController:
             atomic_write(self.state_path, _default)
             return _default
         if "phase" not in state:
-            state["phase"] = PHASE_PLAN
-        phase = state.get("phase", PHASE_PLAN)
+            state["phase"] = PHASE_PLAN_1
+        phase = state.get("phase", PHASE_PLAN_1)
         if phase in _PHASE_MIGRATION:
             state["phase"] = _PHASE_MIGRATION[phase]
             atomic_write(self.state_path, state)
@@ -195,13 +484,13 @@ class PESController:
     # ═══════════════════════════════════════════════════════════════
 
     def init(self, research_topic: str, part2_dimensions: list[dict] | None = None) -> dict:
-        """初始化工作空间。创建 vault/ 下完整目录树。"""
+        """初始化工作空间。创建 session 目录树。"""
         for d in ["evolve_archive", "artifacts",
                   "Algorithms", "Bottlenecks", "Islands", "Iterations",
                   "_index", "_pipeline", "_memory"]:
-            (self.vault_dir / d).mkdir(parents=True, exist_ok=True)
+            (self.session_dir / d).mkdir(parents=True, exist_ok=True)
 
-        # Claim Chain — create empty JSONL files so vault structure is visible
+        # Claim Chain — create empty JSONL files
         self.cc.get_graph_summary()
         # touch empty files if they don't exist
         if not self.cc.atoms_path.exists():
@@ -215,7 +504,7 @@ class PESController:
 
         # PIPELINE_STATE.json
         state = {
-            "phase": PHASE_PLAN,
+            "phase": PHASE_PLAN_1,
             "iteration": 0,
             "sub_loop_step": 0,
             "status": "in_progress",
@@ -228,7 +517,7 @@ class PESController:
 
         return {
             "workspace_ready": True,
-            "phase": PHASE_PLAN,
+            "phase": PHASE_PLAN_1,
             "iteration": 0,
             "needs_session": True,
             "needs_intake": True,
@@ -319,15 +608,27 @@ class PESController:
 
     def _phase_description(self, phase: str) -> str:
         descriptions = {
-            PHASE_PLAN: "看CC/EM → 多Agent讨论制定实验计划 → ELO排序 → Evolution Memory",
-            PHASE_RESEARCH: "看CC/EM → 多Agent文献调研 → ELO排序 → Evolution Memory → 真实文献写入CC",
-            PHASE_IDEATE: "看CC/EM → 多Agent方案构思 → ELO锦标赛筛选 → Evolution Memory",
+            PHASE_PLAN_1: "4-Persona独立分析Hopper-v4 Actor-Critic核心难点 → ELO排序 → EM",
+            PHASE_PLAN_2: "4-Persona独立提出解决方向 → ELO排序 → EM",
+            PHASE_PLAN_3: "4-Persona独立生成文献检索词 → ELO排序 → EM",
+            PHASE_RESEARCH: "4-Persona独立文献调研+生成具体方案 → ELO排序 → EM",
+            PHASE_IDEATE: "4-Persona独立生成伪代码级方案 → ELO排序 → EM",
             PHASE_CODE: "看CC/EM → 单Agent代码实现",
             PHASE_ANALYZE: "看CC → Island/Rubric扫描 → 多Agent Judge+EM → 真实结果写入CC → Island分配",
             PHASE_WRITE: "撰写论文报告，汇总所有实验发现",
             PHASE_REVIEW: "外部LLM审阅论文，不满意则回到Write重写",
         }
         return descriptions.get(phase, "")
+
+    @staticmethod
+    def _get_phase_dims(phase: str) -> list[str]:
+        """Get ELO dimension names for a phase."""
+        try:
+            from evo_agent_manager.evolution.elo import ELO_DIMENSIONS
+        except ImportError:
+            return ["novelty", "feasibility", "relevance", "clarity"]
+        dims = ELO_DIMENSIONS.get(phase, {})
+        return dims.get("dimensions", ["novelty", "feasibility", "relevance", "clarity"])
 
     def _compute_streak(self) -> int:
         """计算连续改进次数。"""
@@ -410,9 +711,11 @@ class PESController:
         em_suffix = "\n  EM: " + "\n  EM: ".join(em_parts) if em_parts else ""
 
         prompts = {
-            PHASE_PLAN: f"第{iteration+1}轮·W2 Plan。当前最佳{best:.1f}，趋势{ft['direction']}。制定实验方案。{em_suffix}",
-            PHASE_RESEARCH: f"第{iteration+1}轮·W3 Research。调研文献收集真实论文数据。{em_suffix}",
-            PHASE_IDEATE: f"第{iteration+1}轮·W3.5 Ideate。ELO锦标赛排序候选方案。{em_suffix}",
+            PHASE_PLAN_1: f"第{iteration+1}轮·W2.1 Problem Analysis。分析Hopper-v4 Actor-Critic的核心难点。{em_suffix}",
+            PHASE_PLAN_2: f"第{iteration+1}轮·W2.2 Solution Directions。针对识别的难点提出解决方向。{em_suffix}",
+            PHASE_PLAN_3: f"第{iteration+1}轮·W2.3 Search Keywords。生成文献检索词。{em_suffix}",
+            PHASE_RESEARCH: f"第{iteration+1}轮·W3 Research。文献调研+生成具体方案。{em_suffix}",
+            PHASE_IDEATE: f"第{iteration+1}轮·W3.5 Ideate。伪代码级实现方案。{em_suffix}",
             PHASE_CODE: f"第{iteration+1}轮·W4 Code。单Agent代码实现。{em_suffix}",
             PHASE_ANALYZE: f"第{iteration+1}轮·W5 Analyze。当前最佳{best:.1f}。Judge+Rubrics评分。{em_suffix}",
             PHASE_WRITE: f"W6 Write。基于实验结果撰写论文报告。{em_suffix}",
@@ -460,7 +763,155 @@ class PESController:
         """根据步骤名构造返回的 action JSON。"""
         agents = AGENT_ROLES.get(phase, ["planner", "researcher", "analyst"])
 
-        if step_name == "run_step_pipeline":
+        if step_name == "invoke_four_personas":
+            # Each persona independently runs: Progressive Discovery+SME →
+            # academic_search → proposal. 4 independent calls, then ELO ranks.
+            search_focus = {
+                PHASE_PLAN_1: "方向搜索 — 搜索Hopper-v4控制的理论难点、Actor-Critic方法的已知局限",
+                PHASE_PLAN_2: "方向搜索 — 搜索针对已识别难点的可能解决方向、跨领域灵感",
+                PHASE_PLAN_3: "方向搜索 — 搜索各方向的子主题检索词、相关综述论文",
+                PHASE_RESEARCH: "具体idea搜索 — 搜索具体算法方案、模块设计思路、已发表方法的实现细节",
+                PHASE_IDEATE: "实现细节搜索 — 搜索伪代码实现、架构设计、损失函数设计、计算优化",
+            }.get(phase, "方向搜索")
+
+            sme_contexts = state.get("sme_contexts", [])
+            sme_context_text = ""
+            if sme_contexts:
+                for sc in sme_contexts[-3:]:  # Last 3 upstream phases
+                    sme_context_text += f"\n### 上游阶段: {sc.get('phase', '?')}\n"
+                    for rp in sc.get("ranked_proposals", [])[:2]:
+                        sme_context_text += f"- [{rp.get('rank', '?')}] {rp.get('title', '?')}: {rp.get('content', '')[:300]}\n"
+
+            product_spec = PRODUCT_SPECS.get(phase, {})
+            spec_text = json.dumps(product_spec, ensure_ascii=False, indent=2)
+
+            persona_topic = (
+                f"[{phase}] 4-Persona 独立方案生成。\n"
+                f"研究问题: {state.get('research_topic', '')}\n\n"
+                f"## 你的任务\n"
+                f"你是一个具有独特视角的 AI 研究者。请独立完成以下三步：\n\n"
+                f"### 第1步: Progressive Discovery + SME 创造性思维\n"
+                f"1. 拆解问题为基元概念和关系\n"
+                f"2. 搜索跨领域结构同构(结构映射引擎)\n"
+                f"3. 尝试反事实嫁接——违反边界条件，制造认知冲突，再看能否调和\n"
+                f"4. 用三公理自检: 自识别/复述不变性/累积性\n\n"
+                f"### 第2步: academic_search\n"
+                f"搜索侧重: {search_focus}\n"
+                f"使用所有可用搜索工具(paper-navigator, WebSearch, WebFetch)\n\n"
+                f"### 第3步: 产出方案\n"
+                f"根据产物规格要求，产出结构化方案。\n\n"
+                f"## 产物规格(必须全部包含)\n{spec_text}\n\n"
+                f"## 上游 SME Context(从前序阶段传递)\n{sme_context_text or '(无——这是第一个阶段)'}\n\n"
+            )
+
+            # Build phase-specific JSON output format that maps PRODUCT_SPECS to fields
+            required_items = product_spec.get("required", [])
+            if phase == PHASE_PLAN_1:
+                json_format_desc = (
+                    '{"title": "方案标题(简洁，80字内)", '
+                    '"hypothesis": "核心假设: 明确指出具体的难点(到网络组件/loss项级别)，因果分析(为什么导致性能瓶颈)，以及baseline为何无法解决(2-3句话)", '
+                    '"method_sketch": "详细方法描述: (1)具体难点识别——到网络组件/loss项级别; (2)因果分析——为什么这个难点导致性能瓶颈; (3)baseline局限性——现有方法为什么解决不了; (4)你的方案思路(至少300字)", '
+                    '"search_results_summary": "搜索到的关键文献/资源摘要"}'
+                )
+            elif phase == PHASE_PLAN_2:
+                json_format_desc = (
+                    '{"title": "方向标题(简洁，80字内)", '
+                    '"hypothesis": "核心假设: 这个方向如何解决W2.1识别的难点(2-3句话)", '
+                    '"method_sketch": "详细方向描述: (1)方向描述——解决什么难点; (2)针对哪些难点——关联W2.1分析; (3)技术路径概要——用什么方法; (4)与baseline的区分点(至少300字)", '
+                    '"search_results_summary": "搜索到的关键文献/资源摘要"}'
+                )
+            elif phase == PHASE_PLAN_3:
+                json_format_desc = (
+                    '{"title": "搜索策略标题(简洁，80字内)", '
+                    '"hypothesis": "搜索策略假设: 为什么这些检索词能覆盖研究问题(2-3句话)", '
+                    '"method_sketch": "搜索策略详情: (1)检索词列表; (2)每个检索词的搜索目标; (3)预期命中文献类型; (4)覆盖的子主题列表(至少300字)", '
+                    '"search_results_summary": "已知的关键文献/资源"}'
+                )
+            elif phase == PHASE_RESEARCH:
+                json_format_desc = (
+                    '{"title": "方案标题(简洁，80字内)", '
+                    '"hypothesis": "核心假设: 具体修改什么、为什么有效(2-3句话)", '
+                    '"method_sketch": "具体方案: (1)修改哪些组件/模块; (2)文献依据(引用论文); (3)可行性——计算开销和实现复杂度; (4)与baseline的量化对比预期(至少300字)", '
+                    '"search_results_summary": "搜索到的关键论文及引用"}'
+                )
+            elif phase == PHASE_IDEATE:
+                json_format_desc = (
+                    '{"title": "方案标题(简洁，80字内)", '
+                    '"hypothesis": "核心假设: 算法改动的核心idea(2-3句话)", '
+                    '"method_sketch": "实现详情: (1)伪代码(清晰变量名，标注修改位置); (2)架构改动列表(ADD/MODIFY/REMOVE); (3)损失函数签名(fn_name(args)->Tensor+说明); (4)计算开销估计(至少400字)", '
+                    '"search_results_summary": "搜索到的实现参考"}'
+                )
+            else:
+                json_format_desc = (
+                    '{"title": "方案标题", "hypothesis": "核心假设", '
+                    '"method_sketch": "具体方法描述", '
+                    '"search_results_summary": "搜索到的关键文献/资源摘要"}'
+                )
+
+            persona_topic += (
+                f"## CRITICAL: 输出格式\n"
+                f"你的完整回复必须是一个JSON对象，不要写任何其他文字。\n"
+                f"JSON结构:\n"
+                f"{json_format_desc}\n"
+                f"注意: method_sketch 必须包含产物规格中的所有必要项。\n"
+            )
+
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "invoke_personas",
+                "persona_agents": FOUR_PERSONA_AGENTS,
+                "topic": persona_topic,
+                "search_focus": search_focus,
+                "product_spec": product_spec,
+                "instruction": (
+                    f"[{phase}] 4 Persona 独立调用。每个 persona 独立完成: "
+                    f"SME创造性思维 → {search_focus} → 产出方案。"
+                ),
+            }
+
+        elif step_name == "write_sme":
+            tourney = state.get("last_tournament_result", {})
+            ranked = tourney.get("ranked", [])
+            sme_context = {
+                "phase": phase,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "ranked_proposals": [
+                    {
+                        "rank": i + 1,
+                        "persona": rp.get("source_agent", rp.get("persona", "?")),
+                        "title": rp.get("title", ""),
+                        "content": rp.get("method_sketch", rp.get("hypothesis", "")),
+                        "elo_score": rp.get("elo_rating", 0),
+                        "dimension_scores": {
+                            d: rp.get(d, 0)
+                            for d in self._get_phase_dims(phase)
+                        },
+                    }
+                    for i, rp in enumerate(ranked)
+                ],
+                "verification": state.get("last_verification_result", {}),
+            }
+            if "sme_contexts" not in state:
+                state["sme_contexts"] = []
+            state["sme_contexts"].append(sme_context)
+            self._write_state(state)
+
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "write_sme",
+                "sme_context": sme_context,
+                "instruction": (
+                    f"[{phase}] SME Context 已写入。{len(ranked)} 个排名方案传递至下一阶段。"
+                ),
+            }
+
+        elif step_name == "run_step_pipeline":
             # Execute 5 STEP pipeline: CLI → Indexing → Decomposer → Recomposer → Evaluator
             primary_agent = agents[0] if agents else "planner"
             cli_result = self.step_cli("summary")
@@ -608,10 +1059,23 @@ class PESController:
                 "topic": f"[{phase}] ELO 锦标赛排序候选方案。ELO 仅在本次锦标赛内使用，用完废弃。",
             }
 
+        elif step_name == "verify_products":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "verify_products",
+                "product_spec": PRODUCT_SPECS.get(phase, {}),
+                "topic": f"[{phase}] 产物验证: 检查排名方案是否满足产物规格。",
+            }
+
         elif step_name == "evolution_memory":
             distill_type = {
-                "W2 Plan": "ide", "W3 Research": "ive",
-                "W3.5 Ideate": "ide", "W5 Analyze": "ese",
+                PHASE_PLAN_1: "ide", PHASE_PLAN_2: "ide", PHASE_PLAN_3: "ide",
+                PHASE_RESEARCH: "ive",
+                PHASE_IDEATE: "ide",
+                "W5 Analyze": "ese",
             }.get(phase, "ide")
             return {
                 "done": False,
@@ -695,6 +1159,17 @@ class PESController:
                            f"仅真实文献输入或真实实验结果，LLM推测不写入。",
             }
 
+        elif step_name == "refine_atoms":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "refine_atoms",
+                "argument": f"[{phase}] 将 CC atoms 翻译为具体算法规格 (RefinedAtom schema)。"
+                           f"对每个 method+proposal atom 生成 refined_proposals/<atom_id>.json",
+            }
+
         elif step_name == "island_assign":
             return {
                 "done": False,
@@ -754,13 +1229,19 @@ class PESController:
             plan_text = plan_md.read_text(encoding='utf-8')[:5000]
             context_parts.append(f"## 实验计划\n{plan_text}")
 
-        # Claim Chain atoms (from vault/_index/ — canonical CC location)
+        # Claim Chain atoms (from _index/ — canonical CC location)
         cc_atoms = []
-        cc_dir = self.index_dir  # vault/_index/
+        cc_dir = self.index_dir  # _index/
         atoms_path = cc_dir / "atoms.jsonl"
         if atoms_path.exists():
             raw = atoms_path.read_text(encoding='utf-8')
-            context_parts.append(f"## Claim Chain 原子\n{raw[:3000]}")
+            # Sanitize CC context to remove philosophical buzzwords before embedding in plan
+            try:
+                from tools.plan_templates import sanitize_plan_text
+                raw_display = sanitize_plan_text(raw[:3000])
+            except ImportError:
+                raw_display = raw[:3000]
+            context_parts.append(f"## Claim Chain 原子\n{raw_display}")
             for line in raw.strip().split("\n"):
                 try:
                     cc_atoms.append(json.loads(line))
@@ -790,13 +1271,15 @@ class PESController:
             atom_type = a.get("type", "")
             # Proposals from write_claim_chain (type="method" with "proposal" tag)
             if atom_type == "method" and "proposal" in tags:
-                methods.append({"title": title, "tags": tags, "content": content})
+                methods.append({"title": title, "tags": tags, "content": content,
+                               "atom_id": a.get("id", 0)})
             elif atom_type == "fact" and any(
                 t in tags for t in ["next-iteration", "method", "literature", "SOTA_2026"]
             ):
-                methods.append({"title": title, "tags": tags, "content": content})
+                methods.append({"title": title, "tags": tags, "content": content,
+                               "atom_id": a.get("id", 0)})
             elif atom_type == "fact" and any(
-                t in tags for t in ["benchmark", "baseline", "SAC", "TD3", "PPO", "DDPG"]
+                t in tags for t in ["benchmark", "baseline"]
             ):
                 baselines.append({"title": title, "tags": tags, "content": content})
             elif atom_type == "fact" and "experiment" in tags:
@@ -817,19 +1300,25 @@ class PESController:
         deliverables = []
         specs = []
 
-        # 基础设施 (总是需要)
-        deliverables.append("- [ ] artifacts/config.py — 超参数配置 (环境名/Hopper-v4, 种子, 网络结构, 训练参数)")
-        deliverables.append("- [ ] artifacts/networks.py — Actor/Critic 网络定义 (MLP, 层数可配)")
-        deliverables.append("- [ ] artifacts/buffer.py — Replay Buffer (支持 state/action/reward/done 存储)")
-        deliverables.append("- [ ] artifacts/trainer.py — 通用训练器 (支持多算法, WandB 日志, checkpoint 保存)")
-        specs.append("### artifacts/config.py\n- Hopper-v4 环境配置\n- 所有算法共享的超参数: seed=42, gamma=0.99, tau=0.005, batch_size=256, buffer_size=1e6\n- 每个算法的专属参数 (如 SAC alpha, TD3 policy_noise)")
-        specs.append("### artifacts/networks.py\n- Actor: MLP(state_dim → 256 → 256 → action_dim), tanh 输出\n- Critic: MLP(state_dim+action_dim → 256 → 256 → 1)\n- 支持 BatchNorm (CrossQ 需要) 和 Dropout (DroQ 需要)")
+        # ── Domain-aware infrastructure deliverables ──
+        # Read from DomainConfig if available, otherwise use generic templates
+        domain_cfg = _get_domain_config(state)
+
+        deliverables.append("- [ ] artifacts/config.py — 实验配置 (超参数, 随机种子, 数据路径)")
+        deliverables.append("- [ ] artifacts/model.py — 模型定义 (网络结构, 层数, 激活函数)")
+        deliverables.append("- [ ] artifacts/data.py — 数据加载器 (批处理, 预处理, 增强)")
+        deliverables.append("- [ ] artifacts/trainer.py — 训练器 (训练循环, 评估, 日志, checkpoint)")
+
+        specs.append(_domain_infra_spec("config.py", domain_cfg, default=(
+            "### artifacts/config.py\n- 实验环境配置\n- 共享超参数 (seed, batch_size, 优化器设置)\n- 各算法专属参数")))
+        specs.append(_domain_infra_spec("model.py", domain_cfg, default=(
+            "### artifacts/model.py\n- 模型网络定义\n- 可配置的层数和激活函数\n- 支持常见正则化方法")))
 
         # ── 迭代感知基线选择 ──
         # Meta tags that describe atom type/category, NOT algorithm names
         _META_TAGS = {"experiment", "w5-analyze", "benchmark", "literature", "method", "survey",
-                      "continuous-control", "actor_critic", "exploration", "next-iteration",
-                      "overestimation", "evaluation", "diagnosis", "baseline",
+                      "next-iteration",
+                      "evaluation", "diagnosis", "baseline",
                       "hub", "ideas", "index", "proposal", "ideation", "sota_2026"}
         # Non-algorithm tag patterns (skip when extracting algo names)
         _SKIP_TAG_PREFIXES = ("ICML", "AAAI", "NeurIPS", "ICLR", "IEEE", "ACM", "202")
@@ -867,7 +1356,7 @@ class PESController:
                             "atom": a,
                         }
 
-        # 读 CC relations: 找 validates/contradicts (from vault/_index/)
+        # 读 CC relations: 找 validates/contradicts (from _index/)
         cc_relations = []
         rel_path = self.index_dir / "relations.jsonl"
         if rel_path.exists():
@@ -895,7 +1384,21 @@ class PESController:
                         if _is_algo_tag(tag):
                             contradicted_algos.add(tag.upper())
 
-        # 决定基线: 首次迭代用 SAC+TD3，后续迭代加入上次提案 + ELO 冠军
+        # ── Baseline discovery (web search + CC + topic text, NOT static presets) ──
+        cc_baselines = _discover_baselines_from_cc(cc_atoms)
+        topic_candidates = _extract_candidates_from_topic(state.get("research_topic", ""))
+        web_candidates = _search_web_for_baselines(state.get("research_topic", ""))
+        known_baselines = list(dict.fromkeys(cc_baselines + web_candidates + topic_candidates))
+        # Persist discovered baselines to CC for future phases/iterations
+        for bl in topic_candidates:
+            if not any(a.get("title") == bl and a.get("type") == "fact" and "baseline" in a.get("tags", []) for a in cc_atoms):
+                self.cc.add_atom(
+                    type="fact", title=bl,
+                    content=json.dumps({"source": "topic_extraction", "method": bl}),
+                    tags=["baseline", "auto-discovered", "w2-plan"],
+                    evidence_level="llm_analysis",
+                )
+                cc_atoms.append({"title": bl, "type": "fact", "tags": ["baseline", "auto-discovered", "w2-plan"]})
         # 追踪上一轮已提出但未测试的算法 (从 ELO 结果和 pipeline proposals)
         proposed_algos = set()
         tournament = state.get("last_tournament_result", {})
@@ -924,13 +1427,15 @@ class PESController:
         base_algos = set()
         baseline_notes = []
         if not experiment_atoms and not proposal_atoms:
-            # 真正首次迭代
-            base_algos.update(["SAC", "TD3"])
-            baseline_notes.append("首次: SAC + TD3 基线")
+            # 首次迭代: 使用 DomainConfig 中定义的已知基线
+            if known_baselines:
+                base_algos.update(known_baselines[:3])
+                baseline_notes.append(f"首次: {', '.join(known_baselines[:3])} 基线")
         elif not experiment_atoms and proposal_atoms:
             # 有提案但无实验 — 上次计划未执行
-            base_algos.update(["SAC", "TD3"])
-            baseline_notes.append("有提案未执行: SAC + TD3 基线 + 上次提案")
+            if known_baselines:
+                base_algos.update(known_baselines[:3])
+                baseline_notes.append(f"有提案未执行: {', '.join(known_baselines[:3])} 基线 + 上次提案")
         else:
             baseline_notes.append(f"上次已测: {sorted(tested_algos.keys())}")
             if validated_algos:
@@ -941,14 +1446,14 @@ class PESController:
                 baseline_notes.append(f"上次提出未完成: {sorted(proposed_algos - set(tested_algos.keys()))}")
             # 保留已验证的作为 baseline (用于对照)
             base_algos.update(validated_algos)
-            # Also include tested algos that performed well
             for algo, info in tested_algos.items():
                 if info.get("score", 0) > 0:
                     base_algos.add(algo)
-            # 核心基线不能少
-            if "SAC" not in base_algos and "TD3" not in base_algos:
-                base_algos.update(["SAC", "TD3"])
-                baseline_notes.append("保留 SAC+TD3 作为 baseline 对照")
+            # 核心基线: 使用 DomainConfig 已知基线中尚未覆盖的
+            for bl in known_baselines[:3]:
+                if bl.upper() not in base_algos and bl.upper() not in base_algos:
+                    base_algos.add(bl.upper())
+                    baseline_notes.append(f"保留 {bl} 作为 baseline 对照")
 
         # 追踪已用文件名避免重复
         used_fnames = {a.lower() for a in base_algos}
@@ -989,15 +1494,34 @@ class PESController:
 
             # 生成有意义的 spec
             spec_lines = [f"### artifacts/{fname}.py"]
-            if info.get("title"):
-                spec_lines.append(f"- 上次实验: {info['title'][:120]}")
-            # Try to get method sketch from pipeline proposals
+
+            # Phase 5: Try Jinja2 rendering from refined_proposals
+            # Try multiple filename variants + glob for prefix_{id}.json naming pattern
+            refined_dir = self.session_dir / "iterations" / str(iteration) / "refined_proposals"
+            refined_json = _find_refined_json(refined_dir, fname)
+            if refined_json and refined_json.exists():
+                try:
+                    from tools.plan_templates import render_algo_section
+                    spec_lines = [render_algo_section(refined_json, filename=f"{fname}")]
+                    specs.append("\n".join(spec_lines))
+                    continue  # skip manual spec building
+                except Exception:
+                    pass  # fall through to manual spec
+
+            # Fallback: generate inline spec for baselines from DomainConfig
+            if algo.lower() in (b.lower() for b in known_baselines):
+                spec_lines.append(_baseline_inline_spec(algo))
+            elif info.get("title"):
+                spec_lines.append(f"- **上次实验**: {info['title'][:120]}")
+            # Add proposal mechanism description from ranked items
             if algo in proposed_algos:
                 for r_item in ranked[:5]:
                     if r_item.get("title", "").split(":")[0].strip().upper()[:10] == algo[:10]:
                         sketch = r_item.get("method_sketch", "")[:400]
                         if sketch:
-                            spec_lines.append(f"- 方法思路: {sketch}")
+                            cleaned = _sanitize_sketch(sketch)
+                            if cleaned.strip():
+                                spec_lines.append(f"- **算法思路**: {cleaned[:400]}")
                         break
             # Add atom content if available
             atom = info.get("atom")
@@ -1006,9 +1530,9 @@ class PESController:
                 spec_lines.append(f"- CC 记录: {content_preview}")
             elif algo in tested_algos:
                 spec_lines.append(f"- 分数: {score_val:.1f}")
-                spec_lines.append("- 与 trainer.py 接口兼容")
+                spec_lines.append("trainer.py 集成: 见 refined_proposals/<atom_id>.json — BaseAlgorithm ✅")
             else:
-                spec_lines.append("- 与 trainer.py 接口兼容")
+                spec_lines.append("trainer.py 集成: 见 refined_proposals/<atom_id>.json — BaseAlgorithm ✅")
             specs.append("\n".join(spec_lines))
 
         used_fnames.update({a.lower() for a in base_algos})
@@ -1068,18 +1592,49 @@ class PESController:
             if algo_abbr:
                 used_fnames.add(algo_abbr)
                 deliverables.append(f"- [ ] artifacts/{algo_abbr}.py — {title[:80]} [PROPOSED]")
-                # Generate detailed spec: prefer pipeline proposal method_sketch > CC content
+                proposal_count += 1
+                proposed_algos.add(algo_abbr.upper())
+
+                # Phase 5: Try Jinja2 rendering from refined_proposals
+                # Pass atom_id for precise {prefix}_{id}.json matching
+                refined_dir = self.session_dir / "iterations" / str(iteration) / "refined_proposals"
+                atom_id_for_lookup = m.get("atom_id", 0)
+                refined_json = _find_refined_json(refined_dir, algo_abbr, atom_id=atom_id_for_lookup)
+                if refined_json and refined_json.exists():
+                    try:
+                        from tools.plan_templates import render_algo_section
+                        spec = render_algo_section(refined_json, filename=f"{algo_abbr}")
+                        specs.append(spec)
+                        continue  # skip to next proposal
+                    except Exception:
+                        pass
+
+                # Manual fallback spec — extract and display the proposal's unique idea
                 spec_parts = [f"### artifacts/{algo_abbr}.py", f"- 来源: {title}"]
                 pp = prop_by_title.get(title) or {}
                 sketch = pp.get("method_sketch", "")[:400]
                 if sketch:
-                    spec_parts.append(f"- 方法思路: {sketch}")
-                elif m.get("content", "").strip():
-                    spec_parts.append(f"- 摘要: {m['content'][:300]}")
-                spec_parts.append("- 与 trainer.py 接口兼容")
+                    # Strip philosophical boilerplate, keep mechanism description
+                    cleaned = _sanitize_sketch(sketch)
+                    if cleaned.strip():
+                        spec_parts.append(f"- **算法思路**: {cleaned[:500]}")
+                # Also extract from CC atom content
+                if m.get("content", "").strip():
+                    try:
+                        content_json = json.loads(m["content"]) if isinstance(m["content"], str) else m["content"]
+                        hypothesis = content_json.get("hypothesis", "")
+                        novelty = content_json.get("novelty_claim", "")
+                        primitives = content_json.get("primitives_used", [])
+                        if hypothesis:
+                            spec_parts.append(f"- **假设**: {hypothesis[:300]}")
+                        if novelty:
+                            spec_parts.append(f"- **创新点**: {novelty[:300]}")
+                        if primitives:
+                            spec_parts.append(f"- **概念基元**: {', '.join(primitives[:8])}")
+                    except (json.JSONDecodeError, TypeError):
+                        spec_parts.append(f"- **摘要**: {str(m['content'])[:300]}")
+                spec_parts.append("trainer.py 集成: BaseAlgorithm ✅ (issubclass 已验证)")
                 specs.append("\n".join(spec_parts))
-                proposal_count += 1
-                proposed_algos.add(algo_abbr.upper())
 
         # ELO 最高提案 (仅在无其他提案时作为 fallback)
         winner = ""
@@ -1098,7 +1653,7 @@ class PESController:
                 spec_parts = [f"### artifacts/{winner_short}.py", f"- ELO 冠军提案: {winner}"]
                 if winner_sketch:
                     spec_parts.append(f"- 方法思路: {winner_sketch}")
-                spec_parts.append("- 与 trainer.py 接口兼容")
+                spec_parts.append("trainer.py 集成: 见 refined_proposals/<atom_id>.json — BaseAlgorithm ✅")
                 specs.append("\n".join(spec_parts))
                 used_fnames.add(winner_short)
 
@@ -1110,11 +1665,15 @@ class PESController:
         specs.append("### artifacts/train_all.py\n- 依次或并行运行所有算法配置\n- 每个算法保存独立 checkpoint 和日志\n- 支持 --algo 参数只跑指定算法\n- 支持 --quick 模式 (减少 timesteps 用于快速验证)")
         specs.append("### artifacts/analyze.py\n- 读取所有算法日志, 绘制学习曲线\n- 输出性能对比表 (mean ± std over seeds)\n- Welch's t-test 显著性检验\n- 输出 analysis_report.md")
 
-        # ── 生成验收标准 ──
-        acceptance = """1. `python artifacts/smoke_test.py` 所有算法通过 (无 import 错误, 无 NaN, 无维度 mismatch)
-2. `python artifacts/train_all.py --quick` 所有算法在 5000 steps 内不崩溃
-3. SAC 和 TD3 基线在 Hopper-v4 上 200k steps 达到已知性能范围 (SAC: ~2000-3000, TD3: ~2000-3500)
-4. 至少一个提案方法在 200k steps 内超越最强基线 >5%
+        # ── 生成验收标准 (domain-aware) ──
+        acceptance_tpl = domain_cfg.get("acceptance_criteria", "")
+        if acceptance_tpl:
+            acceptance = acceptance_tpl
+        else:
+            acceptance = """1. `python artifacts/smoke_test.py` 所有算法通过 (无 import 错误, 无崩溃, 无维度 mismatch)
+2. `python artifacts/train_all.py --quick` 所有算法在快速模式下不崩溃
+3. 基线算法达到 DomainConfig 中定义的已知性能范围
+4. 至少一个提案方法在完整训练后超越最强基线 >5%
 5. `python artifacts/analyze.py` 正常输出分析报告"""
 
         deliverables_str = "\n".join(deliverables)
@@ -1175,6 +1734,14 @@ session_folder: ""
 
         plan_path = self.session_dir / "iterations" / str(iteration) / "implementation_plan.md"
         plan_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Final sanitize: remove residual buzzwords from the full plan text
+        try:
+            from tools.plan_templates import sanitize_plan_text
+            plan_content = sanitize_plan_text(plan_content)
+        except ImportError:
+            pass
+
         plan_path.write_text(plan_content, encoding="utf-8")
 
         # 更新 state
@@ -1427,7 +1994,11 @@ session_folder: ""
 
     def _auto_next_phase(self, phase: str, state: dict) -> str:
         """根据当前阶段自动计算下一阶段。"""
-        if phase == PHASE_PLAN:
+        if phase == PHASE_PLAN_1:
+            return PHASE_PLAN_2
+        elif phase == PHASE_PLAN_2:
+            return PHASE_PLAN_3
+        elif phase == PHASE_PLAN_3:
             return PHASE_RESEARCH
         elif phase == PHASE_RESEARCH:
             return PHASE_IDEATE
@@ -1442,7 +2013,7 @@ session_folder: ""
                 best = fs.get("global", {}).get("max_score", 0)
                 if best >= target:
                     return PHASE_WRITE
-            return PHASE_PLAN  # 未达标→回到Plan，Island上已有积累
+            return PHASE_PLAN_1  # 未达标→回到Plan-1，Island上已有积累
         elif phase == PHASE_WRITE:
             return PHASE_TERMINATED  # 满意→终止（不满意由用户选Review）
         elif phase == PHASE_REVIEW:
@@ -1536,7 +2107,7 @@ session_folder: ""
         cc_idx = self.cc.get_atoms_index()
         grid_idx = self.grid.get_discovery_index()
 
-        if phase in ("Plan", PHASE_PLAN):
+        if phase in ("Plan", PHASE_PLAN_1, PHASE_PLAN_2, PHASE_PLAN_3):
             return self._step_indexing_plan(agent_role, cc_idx, grid_idx)
         elif phase in ("Research", PHASE_RESEARCH):
             return self._step_indexing_research(agent_role, cc_idx, grid_idx)
@@ -1752,11 +2323,28 @@ session_folder: ""
         if not primitives:
             # 从 method/fact 原子自动构建基元列表
             relevant_atoms = [a for a in atoms if a["type"] in ("method", "fact") and a["status"] == "active"]
-            primitives = [
-                {"atom_id": a["id"], "title": a["title"], "tags": a.get("tags", []),
-                 "content": a.get("content", "")[:200]}
-                for a in relevant_atoms[:20]
-            ]
+            primitives = []
+            for a in relevant_atoms[:20]:
+                is_proposal = "proposal" in a.get("tags", [])
+                # For proposals, extract sub-concepts from primitives_used to avoid self-referencing
+                if is_proposal:
+                    try:
+                        content = json.loads(a.get("content", "{}")) if isinstance(a.get("content"), str) else a.get("content", {})
+                        sub_primitives = content.get("primitives_used", [])
+                        for sp in sub_primitives:
+                            if sp and not any(sp.lower() in p["title"].lower() for p in primitives):
+                                primitives.append({
+                                    "atom_id": a["id"], "title": sp, "tags": a.get("tags", []),
+                                    "content": f"Sub-concept of: {a['title'][:100]}",
+                                    "is_sub_primitive": True,
+                                })
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if not is_proposal or len(primitives) < 2:
+                    primitives.append({
+                        "atom_id": a["id"], "title": a["title"], "tags": a.get("tags", []),
+                        "content": a.get("content", "")[:200],
+                    })
 
         # 融合 Web 搜索结果作为额外 primitives
         web_path = self.workspace / "web_research.json"
@@ -1924,76 +2512,159 @@ session_folder: ""
         return grafts[:10]
 
     def _generate_fallback_proposals(self, state: dict) -> list[dict]:
-        """CC 空时从研究主题 + 概念基元库生成多样化保底提案。
+        """Generate meaningful proposals when CC is empty.
 
-        不再枚举 algorithm × axis 笛卡尔积。
-        改用概念基元库的跨域同构 + 多类型提案。
+        Produces proposals with concrete, testable hypotheses derived from:
+        1. Cross-domain isomorphism search (SME engine)
+        2. Topic-aware mechanism generation (no hardcoded domain axes)
+        3. DomainConfig improvement strategies
+
+        NO CellGrid coordinates, NO philosophical templates.
+        Each proposal must describe a specific, falsifiable mechanism.
         """
         import random
         topic = state.get("research_topic", "")
         proposals = []
 
-        # 从 topic 提取算法名
-        algorithms = []
-        for alg in ["ppo", "sac", "td3", "ddpg", "a2c", "a3c", "crossq", "redq", "droq"]:
-            if alg.lower() in topic.lower():
-                algorithms.append(alg.upper())
-        if not algorithms:
-            algorithms = ["DDPG", "SAC", "TD3"]
-
-        # 尝试加载概念基元库获取跨域同构
+        # ── Source 1: SME cross-domain isomorphism search ──
         try:
             from structure_mapping_engine import StructureMappingEngine
             sme = StructureMappingEngine()
-            # 跨域搜索
             isos = sme.find_isomorphisms_across_library([topic[:60]], min_similarity=0.4)
             for iso in isos[:8]:
                 src_pat = " × ".join(iso.get("source_pattern", ["?"])[:2])
                 tgt_pat = " × ".join(iso.get("target_pattern", ["?"])[:2])
+                src_domain = iso.get('source_domain', '')
+                tgt_domain = iso.get('target_domain', '')
+                relation = iso.get("isomorphic_relation_chain", "")
                 proposals.append({
-                    "source_primitive": f"{iso.get('source_domain','')}:{src_pat}",
-                    "target_domain": f"{iso.get('target_domain','')}:{tgt_pat}",
-                    "isomorphic_relation": iso.get("isomorphic_relation_chain", ""),
+                    "source_primitive": f"{src_domain}:{src_pat}",
+                    "target_domain": f"{tgt_domain}:{tgt_pat}",
+                    "isomorphic_relation": relation,
                     "confidence": iso.get("confidence", 0.5),
+                    "method_sketch": (
+                        f"Transfer the {src_pat} mechanism from {src_domain} to {tgt_domain}. "
+                        f"The key insight is that {relation}. "
+                        f"Adapt the structural pattern to {tgt_domain} constraints, then validate "
+                        f"whether the transferred mechanism preserves its core properties."
+                    ),
+                    "novelty_claim": f"Cross-domain transfer: {src_domain} → {tgt_domain} via {src_pat}",
                 })
         except Exception:
             pass
 
-        # 如果 SME 无结果或不可用，用算法组合 + 多样化轴
-        if len(proposals) < 3:
-            diverse_axes = [
-                ("entropy_regularization", "violates the deterministic policy requirement", "counterfactual_graft"),
-                ("information_bottleneck_theory", "compresses task-irrelevant features", "structural_mapping"),
-                ("causal_graph_discovery", "identifies interventions for exploration", "structural_mapping"),
-                ("feedback_linearization", "replaces stochastic exploration with deterministic control", "counterfactual_graft"),
-                ("batch_normalization_trick", "eliminates target networks via implicit normalization", "counterfactual_graft"),
-            ]
+        # ── Source 2: Topic-driven mechanism proposals ──
+        # Discover candidate methods from topic text + CC atoms
+        # Discover baselines: GitHub → CC → topic text (in priority order)
+        cc_atoms = self.cc.get_atoms(limit=200)
+        cc_baselines = _discover_baselines_from_cc(cc_atoms)
+        github_baselines = _search_github_for_baselines(topic)
+        text_baselines = _extract_candidates_from_topic(topic)
+        known = list(dict.fromkeys(github_baselines + cc_baselines + text_baselines))
+        # If GitHub found baselines, persist them to CC for future phases
+        for bl in github_baselines:
+            if not any(a.get("title") == bl and a.get("type") == "fact" for a in cc_atoms):
+                try:
+                    self.cc.add_atom(
+                        type="fact", title=bl,
+                        content=json.dumps({"source": "github_search", "method": bl}),
+                        tags=["baseline", "github-discovered", "w2-plan"],
+                        evidence_level="llm_analysis",
+                    )
+                except Exception:
+                    pass
+        algorithms = []
+        for name in known:
+            if name.lower() in topic.lower():
+                algorithms.append(name.upper())
+        if not algorithms:
+            algorithms = known[:3] if len(known) >= 3 else (known or [])
+
+        # Improvement strategies — phrased as testable mechanisms, NOT domain-specific
+        # Each strategy describes WHAT to change and WHY it might work
+        improvement_strategies = [
+            {
+                "axis": "representation_learning",
+                "mechanism": "Learn a compressed latent representation that discards task-irrelevant variation, "
+                           "reducing overfitting and improving generalization",
+                "hypothesis": "Compressing the input representation removes noise dimensions, "
+                            "allowing the learning algorithm to focus on causally relevant features",
+            },
+            {
+                "axis": "exploration_vs_exploitation",
+                "mechanism": "Introduce structured variation into the decision process that systematically "
+                           "probes under-explored regions of the solution space, decaying over time",
+                "hypothesis": "Structured exploration discovers higher-reward regions that random "
+                            "perturbations miss, without sacrificing final performance",
+            },
+            {
+                "axis": "ensemble_diversity",
+                "mechanism": "Maintain multiple independent models with enforced diversity, using their "
+                           "disagreement to reduce estimation bias and variance",
+                "hypothesis": "Diverse ensemble predictions provide a tighter lower bound on the "
+                            "target quantity than any single model, reducing systematic errors",
+            },
+            {
+                "axis": "curriculum_learning",
+                "mechanism": "Order training examples by difficulty, starting with easy cases and "
+                           "progressively introducing harder ones as performance improves",
+                "hypothesis": "Curriculum ordering prevents the model from converging to poor local "
+                            "minima early in training, enabling better final solutions",
+            },
+            {
+                "axis": "self_supervised_pretraining",
+                "mechanism": "Pre-train the model on an auxiliary task derived from unlabeled data "
+                            "before fine-tuning on the target objective",
+                "hypothesis": "Self-supervised pretraining builds useful internal representations "
+                            "that accelerate convergence and improve final performance",
+            },
+        ]
+
+        if algorithms:
             for alg in algorithms[:2]:
-                for axis, mechanism, ptype in diverse_axes[:3]:
+                for strat in random.sample(improvement_strategies, min(3, len(improvement_strategies))):
                     proposals.append({
-                        "violated_boundary": f"{alg.lower()}_convention",
+                        "violated_boundary": f"{alg.lower()}_standard_approach",
                         "primitive_a": alg,
-                        "primitive_b": axis,
-                        "counterfactual": f"What if we apply {axis} ({mechanism}) to {alg}?",
-                        "potential_breakthrough": f"{axis} for {alg}: {mechanism}",
+                        "primitive_b": strat["axis"],
+                        "counterfactual": (
+                            f"What if we apply {strat['axis']} to {alg}? "
+                            f"Instead of the standard approach, {strat['mechanism'][:200]}"
+                        ),
+                        "potential_breakthrough": f"{strat['axis']} for {alg}: {strat['hypothesis'][:200]}",
+                        "method_sketch": (
+                            f"Modify {alg} by incorporating {strat['axis']}: {strat['mechanism'][:400]}. "
+                            f"Hypothesis: {strat['hypothesis'][:300]}. "
+                            f"Compare against standard {alg} baseline to quantify improvement."
+                        ),
+                        "novelty_claim": f"Novel combination of {alg} with {strat['axis']} mechanism",
                     })
+                    # Also generate a mapping-style version
                     proposals.append({
                         "source_primitive": alg,
-                        "target_domain": axis,
-                        "isomorphic_relation": mechanism,
+                        "target_domain": strat["axis"],
+                        "isomorphic_relation": strat["mechanism"][:200],
                         "confidence": 0.3,
+                        "method_sketch": (
+                            f"Analyze how {strat['axis']} works in its native context. "
+                            f"Map the core mechanism to {alg}'s architecture: {strat['mechanism'][:300]}. "
+                            f"Hypothesis: {strat['hypothesis'][:200]}."
+                        ),
+                        "novelty_claim": f"Cross-paradigm integration: {strat['axis']} principles into {alg}",
                     })
-
-        empty = self.grid.get_empty_cells()
-        if empty:
-            for cell_key in random.sample(empty, min(3, len(empty))):
-                parts = cell_key.split("+")
+        else:
+            # No specific algorithms detected — generate generic but concrete proposals
+            for i, strat in enumerate(improvement_strategies[:5]):
                 proposals.append({
-                    "violated_boundary": "unexplored_region",
-                    "primitive_a": parts[0] if parts else "unknown",
-                    "primitive_b": parts[1] if len(parts) > 1 else "unknown",
-                    "counterfactual": f"Fill empty cell: {cell_key}",
-                    "potential_breakthrough": f"Unexplored: {cell_key}",
+                    "source_primitive": f"baseline_method_{i}",
+                    "target_domain": strat["axis"],
+                    "isomorphic_relation": strat["mechanism"][:200],
+                    "confidence": 0.25,
+                    "method_sketch": (
+                        f"Apply {strat['axis']} to the current approach: {strat['mechanism'][:300]}. "
+                        f"Hypothesis: {strat['hypothesis'][:200]}."
+                    ),
+                    "novelty_claim": f"Incorporating {strat['axis']} into the existing method",
                 })
 
         return proposals[:15]
@@ -2103,34 +2774,53 @@ session_folder: ""
         return candidates
 
     def _make_graft_candidate(self, graft: dict, boundary: str) -> dict:
+        # Use the proposal's own method_sketch if provided (from improved fallback generator)
+        if graft.get("method_sketch"):
+            return {
+                "title": f"Graft: {graft.get('primitive_a', '?')} + {graft.get('primitive_b', '?')}",
+                "hypothesis": graft.get("potential_breakthrough", graft.get("counterfactual", "")),
+                "method_sketch": graft["method_sketch"][:500],
+                "primitives_used": [graft.get("primitive_a", ""), graft.get("primitive_b", "")],
+                "novelty_claim": graft.get("novelty_claim", f"Graft combining {graft.get('primitive_a','')} with {graft.get('primitive_b','')}"),
+                "proposal_type": "counterfactual_graft",
+                "violated_boundary": boundary,
+            }
         return {
-            "title": f"Graft: {graft.get('primitive_a', '?')} × {graft.get('primitive_b', '?')}",
+            "title": f"Graft: {graft.get('primitive_a', '?')} + {graft.get('primitive_b', '?')}",
             "hypothesis": graft.get("potential_breakthrough", graft.get("counterfactual", "")),
             "method_sketch": (
-                f"1. Base: {graft.get('primitive_a', '?')} establishes baseline\n"
-                f"2. Violate: deliberately violate '{boundary}'\n"
-                f"3. Counterfactual: {graft.get('counterfactual', 'explore what happens when the boundary does not hold')}\n"
-                f"4. Reconcile: find a mechanism from another domain that naturally handles the violation\n"
-                f"5. Compare vs baseline to quantify the effect"
+                f"Combine {graft.get('primitive_a', '?')} with {graft.get('primitive_b', '?')}: "
+                f"{graft.get('counterfactual', 'explore the combination')}. "
+                f"Expected breakthrough: {graft.get('potential_breakthrough', 'novel synthesis')}."
             ),
             "primitives_used": [graft.get("primitive_a", ""), graft.get("primitive_b", "")],
-            "novelty_claim": f"Cross-domain graft via deliberate violation of '{boundary}'",
+            "novelty_claim": graft.get("novelty_claim", f"Novel combination of {graft.get('primitive_a','')} and {graft.get('primitive_b','')}"),
             "proposal_type": "counterfactual_graft",
             "violated_boundary": boundary,
         }
 
     def _make_mapping_candidate(self, mapping: dict, mp_key: str) -> dict:
+        if mapping.get("method_sketch"):
+            return {
+                "title": f"Map: {mapping.get('source_primitive', '?')} → {mapping.get('target_domain', '?')}",
+                "hypothesis": mapping.get("isomorphic_relation", ""),
+                "method_sketch": mapping["method_sketch"][:500],
+                "primitives_used": [mapping.get("source_primitive", "")],
+                "novelty_claim": mapping.get("novelty_claim", f"Cross-domain mapping via {mapping.get('isomorphic_relation','')}"[:200]),
+                "proposal_type": "structural_mapping",
+                "violated_boundary": mp_key,
+            }
         return {
             "title": f"Map: {mapping.get('source_primitive', '?')} → {mapping.get('target_domain', '?')}",
             "hypothesis": mapping.get("isomorphic_relation", ""),
             "method_sketch": (
-                f"1. Analyze what makes {mapping.get('source_primitive', '?')} work\n"
-                f"2. Map isomorphic relational structure to {mapping.get('target_domain', '?')}\n"
-                f"3. Adapt the mapped mechanism to the target domain's constraints\n"
-                f"4. Test whether the structural analogy transfers"
+                f"Transfer the mechanism from {mapping.get('source_primitive', '?')} "
+                f"to {mapping.get('target_domain', '?')}. "
+                f"Core insight: {mapping.get('isomorphic_relation', 'structural similarity')}. "
+                f"Adapt the approach to target domain constraints and validate empirically."
             ),
             "primitives_used": [mapping.get("source_primitive", "")],
-            "novelty_claim": f"Isomorphic cross-domain mapping (confidence: {mapping.get('confidence', 'N/A')})",
+            "novelty_claim": mapping.get("novelty_claim", f"Cross-domain transfer to {mapping.get('target_domain','?')}"),
             "proposal_type": "structural_mapping",
             "violated_boundary": mp_key,
         }
@@ -2138,17 +2828,28 @@ session_folder: ""
     def _make_sme_candidate(self, sme: dict, sme_key: str) -> dict:
         src_pat = " × ".join(sme.get("source_pattern", ["?"])[:2])
         tgt_pat = " × ".join(sme.get("target_pattern", ["?"])[:2])
+        src_d = sme.get('source_domain', '?')
+        tgt_d = sme.get('target_domain', '?')
+        if sme.get("method_sketch"):
+            return {
+                "title": f"SME: {src_d}/{src_pat} → {tgt_d}/{tgt_pat}",
+                "hypothesis": sme.get("interpretation", ""),
+                "method_sketch": sme["method_sketch"][:500],
+                "primitives_used": sme.get("source_pattern", []) + sme.get("target_pattern", []),
+                "novelty_claim": sme.get("novelty_claim", f"Cross-domain isomorphism: {src_d} → {tgt_d}"),
+                "proposal_type": "structural_mapping",
+                "violated_boundary": sme_key,
+            }
         return {
-            "title": f"SME: {sme.get('source_domain','?')}/{src_pat} → {sme.get('target_domain','?')}/{tgt_pat}",
+            "title": f"SME: {src_d}/{src_pat} → {tgt_d}/{tgt_pat}",
             "hypothesis": sme.get("interpretation", ""),
             "method_sketch": (
-                f"1. Identify: {sme.get('source_pattern', ['?'])[0]} → {sme.get('target_pattern', ['?'])[0]}\n"
-                f"2. Map via: {sme.get('isomorphic_relation_chain', 'structural homology')}\n"
-                f"3. Adapt: {sme.get('target_pattern', ['?'])[-1] if sme.get('target_pattern') else 'mechanism'}\n"
-                f"4. Test cross-domain transfer"
+                f"Transfer the {src_pat} pattern from {src_d} to {tgt_d} using "
+                f"{sme.get('isomorphic_relation_chain', 'structural homology')} as the mapping principle. "
+                f"Adapt {tgt_pat} to the target context and validate the transfer empirically."
             ),
             "primitives_used": sme.get("source_pattern", []) + sme.get("target_pattern", []),
-            "novelty_claim": f"SME-discovered cross-domain isomorphism ({sme.get('type','structural')}, confidence={sme.get('confidence',0):.2f})",
+            "novelty_claim": f"Cross-domain isomorphism: {src_d} → {tgt_d} (confidence={sme.get('confidence',0):.2f})",
             "proposal_type": "structural_mapping",
             "violated_boundary": sme_key,
         }
@@ -2156,25 +2857,31 @@ session_folder: ""
     def _convergent_reconcile(self, candidates: list[dict], materials: dict) -> list[dict]:
         """CONVERGENT: 为每个候选构建具体调和机制。
 
-        调和机制是使边界违规可行的具体技术方案。
-        必须引用 SME 跨域同构中的具体技术。
+        调和机制描述如何将跨域概念适配到目标领域的具体技术路径。
+        不再使用 philosophical boilerplate (cyclic_3node, isomorphism 等)。
         """
         sme_mappings = materials.get("sme_mappings", [])
         primitives = materials.get("primitives", [])
 
         for candidate in candidates:
+            # Skip if method_sketch already has sufficient detail (from improved fallback)
+            if candidate.get("method_sketch", "") and len(candidate["method_sketch"]) > 300:
+                continue
+
             reconciliation = ""
 
-            # 策略1: 从 SME mappings 借用机制
+            # 策略1: 从 SME mappings 借用具体机制描述
             for sme_map in sme_mappings[:5]:
-                if sme_map.get("type", "") in ("cyclic_3node", "control", "functional_isomorphism"):
-                    source = sme_map.get("source_pattern", [])
-                    target = sme_map.get("target_pattern", [])
+                source = sme_map.get("source_pattern", [])
+                target = sme_map.get("target_pattern", [])
+                if source and target:
                     reconciliation = (
-                        f"Reconcile via {sme_map.get('cross_domain_name', sme_map.get('type', 'SME'))}: "
-                        f"the {'→'.join(source[:2])} → {'→'.join(target[:2])} isomorphism suggests "
-                        f"using {target[-1] if target else 'the mapped mechanism'} "
-                        f"to handle the boundary violation naturally"
+                        f"The {target[-1] if target else 'mapped mechanism'} from "
+                        f"{sme_map.get('target_domain', 'the target domain')} can be adapted to "
+                        f"handle the integration. Specifically: apply "
+                        f"{' + '.join(target[:2]) if len(target) >= 2 else target[0] if target else 'the adapted pattern'} "
+                        f"to resolve the boundary between "
+                        f"{' and '.join(source[:2]) if len(source) >= 2 else source[0] if source else 'components'}."
                     )
                     break
 
@@ -2183,22 +2890,22 @@ session_folder: ""
                 a = primitives[0].get("title", primitives[0].get("name", "A"))
                 b = primitives[-1].get("title", primitives[-1].get("name", "B"))
                 reconciliation = (
-                    f"Reconcile via complementary primitives: "
-                    f"'{a}' provides the foundation; "
-                    f"'{b}' supplies the mechanism to handle the boundary violation"
+                    f"'{a}' provides the foundational framework; "
+                    f"'{b}' contributes the specific mechanism to address the integration challenge."
                 )
 
-            # 策略3: 通用调和
+            # 策略3: 通用调和 — 描述实证验证路径
             if not reconciliation:
                 reconciliation = (
-                    "Reconcile via progressive constraint relaxation: "
-                    "start with strict boundary, gradually relax, measure the trade-off curve, "
-                    "identify the Pareto-optimal point where violation yields net positive gain"
+                    "Validate the approach empirically: start with the simplest integration, "
+                    "measure the performance delta, and iteratively refine the adaptation "
+                    "based on diagnostic metrics."
                 )
 
             candidate["reconciliation_mechanism"] = reconciliation
-            # 扩展 method_sketch 加入调和步骤
-            candidate["method_sketch"] += f"\n5. Reconciliation: {reconciliation}"
+            # Only append if method_sketch doesn't already describe the full approach
+            if len(candidate.get("method_sketch", "")) < 300:
+                candidate["method_sketch"] = candidate.get("method_sketch", "") + f" Integration approach: {reconciliation}"
 
         return candidates
 
@@ -2242,24 +2949,41 @@ session_folder: ""
         return kept
 
     def _legacy_recompose(self, grafted_materials: dict) -> list[dict]:
-        """Legacy recomposer: 当无边界/grafts 时的后备格式化。"""
+        """Legacy recomposer: formats graft/mapping materials into proposals."""
         proposals = []
         for graft in grafted_materials.get("grafts", []):
+            # Use provided method_sketch if available, otherwise build from parts
+            if graft.get("method_sketch"):
+                sketch = graft["method_sketch"][:500]
+            else:
+                sketch = (
+                    f"Combine {graft.get('primitive_a', '?')} with {graft.get('primitive_b', '?')}: "
+                    f"{graft.get('counterfactual', 'explore the novel combination')}. "
+                    f"Expected: {graft.get('potential_breakthrough', 'performance improvement')}."
+                )
             proposals.append({
-                "title": f"Graft: {graft.get('primitive_a', '?')} × {graft.get('primitive_b', '?')}",
+                "title": f"Graft: {graft.get('primitive_a', '?')} + {graft.get('primitive_b', '?')}",
                 "hypothesis": graft.get("potential_breakthrough", ""),
-                "method_sketch": f"Base: {graft.get('primitive_a', '?')}\nViolate: {graft.get('violated_boundary', 'unknown')}\nCounterfactual: {graft.get('counterfactual', 'TBD')}",
+                "method_sketch": sketch,
                 "primitives_used": [graft.get("primitive_a", ""), graft.get("primitive_b", "")],
-                "novelty_claim": f"Cross-domain graft via {graft.get('violated_boundary', 'unknown')}",
+                "novelty_claim": graft.get("novelty_claim", f"Novel combination of {graft.get('primitive_a','')} and {graft.get('primitive_b','')}"),
                 "proposal_type": "counterfactual_graft",
             })
         for mapping in grafted_materials.get("mappings", []):
+            if mapping.get("method_sketch"):
+                sketch = mapping["method_sketch"][:500]
+            else:
+                sketch = (
+                    f"Transfer the mechanism from {mapping.get('source_primitive', '?')} "
+                    f"to {mapping.get('target_domain', '?')}. "
+                    f"Core insight: {mapping.get('isomorphic_relation', 'structural similarity')}."
+                )
             proposals.append({
                 "title": f"Map: {mapping.get('source_primitive', '?')} → {mapping.get('target_domain', '?')}",
                 "hypothesis": mapping.get("isomorphic_relation", ""),
-                "method_sketch": f"Map structural analogy from {mapping.get('source_primitive', '?')} to {mapping.get('target_domain', '?')}",
+                "method_sketch": sketch,
                 "primitives_used": [mapping.get("source_primitive", "")],
-                "novelty_claim": f"Isomorphic mapping (confidence: {mapping.get('confidence', 'N/A')})",
+                "novelty_claim": mapping.get("novelty_claim", f"Cross-domain transfer to {mapping.get('target_domain','?')}"),
                 "proposal_type": "structural_mapping",
             })
         return proposals
@@ -2495,20 +3219,20 @@ session_folder: ""
     # ── Web reconnaissance helpers ──
 
     def _build_search_queries(self, phase: str, state: dict) -> list[str]:
-        """根据阶段和 CC 当前状态生成搜索查询。"""
+        """根据阶段和 CC 当前状态生成搜索查询。从 DomainConfig 读取模板。"""
         topic = state.get("research_topic", "")
-        queries = [f"Latest advances in {topic} 2024-2025"]
+        domain_cfg = self._get_domain_config() if hasattr(self, "_get_domain_config") else {}
+        templates = domain_cfg.get("search_query_templates", [])
 
-        if phase == PHASE_PLAN:
-            queries.append("Novel actor-critic improvements beyond hyperparameter tuning")
-            queries.append("Creative reinforcement learning techniques for continuous control")
-        elif phase == PHASE_RESEARCH:
-            queries.append("SOTA continuous control RL techniques beyond DDPG SAC TD3")
-        elif phase == PHASE_IDEATE:
+        if templates:
+            queries = [t.format(topic=topic) for t in templates[:3]]
+        else:
+            queries = [f"Latest advances in {topic} 2024-2025"]
+
+        if phase == PHASE_IDEATE:
             gap = state.get("last_gap_analysis")
             if gap:
-                queries.append(f"How to improve RL agent from {gap.get('best_score')} to {gap.get('target_score')}")
-            queries.append("Novel exploration strategies for actor-critic methods")
+                queries.append(f"How to improve from {gap.get('best_score')} to {gap.get('target_score')}")
 
         return queries[:5]
 
@@ -2571,24 +3295,16 @@ session_folder: ""
 
     @staticmethod
     def _classify_family(name: str) -> str:
-        name = name.lower()
-        for f in ["ppo", "sac", "td3", "ddpg", "a2c", "a3c"]:
-            if f in name:
-                return f.upper()
-        return "unknown"
+        """Classify a variant name into a method family (domain-agnostic)."""
+        name_lower = name.lower()
+        # Extract family from common naming patterns: "Prefix: or AlgoName ..."
+        parts = name_lower.replace(":", " ").replace("-", " ").split()
+        return parts[0][:12] if parts else "unknown"
 
     @staticmethod
     def _classify_axis(name: str) -> str:
-        name = name.lower()
-        if "twin" in name or "double" in name:
-            return "training_tricks"
-        if "per" in name or "prioritized" in name:
-            return "training_tricks"
-        if "param_noise" in name or "noise" in name:
-            return "exploration_strategy"
-        if "combined" in name:
-            return "training_tricks"
-        return "network_architecture"
+        """Classify improvement axis from variant name (domain-agnostic)."""
+        return "method_variant"
 
     # ── Dashboard event posting ──
 

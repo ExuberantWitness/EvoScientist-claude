@@ -49,7 +49,7 @@ class EventLog:
 
     def __init__(self, session_dir: str | Path):
         self.session_dir = Path(session_dir)
-        self.path = self.session_dir / "vault" / "_index" / "events.jsonl"
+        self.path = self.session_dir / "_index" / "events.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._last_materialized: dict[str, str] = {}  # {object_id: last_event_id}
 
@@ -185,12 +185,12 @@ class EventLog:
 
         rebuilt = {"algorithms": 0, "bottlenecks": 0}
         for algo_id, state in algos.items():
-            meta_path = self.session_dir / "vault" / "_index" / f"{algo_id}_meta.json"
+            meta_path = self.session_dir / "_index" / f"{algo_id}_meta.json"
             meta_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
             rebuilt["algorithms"] += 1
 
         for bn_id, state in bottlenecks.items():
-            meta_path = self.session_dir / "vault" / "_index" / f"{bn_id}_meta.json"
+            meta_path = self.session_dir / "_index" / f"{bn_id}_meta.json"
             meta_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
             rebuilt["bottlenecks"] += 1
 
@@ -204,7 +204,7 @@ class EventLog:
     def check_contradictions(self) -> list[dict]:
         """检测矛盾: 同一对节点同时有 validates 和 contradicts."""
         from markdown_parser import _read_jsonl
-        relations = _read_jsonl(self.session_dir / "vault" / "_index" / "relations.jsonl")
+        relations = _read_jsonl(self.session_dir / "_index" / "relations.jsonl")
         pairs = defaultdict(set)
         contradictions = []
         for r in relations:

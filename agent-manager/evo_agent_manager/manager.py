@@ -571,6 +571,260 @@ class AgentManager:
             "message": "Discussion started in background. Poll evo_status for completion.",
         }
 
+    async def invoke_agent(
+        self,
+        session_id: str,
+        agent_name: str,
+        prompt: str,
+    ) -> dict:
+        """Invoke a SINGLE agent independently and return its response.
+
+        Used for 4-persona independent proposal generation. The orchestrator
+        delegates ONLY to the named agent and returns just that agent's raw output.
+        """
+        session = self.sessions.get(session_id)
+        if not session:
+            # Try recovering from disk (dashboard restart clears in-memory sessions)
+            self._load_sessions_from_disk()
+            session = self.sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+
+        await self._wait_if_paused(session_id)
+
+        if session._task is not None and not session._task.done():
+            return {"error": "Session is busy", "status": "busy"}
+
+        # ── Phase 1: Tavily search (SSE-tracked, results baked into prompt) ──
+        search_context = ""
+        try:
+            self._event_bus.publish(session_id, {
+                "type": "persona_started",
+                "data": {"persona": agent_name, "detail": f"{agent_name}: searching web..."}
+            })
+            from tavily import TavilyClient
+            tc = TavilyClient()
+            search_resp = tc.search(
+                query=f"actor critic algorithm Hopper-v4 reinforcement learning improvement",
+                max_results=3
+            )
+            results = search_resp.get("results", []) if isinstance(search_resp, dict) else []
+            if results:
+                search_context = "## Web Search Results\n"
+                for i, r in enumerate(results[:3]):
+                    search_context += f"{i+1}. {r.get('title','')}\n   {r.get('content','')[:400]}\n\n"
+                self._event_bus.publish(session_id, {
+                    "type": "tool_call",
+                    "data": {"name": "tavily_search", "args_preview": f"{len(results)} results found"}
+                })
+                self._event_bus.publish(session_id, {
+                    "type": "tool_result",
+                    "data": {"name": "tavily_search", "content": f"{len(results)} papers found"}
+                })
+                logger.info(f"invoke_agent({agent_name}): Tavily returned {len(results)} results")
+        except Exception as e:
+            logger.warning(f"invoke_agent({agent_name}): Tavily search failed: {e}")
+
+        # Build prompt with search results
+        single_agent_prompt = (
+            f"You are the {agent_name}. Respond DIRECTLY to the task below. "
+            f"Answer in your own voice, from your unique perspective.\n\n"
+            f"## Task\n{prompt}\n\n"
+        )
+        if search_context:
+            single_agent_prompt += (
+                f"{search_context}\n"
+                f"Use the above search results to cite specific methods and papers.\n\n"
+            )
+        single_agent_prompt += (
+            f"## CRITICAL: Output Format\n"
+            f"Output ONLY a single JSON object. No other text.\n"
+            f'{{"title": "concise title (under 80 chars)", '
+            f'"hypothesis": "core hypothesis in 2-3 sentences", '
+            f'"method_sketch": "detailed method with component-level specifics, cite references", '
+            f'"search_results_summary": "key references found"}}\n'
+        )
+
+        # Rotate thread and prepare
+        summary = self._summarize_response(session.last_response) if session.last_response else ""
+        self._rotate_thread(session, summary)
+
+        session.status = "running"
+        session.sub_agents_used = []
+        session.events = []
+
+        await self._ensure_agent(session)
+
+        # Inject evolution memory priors
+        mem = await self._get_evolution_memory(session)
+        priors = await mem.inject_priors(prompt, max_chars=1500)
+
+        ctx_prefix = self._build_context_prefix(session)
+        full_prompt = ctx_prefix + single_agent_prompt if ctx_prefix else single_agent_prompt
+        if priors:
+            full_prompt = priors + "\n\n---\n\n" + full_prompt
+
+        # ── Phase 2: Direct LLM call (reliable JSON, search results baked in) ──
+        try:
+            response = await self._direct_llm_call(session, full_prompt)
+            session.last_response = response
+            session.status = "completed"
+            self._save_session_meta(session)
+            self._clear_pipeline_lock(session)
+
+            # Try to parse JSON from response
+            parsed = None
+            try:
+                import re
+                # 1) Try ```json fence (greedy to capture nested braces)
+                m = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", response)
+                if m:
+                    raw_json = m.group(1).strip()
+                    # Fix common issues: trailing commas
+                    raw_json = re.sub(r",\s*}", "}", raw_json)
+                    raw_json = re.sub(r",\s*]", "]", raw_json)
+                    try:
+                        parsed = json.loads(raw_json)
+                    except json.JSONDecodeError:
+                        pass
+
+                # 2) Try brace-matching extraction (handles nested JSON)
+                if not parsed:
+                    # Find all potential JSON start positions
+                    for start_m in re.finditer(r'\{', response):
+                        start = start_m.start()
+                        # Count braces to find matching end
+                        depth = 0
+                        in_string = False
+                        escape = False
+                        for i in range(start, len(response)):
+                            c = response[i]
+                            if escape:
+                                escape = False
+                                continue
+                            if c == '\\' and in_string:
+                                escape = True
+                                continue
+                            if c == '"' and not escape:
+                                in_string = not in_string
+                                continue
+                            if in_string:
+                                continue
+                            if c == '{':
+                                depth += 1
+                            elif c == '}':
+                                depth -= 1
+                                if depth == 0:
+                                    candidate_str = response[start:i+1]
+                                    if len(candidate_str) > 50:  # Skip tiny fragments
+                                        # Fix trailing commas
+                                        candidate_str = re.sub(r",\s*}", "}", candidate_str)
+                                        candidate_str = re.sub(r",\s*]", "]", candidate_str)
+                                        try:
+                                            candidate = json.loads(candidate_str)
+                                            if isinstance(candidate, dict) and any(k in candidate for k in ("title", "hypothesis", "method_sketch")):
+                                                parsed = candidate
+                                                break
+                                        except (json.JSONDecodeError, ValueError):
+                                            pass
+                                    break  # depth==0, move to next start
+                        if parsed:
+                            break
+            except Exception:
+                pass
+
+            if parsed and isinstance(parsed, dict):
+                parsed.setdefault("title", agent_name)
+                parsed.setdefault("hypothesis", "")
+                parsed.setdefault("method_sketch", "")
+                return parsed
+
+            # 3) Fallback: intelligent extraction from raw markdown text
+            import re as _re
+            title = ""
+            hypothesis = ""
+            method_sketch = ""
+
+            # If response is extremely short, it's likely an error
+            if len(response) < 80:
+                logger.warning(f"invoke_agent({agent_name}): response too short ({len(response)} chars): {response[:100]}")
+                return {
+                    "title": f"{agent_name} proposal",
+                    "hypothesis": f"[Agent produced insufficient output: {len(response)} chars]",
+                    "method_sketch": f"[Agent produced insufficient output: {len(response)} chars]",
+                    "search_results_summary": "",
+                    "raw_response_length": len(response),
+                }
+
+            # ── Title extraction: prefer proposal-specific headings ──
+            for pattern in [
+                r"^#+\s*(?:proposal|方案|proposed\s*(?:method|approach)|核心创新|创新点|our\s*(?:approach|method))[:\s]*(.+)$",
+                r"^#+\s*(.+)$",  # first heading as fallback
+            ]:
+                tm = _re.search(pattern, response, _re.MULTILINE | _re.IGNORECASE)
+                if tm:
+                    candidate = tm.group(1).strip()
+                    # Skip generic analysis headings
+                    if not _re.match(r"^(step|analysis|problem|literature|background|introduction|decomposition|问题|分析|文献|背景)", candidate, _re.IGNORECASE):
+                        title = candidate[:120]
+                        break
+
+            if not title:
+                title = f"{agent_name} proposal"
+
+            # ── Hypothesis extraction ──
+            for pattern in [
+                r"(?:核心假设|hypothesis|core\s*(?:idea|thesis|contribution)|核心论点|主要创新)[:\s]*\n?([\s\S]{20,800}?)(?:\n##|\n\*\*\w|\Z)",
+                r"(?:we\s+propose|our\s+approach|本方案|我们提出|核心思想)[:\s]*\n?([\s\S]{20,800}?)(?:\n##|\n\*\*\w|\Z)",
+                r"(?:thesis|论点|主张|key\s+insight)[:\s]*\n?([\s\S]{20,800}?)(?:\n##|\n\*\*\w|\Z)",
+            ]:
+                hm = _re.search(pattern, response, _re.IGNORECASE | _re.MULTILINE)
+                if hm:
+                    hypothesis = hm.group(1).strip()[:500]
+                    break
+
+            # ── Method sketch extraction: prefer proposal/method sections ──
+            for pattern in [
+                r"(?:method[_\s]*sketch|具体方法|方案描述|proposed\s+method|our\s+method|approach)[:\s]*\n?([\s\S]{20,2000}?)(?:\n##\s|\Z)",
+                r"(?:architecture|架构|components|模块|implementation|实现)[:\s]*\n?([\s\S]{20,2000}?)(?:\n##\s|\Z)",
+            ]:
+                mm = _re.search(pattern, response, _re.IGNORECASE | _re.MULTILINE)
+                if mm:
+                    method_sketch = mm.group(1).strip()[:2000]
+                    break
+
+            # If no specific section found, use the latter half of the response
+            # (proposals tend to be after analysis)
+            if not method_sketch:
+                if len(response) > 500:
+                    # Take from midpoint onwards (skip analysis/reasoning)
+                    mid = len(response) // 2
+                    method_sketch = response[mid:mid+2000].strip()
+                else:
+                    method_sketch = response[:2000]
+
+            # If hypothesis still empty, use first substantive paragraph from method_sketch
+            if not hypothesis and method_sketch:
+                paras = [_l.strip() for _l in method_sketch.split('\n\n')
+                         if _l.strip() and len(_l.strip()) > 30
+                         and not _l.strip().startswith('#')
+                         and not _l.strip().startswith('*')
+                         and not _l.strip().startswith('-')]
+                hypothesis = paras[0][:500] if paras else method_sketch[:500]
+
+            return {
+                "title": title,
+                "hypothesis": hypothesis,
+                "method_sketch": method_sketch,
+                "search_results_summary": "",
+                "raw_response_length": len(response),
+            }
+        except Exception as e:
+            session.status = "error"
+            session.last_response = f"Error: {e}"
+            logger.error(f"invoke_agent({agent_name}) failed: {e}")
+            return {"error": str(e)}
+
     async def _execute_discuss_background(
         self, session: AgentSession, full_prompt: str, excluded: set[str]
     ) -> None:
@@ -887,8 +1141,9 @@ class AgentManager:
     async def run_tournament(
         self, session_id: str, proposals: list[dict],
         judge_model: str = "deepseek-chat",
+        phase: str = "W3 Research",
     ) -> dict:
-        """Run Elo tournament on proposals."""
+        """Run Elo tournament on proposals with phase-specific dimensions."""
         session = self.sessions.get(session_id)
         if not session:
             return {"error": f"Session {session_id} not found"}
@@ -900,10 +1155,12 @@ class AgentManager:
             "task_type": "tournament",
             "num_proposals": len(proposals),
             "judge_model": judge_model,
+            "phase": phase,
         })
 
-        tournament = EloTournament(judge_model=judge_model)
+        tournament = EloTournament(judge_model=judge_model, phase=phase)
         ranked = await tournament.rank(proposals)
+        dim_names = tournament.dimension_names
 
         # Hook: 发射 task_done
         self._hook.emit("task_done", session_id, {
@@ -915,18 +1172,21 @@ class AgentManager:
 
         return {
             "status": "completed",
+            "phase": phase,
             "num_proposals": len(ranked),
             "winner": ranked[0]["title"] if ranked else "",
             "winner_elo": ranked[0]["elo_rating"] if ranked else 0,
+            "dimensions": dim_names,
             "ranked": [
                 {
                     "id": p.get("id", ""),
                     "title": p.get("title", "")[:120],
+                    "hypothesis": p.get("hypothesis", "")[:500],
+                    "method_sketch": p.get("method_sketch", "")[:500],
                     "elo_rating": p.get("elo_rating", 1500),
-                    "novelty": p.get("novelty", 0),
-                    "feasibility": p.get("feasibility", 0),
-                    "relevance": p.get("relevance", 0),
-                    "clarity": p.get("clarity", 0),
+                    "product_satisfaction": p.get("product_satisfaction", 0),
+                    # Phase-specific dimension scores
+                    **{d: p.get(d, 0) for d in dim_names},
                 }
                 for p in ranked
             ],
@@ -1162,3 +1422,48 @@ class AgentManager:
             raise
 
         return response_text or "(No response from agent)"
+
+    async def _direct_llm_call(self, session: AgentSession, prompt: str) -> str:
+        """Direct LLM call without tools — used for persona generation.
+
+        Bypasses the agent framework to avoid tool-calling failures
+        (Tavily rate limits, search errors, etc.) that produce empty outputs.
+        """
+        try:
+            from EvoScientist.config.settings import get_effective_config, apply_config_to_env
+            from EvoScientist.llm.models import get_chat_model
+            from langchain_core.messages import HumanMessage, SystemMessage
+
+            cfg = get_effective_config()
+            apply_config_to_env(cfg)
+
+            # Use session's model/provider if specified
+            model_name = session.model or cfg.model
+            provider_name = session.provider or cfg.provider
+
+            llm = get_chat_model(model=model_name, provider=provider_name, max_tokens=8192)
+
+            system_msg = SystemMessage(
+                content="You are a research proposal generator. Output ONLY valid JSON. "
+                        "No analysis, no reasoning outside the JSON, no markdown. "
+                        "Your entire response must be a single JSON object."
+            )
+            human_msg = HumanMessage(content=prompt)
+
+            response = await asyncio.to_thread(
+                lambda: llm.invoke([system_msg, human_msg])
+            )
+
+            if hasattr(response, "content"):
+                text = response.content if isinstance(response.content, str) else str(response.content)
+            else:
+                text = str(response)
+
+            logger.info(f"Direct LLM call ({model_name}): {len(text)} chars")
+            return text
+
+        except Exception as e:
+            logger.error(f"Direct LLM call failed: {e}", exc_info=True)
+            # Fallback to agent-based execution
+            logger.info("Falling back to agent-based execution")
+            return await self._run_agent(session, prompt)

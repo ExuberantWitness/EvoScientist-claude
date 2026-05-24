@@ -1,4 +1,4 @@
-"""Markdown Parser: 从 Obsidian vault 提取图结构 → 同步 JSONL 索引.
+"""Markdown Parser: 从 session Markdown 提取图结构 → 同步 JSONL 索引.
 
 Phase B 核心模块. 功能:
   - 解析 YAML frontmatter

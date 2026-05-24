@@ -1,4 +1,4 @@
-"""Pipeline Bootstrap — 创建 Obsidian vault + Session + 输出 Dashboard URL。
+"""Pipeline Bootstrap — 创建 Session 目录 + 输出 Dashboard URL。
 
 用法:
     python tools/bootstrap.py "研究问题" /path/to/EvoScientist-claude
@@ -17,33 +17,61 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from pipeline_protocol import atomic_read, atomic_write
-from pes_controller import PESController, PHASE_PLAN
-from vault_manager import VaultManager
+from pes_controller import PESController, PHASE_PLAN_1
+from vault_manager import SessionStore
 
 
 def bootstrap(research_topic: str, project_dir: str) -> dict:
-    """创建完整 pipeline session: vault + PESController + Dashboard URL."""
+    """创建完整 pipeline session: 目录树 + PESController + Dashboard URL。"""
     proj = Path(project_dir).resolve()
 
-    # 1. 生成 session_id + 创建 Obsidian vault
+    # 1. 生成 session_id + 创建 session 目录
     session_id = f"sess_{uuid.uuid4().hex[:8]}"
-    mgr = VaultManager(proj / "sessions" / session_id)
-    mgr.init_vault(session_id, research_topic)
+    session_dir = proj / "sessions" / session_id
+    store = SessionStore(session_dir)
+    store.init_dirs(session_id, research_topic)
 
     # 2. PESController init (CC + Grid + PIPELINE_STATE)
-    # PESController 使用 session_dir 作为 workspace
-    session_dir = mgr.session_dir
     ctrl = PESController(str(session_dir), session_id=session_id)
     ctrl.init(research_topic=research_topic)
 
-    # 3. 写入 PIPELINE_STATE (兼容 Dashboard API 从 workspace 读)
+    # 3. 写入 PIPELINE_STATE (含 DomainConfig)
     state = atomic_read(session_dir / "PIPELINE_STATE.json")
     state["session_id"] = session_id
     state["agent_session_id"] = session_id
     state["session_dir"] = str(session_dir)
-    state["vault_dir"] = str(mgr.vault_dir)
     state["research_topic"] = research_topic
     state["status"] = "in_progress"
+
+    # Detect domain from research topic keywords and load DomainConfig preset
+    try:
+        from tools.domain_presets import get_domain_preset
+        topic_lower = research_topic.lower()
+        # Normalize: replace hyphens/underscores with spaces for flexible matching
+        topic_normalized = topic_lower.replace("-", " ").replace("_", " ")
+        # Simple keyword-based domain detection
+        if any(kw.replace("-", " ") in topic_normalized for kw in [
+            "reinforcement learning", "rl", "actor-critic", "actor critic",
+            "hopper", "gym", "policy gradient", "q-learning", "deep rl",
+            "continuous control", "mujoco", "ant", "halfcheetah", "walker",
+        ]):
+            domain_name = "reinforcement_learning"
+        elif any(kw.replace("-", " ") in topic_normalized for kw in [
+            "classification", "regression", "supervised", "imagenet", "cifar", "mnist",
+        ]):
+            domain_name = "supervised_learning"
+        elif any(kw.replace("-", " ") in topic_normalized for kw in [
+            "protein", "genome", "biology", "cell", "dna", "rna", "molecule",
+        ]):
+            domain_name = "biology_simulation"
+        else:
+            domain_name = "general"
+        state["domain_name"] = domain_name
+        state["domain_config"] = get_domain_preset(domain_name)
+    except ImportError:
+        state["domain_name"] = "general"
+        state["domain_config"] = {}
+
     atomic_write(session_dir / "PIPELINE_STATE.json", state)
 
     dashboard_url = (
@@ -51,12 +79,10 @@ def bootstrap(research_topic: str, project_dir: str) -> dict:
         f"?workspace={urllib.parse.quote(str(session_dir))}"
     )
 
-    # 4. 注册 session 到 .evo_sessions/ (Dashboard AgentManager 通过此目录发现 session)
-    # Dashboard 从 agent-manager/.evo_sessions/ 扫描, 所以写入两个位置
+    # 4. 注册 session 到 .evo_sessions/
     session_data = {
         "session_id": session_id,
         "workspace_dir": str(session_dir),
-        "vault_dir": str(mgr.vault_dir),
         "research_topic": research_topic,
         "created_at": __import__('time').time(),
     }
@@ -69,8 +95,7 @@ def bootstrap(research_topic: str, project_dir: str) -> dict:
     return {
         "session_id": session_id,
         "session_dir": str(session_dir),
-        "vault_dir": str(mgr.vault_dir),
-        "phase": state.get("phase", PHASE_PLAN),
+        "phase": state.get("phase", PHASE_PLAN_1),
         "dashboard_url": dashboard_url,
     }
 
@@ -88,15 +113,13 @@ def main():
 
     print(f"session_id:    {result['session_id']}")
     print(f"session_dir:   {result['session_dir']}")
-    print(f"vault_dir:     {result['vault_dir']}")
     print(f"phase:         {result['phase']}")
     print(f"dashboard_url: {result['dashboard_url']}")
     print()
     print("=" * 48)
     print("Pipeline 已就绪。请在浏览器中打开:")
     print(f"  {result['dashboard_url']}")
-    print("Obsidian vault 可用 Obsidian 打开:")
-    print(f"  {result['vault_dir']}")
+    print("后续所有操作都在 Dashboard 网页端完成。")
     print("=" * 48)
 
 

@@ -48,7 +48,7 @@ class GoSRetriever:
     def __init__(self, session_dir: Path):
         from tools.markdown_parser import GraphQuery, EDGE_WEIGHTS, STRONG_CAUSAL
         self.session_dir = session_dir
-        self.index_dir = session_dir / "vault" / "_index"
+        self.index_dir = session_dir / "_index"
         self.gq = GraphQuery(self.index_dir)
         self.EDGE_WEIGHTS = EDGE_WEIGHTS
         self.STRONG_CAUSAL = STRONG_CAUSAL
@@ -84,11 +84,9 @@ class GoSRetriever:
     def hydrate(self, ranked: list[dict], max_tokens: int = 8000) -> str:
         """上下文水合: 高优先级全量, 中优先级摘要, 低优先级引用."""
         from tools.markdown_parser import _read_jsonl
-        from tools.vault_manager import VaultManager
 
         atoms = _read_jsonl(self.index_dir / "atoms.jsonl")
         atom_map = {a["id"]: a for a in atoms}
-        vault_mgr = VaultManager(self.session_dir)
 
         sections = []
         budget = max_tokens
@@ -99,7 +97,7 @@ class GoSRetriever:
             score = item["score"]
 
             if score >= 1.0:  # High priority: full content
-                md_file = list(vault_mgr.vault_dir.rglob(f"{node_id}.md"))
+                md_file = list(self.session_dir.rglob(f"{node_id}.md"))
                 if md_file:
                     text = md_file[0].read_text(encoding="utf-8")[:1500]
                     sections.append(f"### {node_id} (score={score})\n{text}")
@@ -176,7 +174,7 @@ def stage5_delta_prep(conclusions: dict, session_dir: Path) -> dict:
         "dead_ends": conclusions.get("refuted", []),
         "open_problems": conclusions.get("bottlenecks_discovered", []),
     }
-    delta_path = session_dir / "vault" / "_pipeline" / "delta_latest.json"
+    delta_path = session_dir / "_pipeline" / "delta_latest.json"
     import json
     delta_path.write_text(json.dumps(delta, indent=2, ensure_ascii=False))
     return delta

@@ -49,7 +49,7 @@ def _checksum(data: Any) -> str:
 def _default_state() -> dict:
     return {
         "protocol_version": PROTOCOL_VERSION,
-        "phase": "W2 Plan",
+        "phase": "W2.1 Problem Analysis",
         "iteration": 0,
         "sub_loop_step": 0,
         "status": "not_initialized",
@@ -284,3 +284,53 @@ def validate_state(state: dict) -> list[str]:
             f" (expected 'dashboard') — 可能是 agent 伪造"
         )
     return violations
+
+
+# ── Domain Configuration (Phase 0.5) ──
+
+from pydantic import BaseModel, Field as PydField  # noqa: E402
+
+
+class DomainConfig(BaseModel):
+    """Research domain configuration — single source of truth for domain parameters.
+
+    Stored in PIPELINE_STATE.json under config.domain.
+    Replaces hardcoded RL-specific values across pes_controller.py,
+    pipeline_stages.py, and taxonomy.py.
+    """
+
+    domain_name: str = "general"
+    research_topic: str = ""
+
+    # Seed keywords for GoSRetriever (replaces hardcoded ["rl", "actor-critic", "hopper"])
+    seed_keywords: list[str] = PydField(default_factory=list)
+
+    # Bottleneck categories relevant to this domain (from taxonomy.BottleneckCategory)
+    active_bottleneck_categories: list[str] = PydField(default_factory=list)
+
+    # Web search query templates (replaces hardcoded RL queries)
+    search_query_templates: list[str] = PydField(default_factory=list)
+
+    # SME concept domains to use for cross-domain idea mapping
+    sme_domains: list[str] = PydField(default_factory=list)
+
+    # Code infrastructure specs: keys like "config", "networks", "buffer", "trainer"
+    infrastructure_specs: dict[str, str] = PydField(default_factory=dict)
+
+    # Acceptance criteria template (replaces hardcoded Hopper-v4 criteria)
+    acceptance_criteria: str = ""
+
+
+# ── Concreteness Gate (Phase 6) ──
+
+class ConcretenessGate(BaseModel):
+    """Quality gate for atom concreteness. Soft fallback for verify_atom hard gate.
+
+    verify_atom (hard gate) blocks ~90% of philosophical templates.
+    ConcretenessGate (soft score) handles the remaining 10% edge cases.
+    """
+
+    enabled: bool = True
+    min_score: float = 0.3
+    enforce_for_types: list[str] = PydField(default_factory=lambda: ["method"])
+    block_on_failure: bool = False  # True=reject atom, False=log warning

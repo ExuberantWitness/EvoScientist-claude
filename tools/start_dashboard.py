@@ -35,7 +35,7 @@ if __name__ == "__main__":
         "OPENAI_BASE_URL": "https://api.deepseek.com/v1",
         "OPENAI_API_BASE": "https://api.deepseek.com/v1",
         "DEEPSEEK_API_KEY": "sk-d56c7dbcd28c44b689773a3f544486b2",
-        "TAVILY_API_KEY": "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",
+        "TAVILY_API_KEY": "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",
     }
     for k, v in _defaults.items():
         os.environ.setdefault(k, v)

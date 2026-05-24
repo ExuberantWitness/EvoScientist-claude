@@ -1,0 +1,85 @@
+{
+  "atom_id": "test01",
+  "philosophical_analogy": "Original analogy text (retained for traceability)",
+  "problem_anchor": {
+    "bottom_line": "Improve sample efficiency on benchmark by >=15%",
+    "bottleneck": "Current method under-samples high-uncertainty regions",
+    "non_goals": [
+      "Not targeting wall-clock speedup",
+      "Not changing reward shaping"
+    ],
+    "constraints": [
+      "Single GPU",
+      "Fits in existing trainer API"
+    ],
+    "success_condition": "AUC delta >= 0.15 with 95% CI not crossing zero, 3 seeds"
+  },
+  "concrete_algorithm": {
+    "core_method_body": "import torch\ndef step(self, batch):\n    s, a, r, s2, d = batch\n    return s.mean()\n",
+    "core_update_equation_latex": "y_t = r_t + (1-d_t) \\gamma \\min_i Q_i(s_{t+1}, a_{t+1})",
+    "memory_structure": "ReplayBuffer[Tensor] FIFO, capacity 1M, stores (s,a,r,s2,d) as float32",
+    "hyperparameters": [
+      {
+        "name": "lr",
+        "default": 0.0003,
+        "range": [
+          1e-05,
+          0.01
+        ],
+        "description": "Adam learning rate"
+      },
+      {
+        "name": "gamma",
+        "default": 0.99,
+        "range": [
+          0.9,
+          0.999
+        ],
+        "description": "Discount factor"
+      }
+    ]
+  },
+  "novelty_vs_artifacts": [
+    {
+      "artifact_path": "artifacts/td3.py",
+      "differences": [
+        "TD3.py L47 uses a single Q-network pair with EMA target; this uses K=5 independent Q-nets with per-ensemble min target",
+        "TD3.py L102 samples uniformly from replay buffer; this prioritizes high-q-std samples via PER with alpha=0.6"
+      ]
+    }
+  ],
+  "literature_grounding": [
+    {
+      "literature_file": "literature/fujimoto2018td3.md",
+      "paper_title": "TD3: Addressing Function Approximation Error in Actor-Critic Methods",
+      "adapted_element": "Eq.5 of Sec.4.2 — clipped double-Q target computation",
+      "verbatim_quote": "We propose to use the minimum of the two critics to compute the target in the Bellman error",
+      "code_correspondence": "lines 10-12: q_target = r + (1-d) * gamma * min(q1_t, q2_t)"
+    },
+    {
+      "literature_file": "literature/haarnoja2018sac.md",
+      "paper_title": "SAC: Soft Actor-Critic — Off-Policy Maximum Entropy Deep RL",
+      "adapted_element": "Eq.4 entropy-regularized objective with auto-tuned alpha",
+      "verbatim_quote": "We augment the standard maximum reward RL objective with an entropy term H(pi(cdot|s_t))",
+      "code_correspondence": "lines 5-7: noise generation and clamping for target policy smoothing"
+    },
+    {
+      "literature_file": "literature/chen2021redq.md",
+      "paper_title": "REDQ: Randomized Ensembled Double Q-Learning",
+      "adapted_element": "Eq.5 of Sec.3.2 — ensemble target with min-over-subset",
+      "verbatim_quote": "We use an ensemble of N Q-networks and compute the TD target using the minimum over a random subset of size M",
+      "code_correspondence": "lines 10-12: q_target = r + (1-d) * gamma * min(q1_t, q2_t)"
+    }
+  ],
+  "trainer_integration": {
+    "trainer_py_lines_touched": "L42-L78, L120-L135",
+    "step_method_signature": "def step(self, batch: Tuple[Tensor, ...]) -> Dict[str, float]:",
+    "required_batch_fields": [
+      "obs",
+      "action",
+      "reward",
+      "next_obs",
+      "done"
+    ]
+  }
+}

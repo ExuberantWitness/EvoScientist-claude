@@ -151,10 +151,83 @@ Write `refine-logs/REVIEW_SUMMARY.md` with round-by-round score evolution, and `
 - **Pushback is encouraged.** If reviewer causes drift, argue back.
 - **Be specific about compute and data assumptions.**
 
+## Output Schema (NEW — Phase 4 plan)
+
+Output goes to `refined_proposals/<atom_id>.json` in **RefinedAtom Pydantic schema** format.
+See `schemas/atom.py` for the full schema definition.
+
+The output JSON must contain:
+- `atom_id`: short identifier (lowercase, alphanumeric + underscore)
+- `philosophical_analogy`: the original method_sketch from ideation (preserved for traceability)
+- `problem_anchor`: `{bottom_line, bottleneck, non_goals, constraints, success_condition}`
+- `concrete_algorithm`: `{core_method_body, core_update_equation_latex, memory_structure, hyperparameters}`
+- `novelty_vs_artifacts`: list of `{artifact_path, differences[]}`, min 1 entry, each diff >= 30 chars
+- `literature_grounding`: list of `{literature_file, paper_title, adapted_element, verbatim_quote, code_correspondence}`, min 3 entries
+- `trainer_integration`: `{trainer_py_lines_touched, step_method_signature, required_batch_fields}`
+
+**LLM MUST ONLY reference literature files from `_index/literature_manifest.jsonl`**.
+Fabricated filenames will be caught by verify_atom.py Step 6 (manifest check).
+
+## Few-shot Examples (NEW)
+
+### Example 1: Before (philosophical template — REJECTED)
+
+```json
+{
+  "atom_id": "bad_example",
+  "concrete_algorithm": {
+    "core_method_body": "1. Analyze what makes X work.\n2. Map isomorphic relational structure.\n3. Reconcile via cyclic_3node.",
+    "core_update_equation_latex": "",
+    "memory_structure": "",
+    "hyperparameters": []
+  }
+}
+```
+This fails verify_atom: no step/update/train_step method, buzzwords in text, body < 8 statements.
+
+### Example 2: After (concrete — ACCEPTED)
+
+See `tests/fixtures/atom_good_concrete.json` for a complete passing example.
+
+### Example 3: Failure → Fix Trace (NEW)
+
+If `python tools/verify_atom.py --quick --atom refined_proposals/map1.json` returns:
+```
+[SCHEMA FAIL]
+1 validation error for RefinedAtom -> concrete_algorithm -> core_method_body
+  Method 'step' body has only 3 statements, need >=8
+```
+Fix: expand the step() method body with actual computation, optimizer steps, and metric calculation.
+
+## Self-Verify (L1) + Independent Verify (L2) (NEW)
+
+**L1 (Phase 6 of this skill)**: After writing JSON, run self-verify:
+```bash
+python tools/verify_atom.py --quick --atom refined_proposals/<atom_id>.json
+```
+If exit != 0: read stderr, fix the specific issue, retry. Do NOT output the file until L1 passes.
+
+**L2 (W3.8 in pipeline)**: After L1 passes and file is submitted, the pipeline controller runs the full check:
+```bash
+python tools/verify_atom.py --session sessions/<sid> --atom refined_proposals/<atom_id>.json
+```
+L2 failures are fed back to you for revision. **Max 3 retries**. After 3 failures → mark `status="refine_failed"` → atom enters `_index/refine_failures.jsonl` (negative archive, reused as anti-pattern few-shot in future runs).
+
+## Anti-patterns (auto-rejected by verify_atom)
+
+| ❌ DO NOT | ✅ DO |
+|-----------|-------|
+| `core_method_body` contains "Analyze X. Map Y. Adapt Z." | `core_method_body` is `def step(self, batch): q_target = ...; loss = ...; opt.step()` |
+| `novelty_vs_artifacts`: "Different architecture than MAP" | "MAP.py L47 uses cosine similarity; this uses Gumbel-softmax over learned key embedding" |
+| `literature_grounding`: paper="Deep RL Survey", no verbatim_quote | paper="SAC (Haarnoja 2018)", verbatim_quote="We augment the standard maximum reward RL objective with an entropy term", adapted_element="Eq.4 entropy-regularized objective" |
+| `hyperparameters[*].default` = "tunable", "varies", "see paper" | `default` = 3e-4, 0.99, True, 256 (actual numbers) |
+| Reference a paper not in `literature_manifest.jsonl` | Only reference papers listed in `_index/literature_manifest.jsonl` |
+
 ## Pipeline Position
 
 ```
 /evo-ideation "direction"  → ranked ideas
 /evo-refine "PROBLEM: ... | APPROACH: ..."  ← you are here
+W3.8 verify_atom (L2) → W3.9 evo-review atom mode
 /evo-planner "refined proposal"  → detailed experiment plan
 ```

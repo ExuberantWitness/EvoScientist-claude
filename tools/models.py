@@ -8,7 +8,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL
+try:
+    from tools.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL
+except ImportError:
+    from taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL
 
 
 # ── ρ(e) Evidence Record (§3.3) ──

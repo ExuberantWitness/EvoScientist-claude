@@ -91,7 +91,7 @@ def record_experiment_result(
         from tools.markdown_parser import parse_frontmatter
     except ImportError:
         from markdown_parser import parse_frontmatter
-    algo_file = session_path / "vault" / "Algorithms" / f"{algo_id}.md"
+    algo_file = session_path / "Algorithms" / f"{algo_id}.md"
     current_status = "PROPOSED"
     if algo_file.exists():
         meta = parse_frontmatter(algo_file.read_text(encoding="utf-8"))
@@ -134,7 +134,7 @@ def record_experiment_result(
     transition_algo(algo_id, new_status, el)
 
     # 5. 更新 Markdown (实验历史段, 只追加)
-    algo_file = session_path / "vault" / "Algorithms" / f"{algo_id}.md"
+    algo_file = session_path / "Algorithms" / f"{algo_id}.md"
     if algo_file.exists():
         append_experiment_to_markdown(algo_file, {
             "algo_id": algo_id, "env": env, "seeds": seeds,

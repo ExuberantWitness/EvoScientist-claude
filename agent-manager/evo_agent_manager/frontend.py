@@ -98,6 +98,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 /* Empty state */
 .empty{color:var(--dim);text-align:center;padding:40px 20px;font-size:13px}
 .session-info{font-size:11px;color:var(--dim);margin-top:12px}
+.log-tag.pipeline_det{background:rgba(57,210,192,0.15);color:var(--cyan)}
+.log-tag.pipeline_det.proposal{background:rgba(188,140,255,0.12);color:var(--purple)}
+.log-tag.pipeline_det.elo{background:rgba(210,153,34,0.15);color:var(--yellow)}
+.log-tag.pipeline_det.verify{background:rgba(63,185,80,0.12);color:var(--green)}
+.log-tag.pipeline_det.verify.fail{background:rgba(248,81,73,0.12);color:var(--red)}
 </style>
 </head>
 <body>
@@ -117,23 +122,27 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <div class="panel">
     <div class="panel-title">Pipeline</div>
     <div class="pipeline-timeline" id="pipelineTimeline">
-      <div class="phase waiting" data-phase="0"><div class="status-dot waiting"></div><span class="label">W0 Init</span></div>
+      <div class="phase waiting" data-phase="-2"><div class="status-dot waiting"></div><span class="label">W0 Init</span></div>
       <div class="phase-connector"></div>
-      <div class="phase waiting" data-phase="1"><div class="status-dot waiting"></div><span class="label">W1 Intake</span></div>
+      <div class="phase waiting" data-phase="-1"><div class="status-dot waiting"></div><span class="label">W1 Intake</span></div>
       <div class="phase-connector"></div>
-      <div class="phase waiting" data-phase="2"><div class="status-dot waiting"></div><span class="label">W2 Plan</span></div>
+      <div class="phase waiting" data-phase="0"><div class="status-dot waiting"></div><span class="label">W2.1 问题分析</span></div>
+      <div class="phase-connector"></div>
+      <div class="phase waiting" data-phase="1"><div class="status-dot waiting"></div><span class="label">W2.2 方案方向</span></div>
+      <div class="phase-connector"></div>
+      <div class="phase waiting" data-phase="2"><div class="status-dot waiting"></div><span class="label">W2.3 检索策略</span></div>
       <div class="phase-connector"></div>
       <div class="phase waiting" data-phase="3"><div class="status-dot waiting"></div><span class="label">W3 Research</span></div>
       <div class="phase-connector"></div>
-      <div class="phase waiting" data-phase="3.5"><div class="status-dot waiting"></div><span class="label">W3.5 Ideate</span></div>
+      <div class="phase waiting" data-phase="4"><div class="status-dot waiting"></div><span class="label">W3.5 Ideate</span></div>
       <div class="phase-connector"></div>
-      <div class="phase waiting" data-phase="4"><div class="status-dot waiting"></div><span class="label">W4 Code</span></div>
+      <div class="phase waiting" data-phase="5"><div class="status-dot waiting"></div><span class="label">W4 Code</span></div>
       <div class="phase-connector"></div>
-      <div class="phase waiting" data-phase="5"><div class="status-dot waiting"></div><span class="label">W5 Analyze</span></div>
+      <div class="phase waiting" data-phase="6"><div class="status-dot waiting"></div><span class="label">W5 Analyze</span></div>
       <div class="phase-connector"></div>
-      <div class="phase waiting" data-phase="6"><div class="status-dot waiting"></div><span class="label">W6 Write</span></div>
+      <div class="phase waiting" data-phase="7"><div class="status-dot waiting"></div><span class="label">W6 Write</span></div>
       <div class="phase-connector"></div>
-      <div class="phase waiting" data-phase="7"><div class="status-dot waiting"></div><span class="label">W7 Review</span></div>
+      <div class="phase waiting" data-phase="8"><div class="status-dot waiting"></div><span class="label">W7 Review</span></div>
     </div>
     <div class="session-info" id="sessionInfo" style="margin-top:12px"></div>
     <div id="pipelineControls" style="margin-top:8px;display:none">
@@ -190,6 +199,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 let currentSession = null;
+let workspaceDir = '';
+let _pipelineCache = {};  // cache for detecting new artifacts
 let eventSource = null;
 let eventCount = 0;
 let startTime = null;
@@ -364,6 +375,11 @@ function updateNavLinks(sid) {
 $('#sessionSelect').addEventListener('change', e => {
   if (eventSource) { eventSource.close(); eventSource = null; }
   currentSession = e.target.value;
+  // Find workspace_dir from session list
+  fetch('/api/sessions').then(r => r.json()).then(sessions => {
+    const s = sessions.find(x => x.session_id === currentSession);
+    if (s) workspaceDir = s.workspace_dir || '';
+  });
   updateNavLinks(currentSession);
   if (currentSession) {
     connectSSE(currentSession);
@@ -604,6 +620,43 @@ function handleEvent(ev) {
       $('#statusBadge').textContent = 'error';
       $('#statusBadge').style.background = 'rgba(248,81,73,0.15)';
       break;
+    case 'watchdog_alert':
+      addLogEntry('WATCHDOG', 'error', escapeHTML(data.message || 'Alert'));
+      break;
+    case 'pipeline_step':
+      addLogEntry('PIPELINE', 'system',
+        '<b>' + escapeHTML(data.detail || 'Pipeline step') + '</b>' +
+        (data.persona_count ? ' (' + data.persona_count + ' agents)' : ''));
+      break;
+    case 'persona_started': {
+      const pn = data.persona || 'agent';
+      const detail = data.detail || 'invoking...';
+      addLogEntry('PERSONA', 'subagent_start',
+        '<span class="agent-name">' + escapeHTML(pn) + '</span> ' + escapeHTML(detail));
+      break;
+    }
+    case 'persona_done': {
+      const pn = data.persona || 'agent';
+      const t = data.title || '';
+      let m = '<span class="agent-name">' + escapeHTML(pn) + '</span> done';
+      if (t) m += ': <b>' + escapeHTML(t.substring(0, 80)) + '</b>';
+      if (data.method_len) m += ' <span class="detail">(' + data.method_len + ' chars)</span>';
+      addLogEntry('PERSONA', 'done', m);
+      break;
+    }
+    case 'persona_error':
+      addLogEntry('PERSONA', 'error',
+        (data.persona ? '<span class="agent-name">' + escapeHTML(data.persona) + '</span> ' : '') +
+        escapeHTML(data.detail || 'error'));
+      break;
+    case 'elo_completed':
+      addLogEntry('ELO', 'tool_result',
+        '<b>Tournament winner:</b> ' + escapeHTML(data.winner || '?') +
+        (data.ranked_count ? ' <span class="detail">(' + data.ranked_count + ' ranked)</span>' : ''));
+      break;
+    default:
+      // Ignore unknown events silently
+      break;
   }
 
   if (['thinking','tool_call','subagent_start','subagent_text'].includes(type)) {
@@ -640,6 +693,85 @@ function updateDuration() {
 }
 
 // Pipeline state polling
+// Cache for pipeline detail artifacts (dedup log entries)
+let _lastProps = ''; let _lastElo = ''; let _lastVerify = ''; let _lastDeliv = '';
+
+async function renderPipelineDetail() {
+  if (!workspaceDir) return;
+  try {
+    const resp = await fetch('/api/pipeline/state?workspace=' + encodeURIComponent(workspaceDir));
+    if (!resp.ok) return;
+    const s = await resp.json();
+
+    // Proposals
+    const props = s.last_persona_proposals || s.last_pipeline_context?.proposals || [];
+    if (props.length > 0) {
+      const key = JSON.stringify(props.map(p => p.title || ''));
+      if (key !== _lastProps) {
+        _lastProps = key;
+        let html = '<b>Proposals (' + props.length + '):</b>';
+        props.forEach((p, i) => {
+          const t = (p.title || 'Untitled').substring(0, 80);
+          const m = (p.method_sketch || p.hypothesis || '').substring(0, 100);
+          html += '<br>  <b>#' + (i+1) + '</b> ' + t + '<br>  <span style="color:var(--dim);font-size:10px">' + m + '...</span>';
+        });
+        addLogEntry('PROPOSALS', 'pipeline_det proposal', html, true);
+      }
+    }
+
+    // ELO Tournament
+    const tourney = s.last_tournament_result;
+    if (tourney && tourney.ranked && tourney.ranked.length > 0) {
+      const key = JSON.stringify(tourney.ranked.map(r => r.title || ''));
+      if (key !== _lastElo) {
+        _lastElo = key;
+        const dims = (tourney.dimensions || []).join(', ');
+        const winner = tourney.ranked[0];
+        let html = '<b>ELO: ' + tourney.ranked.length + ' ranked (' + dims + ')</b>';
+        html += '<br>  Winner: ' + (winner.title || '?').substring(0, 70);
+        html += '<br>  ELO: ' + (winner.elo_rating || 0).toFixed(0);
+        tourney.ranked.slice(1).forEach(r => {
+          html += '<br>  ' + (r.elo_rating || 0).toFixed(0) + ' — ' + (r.title || '?').substring(0, 50);
+        });
+        addLogEntry('ELO TOURNAMENT', 'pipeline_det elo', html, true);
+      }
+    }
+
+    // Verification result
+    const verify = s.last_verification_result;
+    if (verify) {
+      const key = JSON.stringify(verify);
+      if (key !== _lastVerify) {
+        _lastVerify = key;
+        const v = verify.verdict || '?';
+        const isPass = v === 'pass';
+        let html = '<b>Verify: ' + v + '</b>';
+        if (verify.detail) html += '<br>' + verify.detail.substring(0, 200);
+        if (verify.forced_pass) html += '<br><span style="color:var(--yellow)">Force-passed (regen cap)</span>';
+        if (verify.failures) {
+          Object.entries(verify.failures).forEach(([k, r]) => {
+            html += '<br><span style="color:var(--red);font-size:10px">  ' + k + ': ' + String(r).substring(0, 80) + '</span>';
+          });
+        }
+        addLogEntry('VERIFY', 'pipeline_det verify' + (isPass ? '' : ' fail'), html, true);
+      }
+    }
+
+    // Deliverables summary
+    const deliv = s.deliverables || [];
+    if (deliv.length > 0) {
+      const key = deliv.length + ':' + deliv.map(d => d.type || '').join(',');
+      if (key !== _lastDeliv) {
+        _lastDeliv = key;
+        const grouped = {};
+        deliv.forEach(d => { const t = d.type || 'other'; grouped[t] = (grouped[t] || 0) + 1; });
+        let html = '<b>' + deliv.length + ' deliverables</b>: ' + Object.entries(grouped).map(([k,v]) => k + ' x' + v).join(', ');
+        addLogEntry('DELIVERABLES', 'pipeline_det', html, true);
+      }
+    }
+  } catch(e) {}
+}
+
 async function pollPipeline(sessionId) {
   try {
     const resp = await fetch('/api/sessions/' + sessionId + '/pipeline');
@@ -649,7 +781,7 @@ async function pollPipeline(sessionId) {
       $('#phaseDetail').style.display = 'none';
       return;
     }
-    const PHASE_ORDER = {"W2 Plan":0,"W3 Research":1,"W3.5 Ideate":2,"W4 Code":3,"W5 Analyze":4,"W6 Write":5,"W7 Review":6,"已终止":7};
+    const PHASE_ORDER = {"W2.1 Problem Analysis":0,"W2.2 Solution Directions":1,"W2.3 Search Keywords":2,"W3 Research":3,"W3.5 Ideate":4,"W4 Code":5,"W5 Analyze":6,"W6 Write":7,"W7 Review":8,"已终止":9};
     const phaseIdx = PHASE_ORDER[state.phase] !== undefined ? PHASE_ORDER[state.phase] : 0;
     const status = state.status || 'in_progress';
 
@@ -696,7 +828,18 @@ async function pollPipeline(sessionId) {
     } else {
       detail.style.display = 'none';
     }
-  } catch(e) {}
+      // Fetch detailed pipeline artifacts
+      renderPipelineDetail();
+
+      // Log successful pipeline update
+      if (window._lastPipelinePhase !== state.phase || window._lastPipelineStep !== state.sub_loop_step) {
+        window._lastPipelinePhase = state.phase;
+        window._lastPipelineStep = state.sub_loop_step;
+        addLogEntry('PIPELINE', 'system', 'Phase: ' + state.phase + ' | Step: ' + (state.sub_loop_step || 0) + ' | Status: ' + status);
+      }
+    } catch(e) {
+      addLogEntry('PIPELINE', 'error', 'Poll failed: ' + e.message);
+    }
 }
 
 async function pipelineControl(action) {

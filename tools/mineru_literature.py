@@ -72,7 +72,7 @@ ingested: {time.time()}
 
     # Stage 3: Wiki — LLM 从文献提取概念和链接
     def build_wiki(self) -> dict:
-        """从文献提取方法实体 + 创建 Obsidian 链接. (需要 LLM)"""
+        """从文献提取方法实体 + 创建链接关系. (需要 LLM)"""
         papers = list(self.literature_dir.glob("*.md"))
         return {"papers_processed": len(papers), "wiki_pages": 0,
                 "status": "stub — full implementation requires LLM pipeline"}

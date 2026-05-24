@@ -20,8 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL, BOTTLENECK_CATEGORIES
-from models import Rho, Edge, Node
+try:
+    from tools.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL, BOTTLENECK_CATEGORIES
+    from tools.models import Rho, Edge, Node
+except ImportError:
+    from taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL, BOTTLENECK_CATEGORIES
+    from models import Rho, Edge, Node
 
 
 SCHEMA = """
@@ -290,7 +294,10 @@ class ClaimChainV2:
 
     def commit(self):
         """Run post-validation, then commit. Rolls back on failure."""
-        from validation import run_post_validation
+        try:
+            from tools.validation import run_post_validation
+        except ImportError:
+            from validation import run_post_validation
         errors = run_post_validation(self.conn)
         if errors:
             self.conn.rollback()
@@ -322,6 +329,89 @@ class ClaimChainV2:
         edges = [e.to_dict() for e in self.all_edges(include_superseded=False)]
 
         return {"nodes": nodes, "edges": edges}
+
+    # ── Backward-compatible API (Phase 7: CC v1→v2 migration) ──
+
+    def add_atom(self, type: str, title: str, content: str = "",
+                 tags: list[str] | None = None, evidence_level: str = "experiment",
+                 metadata: dict | None = None) -> dict:
+        """Backward-compatible API mirroring claim_chain.py add_atom().
+
+        Converts v1-style atom dict to v2 Node + optional bottleneck addresses.
+        """
+        import time
+        from datetime import datetime, timezone
+
+        node_id = metadata.get("id") if metadata else None
+        if not node_id:
+            node_id = f"node_{int(time.time() * 1000)}"
+
+        node = Node(
+            id=str(node_id),
+            title=title,
+            type=type if type in ("method", "bottleneck", "paper") else "method",
+            summary=content[:500] if content else "",
+            addresses=metadata.get("addresses", []) if metadata else [],
+            created_at=datetime.now(timezone.utc),
+        )
+        self.add_node(node)
+        self.commit()
+        return {
+            "id": node.id,
+            "type": node.type,
+            "title": node.title,
+            "content": content,
+            "tags": tags or [],
+            "evidence_level": evidence_level,
+            "status": "active",
+            "metadata": metadata or {},
+        }
+
+    def add_relation(self, source_id: str, target_id: str, type: str,
+                     evidence: str = "", metadata: dict | None = None) -> dict:
+        """Backward-compatible API mirroring claim_chain.py add_relation()."""
+        try:
+            from tools.taxonomy import EdgeType as ET
+        except ImportError:
+            from taxonomy import EdgeType as ET
+
+        try:
+            edge_type = ET(type)
+        except ValueError:
+            edge_type = ET.BACKGROUND
+
+        rho = None
+        if metadata:
+            bottleneck_id = metadata.get("bottleneck", "")
+            if bottleneck_id:
+                # Auto-register bottleneck to satisfy FK constraint
+                self.add_bottleneck(bottleneck_id, metadata.get("bottleneck_desc", ""))
+            rho = Rho(
+                bottleneck=bottleneck_id,
+                mechanism=metadata.get("mechanism", evidence or ""),
+                tradeoff=metadata.get("tradeoff", ""),
+                confidence=min(1.0, max(0.0, metadata.get("confidence", 0.5))),
+            )
+
+        from datetime import datetime, timezone
+        edge = Edge(
+            src=str(source_id),
+            dst=str(target_id),
+            type=edge_type,
+            rho=rho,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.add_edge(edge)
+        self.commit()
+        return edge.to_dict()
+
+    def get_graph_summary(self) -> dict:
+        """Backward-compatible API. Returns node/edge counts."""
+        nodes = self.conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        edges = self.conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE superseded_by IS NULL"
+        ).fetchone()[0]
+        return {"total_nodes": nodes, "total_edges": edges}
 
 
 class ValidationError(Exception):

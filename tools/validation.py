@@ -11,7 +11,10 @@ Rules:
 """
 
 import sqlite3
-from taxonomy import STRONG_CAUSAL
+try:
+    from tools.taxonomy import STRONG_CAUSAL
+except ImportError:
+    from taxonomy import STRONG_CAUSAL
 
 
 def run_post_validation(conn: sqlite3.Connection) -> list[str]:
