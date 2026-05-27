@@ -189,11 +189,11 @@ def structure_to_cc_atoms(
             continue
 
         atoms = []
-        if cc is not None:
-            # Pre-extract all source snippets for this directory
-            all_snippets = extract_all_snippets(code_dir, {fname: data})
+        # Pre-extract all source snippets for this directory
+        all_snippets = extract_all_snippets(code_dir, {fname: data})
 
-            # Create component atoms
+        # Create component atoms
+        if cc is not None:
             for node in data.get("nodes", []):
                 name = node.get("name", "?")
                 start_line = node.get("start_line", 0)
@@ -221,9 +221,10 @@ def structure_to_cc_atoms(
                     tags=["codegraph", stem, node.get("kind", "function")]
                     + [f"mech:{m}" for m in mechs],
                 )
-                atoms.append(atom)
+                    atoms[-1] = atom  # Replace dict with actual atom object
 
             # Create relation: algo → implements → each component
+        if cc is not None:
             for atom in atoms:
                 try:
                     cc.add_relation(stem, atom["id"], "implements")
@@ -231,6 +232,7 @@ def structure_to_cc_atoms(
                     pass
 
             # Create dependency edges as CC relations
+        if cc is not None:
             for edge in data.get("edges", []):
                 try:
                     cc.add_relation(
