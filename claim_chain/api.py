@@ -26,7 +26,7 @@ class ClaimChainAPI:
         for algo, atoms in raw.items():
             for atom in atoms:
                 result = gatekeeper.validate_atom(atom)
-                if result.is_valid:
+                if result.valid:
                     all_atoms.append(atom)
         
         # Step 3: BGE-M3 dedup
