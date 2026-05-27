@@ -577,7 +577,7 @@ class AgentManager:
         agent_name: str,
         prompt: str,
     ) -> dict:
-        """Invoke a SINGLE agent independently and return its response.
+        """Invoke a SINGLE agent independently.\n    print("INVOKE_AGENT_CALLED: " + agent_name)
 
         Used for 4-persona independent proposal generation. The orchestrator
         delegates ONLY to the named agent and returns just that agent's raw output.
@@ -602,7 +602,6 @@ class AgentManager:
                 "type": "persona_started",
                 "data": {"persona": agent_name, "detail": f"{agent_name}: searching web..."}
             })
-            from tavily import TavilyClient
             tc = TavilyClient()
             search_resp = tc.search(
                 query=f"actor critic algorithm Hopper-v4 reinforcement learning improvement",

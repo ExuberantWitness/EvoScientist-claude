@@ -54,8 +54,17 @@ class ClaimChainAPI:
         return {"atoms_added": 0, "relations_added": 0, "atom_ids": []}
 
     def ingest_text(self, text: str, source: str, tags: list[str] | None = None) -> dict:
-        """自由文本 -> BGE-M3粗筛 -> LLM细提取 -> ontology对齐 -> CC"""
-        return {"atoms_added": 0, "relations_added": 0, "atom_ids": []}
+        """自由文本 -> CC fact atom (with ontology validation + dedup)"""
+        from claim_chain.ontology.alignment import OntologyGatekeeper
+        tags = tags or ["literature"]
+        gatekeeper = OntologyGatekeeper()
+        atom_dict = {"type": "fact", "title": text[:200], "content": text[:2000], "tags": tags}
+        result = gatekeeper.validate_atom(atom_dict)
+        if not result.valid:
+            return {"atoms_added": 0, "relations_added": 0, "errors": result.errors}
+        atom = self.chain.add_atom(type="fact", title=atom_dict["title"],
+                                    content=atom_dict["content"], tags=atom_dict["tags"])
+        return {"atoms_added": 1, "relations_added": 0, "atom_ids": [getattr(atom, 'id', 0)]}
 
     def query(self, spec: dict) -> dict:
         """统一查询: {keywords?, atom_id?, neighbor_depth?, breadth?, filters?} -> Subgraph"""
