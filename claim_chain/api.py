@@ -29,12 +29,14 @@ class ClaimChainAPI:
                 if result.valid:
                     all_atoms.append(atom)
         
-        # Step 3: BGE-M3 dedup
-        if len(all_atoms) > 1:
-            dup_groups = gatekeeper.find_duplicates(all_atoms, threshold=0.85)
-            dedup_count = sum(len(g) - 1 for g in dup_groups if len(g) > 1)
-        else:
-            dedup_count = 0
+        # Step 3: BGE-M3 dedup (check new atoms against existing CC)
+        dedup_count = 0
+        existing = self.chain.all_nodes()
+        existing_dicts = [{"title": n.name, "content": n.content or "{}"} for n in existing]
+        for atom in all_atoms:
+            dupes = gatekeeper.find_duplicates(atom, existing_dicts, threshold=0.85)
+            if dupes:
+                dedup_count += 1
         
         # Step 4: Store in CC (already done via cc parameter in structure_to_cc_atoms)
         self.chain.commit()
