@@ -9,7 +9,8 @@ class ClaimChainAPI:
         self.workspace_dir = Path(workspace_dir)
         self._index_dir = self.workspace_dir / "_index"
         self._index_dir.mkdir(parents=True, exist_ok=True)
-        # Lazy init sub-modules
+        from claim_chain.chain import ClaimChainV2
+        self.chain = ClaimChainV2(self._index_dir / 'cc.db')
 
     def ingest_code(self, code_dir: Path, algo_names: list[str] | None = None) -> dict:
         """代码目录 -> CodeGraph解析 -> ontology对齐+去重 -> CC atoms+relations"""
