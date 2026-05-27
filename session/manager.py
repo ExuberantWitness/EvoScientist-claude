@@ -602,6 +602,7 @@ class AgentManager:
                 "type": "persona_started",
                 "data": {"persona": agent_name, "detail": f"{agent_name}: searching web..."}
             })
+            from tavily import TavilyClient
             tc = TavilyClient()
             search_resp = tc.search(
                 query=f"actor critic algorithm Hopper-v4 reinforcement learning improvement",
