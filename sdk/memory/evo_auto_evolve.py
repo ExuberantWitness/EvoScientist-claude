@@ -1029,7 +1029,7 @@ class AutoEvolveEngine:
     def _update_claim_chain(self, variant_id: str, score: float, params: dict,
                             classification: str, parent_id: str | None, parent_score: float | None) -> int:
         """Write atoms and relations to Claim Chain. Returns method atom ID."""
-        from claim_chain import ClaimChain
+        from claim_chain.chain import ClaimChain
         cc = ClaimChain(self.workspace)
 
         existing_atoms = cc.get_atoms(limit=500, status=None)
@@ -1202,7 +1202,7 @@ class AutoEvolveEngine:
 
     def _write_rubric_to_cc(self, variant_a: dict, variant_b: dict, evaluation: dict):
         """Write rubric comparison results to Claim Chain as fact atom + compares_to relation."""
-        from claim_chain import ClaimChain
+        from claim_chain.chain import ClaimChain
         cc = ClaimChain(self.workspace)
         existing = cc.get_atoms(limit=500, status=None)
 
@@ -1328,7 +1328,7 @@ class AutoEvolveEngine:
             self.island_mgr._add_to_island(target_island["id"], variant_id, current_cell, current_score)
 
             # Write migration to Claim Chain
-            from claim_chain import ClaimChain
+            from claim_chain.chain import ClaimChain
             cc = ClaimChain(self.workspace)
             cc.add_atom(
                 type="fact",

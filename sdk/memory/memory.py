@@ -62,7 +62,7 @@ class EvolutionMemory:
         self.ideation_dir.mkdir(parents=True, exist_ok=True)
         self.experiment_dir.mkdir(parents=True, exist_ok=True)
         # Strategy-driven configuration
-        from .strategy import StrategyManager
+        from application.evolution.strategy import StrategyManager
         self.strategy = StrategyManager(workspace_dir)
         self.strategy.ensure_defaults()
 

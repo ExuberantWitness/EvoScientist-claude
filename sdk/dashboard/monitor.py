@@ -2526,8 +2526,8 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
 
     elif action == "evaluate_novelty":
         # Stage 1+2: BGE-M3 RND coarse + LLM Rubric fine → novelty score
-        from rnd_evaluator import RNDEvaluator
-        from rubric_novelty import RubricNoveltyEvaluator
+        from pes_controller.elo.neighborhood import RNDEvaluator
+        from pes_controller.rubric.novelty import RubricNoveltyEvaluator
 
         proposals = step.get("proposals", [])
         rnd_kb_path = Path(step.get("rnd_kb_path", ws_path / "_index" / "rnd_kb.jsonl"))
@@ -3037,7 +3037,7 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
     3. Pairwise 比较 → CC.add_relation(type="validates"/"contradicts")
     4. 代码路径 → CC.add_relation(type="implements")
     """
-    from claim_chain import ClaimChain
+    from claim_chain.chain import ClaimChain
     cc = ClaimChain(str(ws_path / "_index"), base_dir=str(ws_path / "_index"))
 
     state = atomic_read(state_path)
@@ -3180,7 +3180,7 @@ async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
     """
     from cell_grid import CellGrid
     from island_manager import IslandManager
-    from claim_chain import ClaimChain
+    from claim_chain.chain import ClaimChain
 
     state = atomic_read(state_path)
     analysis = state.get("analysis_summary", {})
