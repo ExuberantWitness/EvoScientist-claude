@@ -12,8 +12,39 @@ class ClaimChainAPI:
         # Lazy init sub-modules
 
     def ingest_code(self, code_dir: Path, algo_names: list[str] | None = None) -> dict:
-        """代码目录 -> CodeGraph解析 -> ontology对齐 -> CC atoms+relations"""
-        return {"atoms_added": 0, "relations_added": 0, "atom_ids": []}
+        """代码目录 -> CodeGraph解析 -> ontology对齐+去重 -> CC atoms+relations"""
+        from claim_chain.codegraph import structure_to_cc_atoms
+        from claim_chain.ontology.alignment import OntologyGatekeeper
+        
+        # Step 1: CodeGraph -> raw atoms
+        raw = structure_to_cc_atoms(code_dir, algo_names=algo_names, cc=self.chain)
+        
+        # Step 2: Ontology validation + dedup
+        gatekeeper = OntologyGatekeeper()
+        all_atoms = []
+        for algo, atoms in raw.items():
+            for atom in atoms:
+                result = gatekeeper.validate_atom(atom)
+                if result.is_valid:
+                    all_atoms.append(atom)
+        
+        # Step 3: BGE-M3 dedup
+        if len(all_atoms) > 1:
+            dup_groups = gatekeeper.find_duplicates(all_atoms, threshold=0.85)
+            dedup_count = sum(len(g) - 1 for g in dup_groups if len(g) > 1)
+        else:
+            dedup_count = 0
+        
+        # Step 4: Store in CC (already done via cc parameter in structure_to_cc_atoms)
+        self.chain.commit()
+        
+        return {
+            "atoms_added": len(all_atoms),
+            "relations_added": 0,
+            "atom_ids": [],
+            "duplicates_found": dedup_count,
+            "validated": len(all_atoms)
+        }
 
     def ingest_paper(self, paper_path: Path, metadata: dict | None = None) -> dict:
         """论文PDF/Markdown -> 实体提取 -> ontology对齐 -> CC"""
