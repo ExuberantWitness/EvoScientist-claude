@@ -88,7 +88,7 @@ def record_experiment_result(
 
     # 1.5 从 Markdown frontmatter 同步现有状态 (如 event log 中无记录)
     try:
-        from tools.markdown_parser import parse_frontmatter
+        from plugins.writing.markdown_parser import parse_frontmatter
     except ImportError:
         from markdown_parser import parse_frontmatter
     algo_file = session_path / "Algorithms" / f"{algo_id}.md"

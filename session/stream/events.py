@@ -581,7 +581,7 @@ async def stream_agent_events(
                 # suppression.  Empty chunks arrive before the tracker has
                 # captured the selected tools, so we skip them.
                 if _tool_selection_was_active:
-                    import EvoScientist.middleware.tool_selector as _ts_mod
+                    import sdk.middleware.tool_selector as _ts_mod
 
                     if _ts_mod._current_selected_tools:
                         _tool_selection_was_active = False

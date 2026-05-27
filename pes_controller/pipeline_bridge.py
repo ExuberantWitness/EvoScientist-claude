@@ -183,7 +183,7 @@ class PipelineBridge:
         if not state_path or not state_path.exists():
             return
         try:
-            from pipeline_protocol import atomic_read, atomic_write
+            from pes_controller.protocol import atomic_read, atomic_write
             state = atomic_read(state_path)
             state["active_task"] = task_info
             state["session_id"] = state.get("session_id") or session_id
@@ -197,7 +197,7 @@ class PipelineBridge:
         if not state_path or not state_path.exists():
             return
         try:
-            from pipeline_protocol import atomic_read, atomic_write
+            from pes_controller.protocol import atomic_read, atomic_write
             state = atomic_read(state_path)
             if "active_task" in state:
                 del state["active_task"]

@@ -419,3 +419,6 @@ class ValidationError(Exception):
     def __init__(self, errors: list[str]):
         self.errors = errors
         super().__init__(f"Validation failed ({len(errors)} errors): {'; '.join(errors[:5])}")
+
+# Backward compatibility alias
+ClaimChain = ClaimChainV2

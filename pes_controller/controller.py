@@ -29,7 +29,7 @@ from claim_chain.chain import ClaimChain
 from claim_chain.cell_grid import CellGrid
 from pes_controller.rubric.scheduler import RubricScheduler
 from claim_chain.island_manager import IslandManager
-from claim_chain.cell_grid import FitnessTracker
+from sdk.status.fitness import FitnessTracker
 
 
 # ── Phase constants ──

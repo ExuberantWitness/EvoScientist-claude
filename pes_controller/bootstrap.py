@@ -16,9 +16,9 @@ PROJECT_DIR = TOOLS_DIR.parent  # EvoScientist-claude/
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from pipeline_protocol import atomic_read, atomic_write
+from pes_controller.protocol import atomic_read, atomic_write
 from pes_controller import PESController, PHASE_PLAN_1
-from vault_manager import SessionStore
+from plugins.reporting.vault_manager import SessionStore
 
 
 def bootstrap(research_topic: str, project_dir: str) -> dict:
@@ -45,7 +45,7 @@ def bootstrap(research_topic: str, project_dir: str) -> dict:
 
     # Detect domain from research topic keywords and load DomainConfig preset
     try:
-        from tools.domain_presets import get_domain_preset
+        from plugins.ideation.domain_presets import get_domain_preset
         topic_lower = research_topic.lower()
         # Normalize: replace hyphens/underscores with spaces for flexible matching
         topic_normalized = topic_lower.replace("-", " ").replace("_", " ")

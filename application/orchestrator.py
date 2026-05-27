@@ -28,7 +28,7 @@ from langchain.agents.middleware import AgentMiddleware
 from session import paths as _paths_mod
 from session.config.settings import apply_config_to_env, get_effective_config
 from session.paths import set_active_workspace, set_workspace_root
-from .prompts import RESEARCHER_INSTRUCTIONS, get_system_prompt
+from application.prompts import RESEARCHER_INSTRUCTIONS, get_system_prompt
 
 # Suppress noisy warnings from deepagents skill loader (non-string frontmatter fields, etc.)
 logging.getLogger("deepagents.middleware.skills").setLevel(logging.ERROR)
@@ -79,7 +79,7 @@ def _ensure_chat_model():
     """Return cached chat model, creating it on first call."""
     global _chat_model
     if _chat_model is None:
-        from .llm import get_chat_model
+        from session.llm.models import get_chat_model
 
         cfg = _ensure_config()
         _chat_model = get_chat_model(model=cfg.model, provider=cfg.provider)
@@ -93,7 +93,7 @@ def _ensure_chat_model():
 
 def _load_mcp_config_once() -> tuple[str, dict]:
     """Load MCP config and return ``(signature, config)``."""
-    from .mcp.client import load_mcp_config
+    from application.mcp.client import load_mcp_config
 
     cfg = load_mcp_config()
     if not cfg:
@@ -109,7 +109,7 @@ def _load_mcp_tools_cached() -> dict[str, list]:
     """Load MCP tools with config-aware caching."""
     global _MCP_TOOLS_CACHE_KEY, _MCP_TOOLS_CACHE_VALUE
 
-    from .mcp import load_mcp_tools
+    from application.mcp.client import load_mcp_tools
 
     cfg_key, cfg = _load_mcp_config_once()
     if not cfg_key:
@@ -138,7 +138,7 @@ def _inject_subagent_middleware(subs: list[dict]) -> None:
     ToolNode handler which produces terse messages without tracebacks or
     retry guidance — reducing the subagent's ability to self-recover.
     """
-    from .middleware import (
+    from sdk.middleware import (
         ContextOverflowMapperMiddleware,
         ToolErrorHandlerMiddleware,
         create_context_editing_middleware,
@@ -167,8 +167,8 @@ def _build_prompt_refs() -> dict:
 
 def _build_base_kwargs(base_backend, base_middleware):
     """Build agent kwargs *without* MCP (fast, no subprocess spawning)."""
-    from .tools import skill_manager, tavily_search, think_tool
-    from .utils import load_subagents
+    from sdk.tools import skill_manager, tavily_search, think_tool
+    from session.runtime_utils import load_subagents
 
     tool_registry = {"think_tool": think_tool}
     if os.environ.get("TAVILY_API_KEY"):
@@ -199,8 +199,8 @@ def load_mcp_and_build_kwargs(base_backend, base_middleware):
     Re-connects to MCP servers only when the effective MCP config changes.
     Falls back to base kwargs if no MCP configured.
     """
-    from .tools import skill_manager, tavily_search, think_tool
-    from .utils import load_subagents
+    from sdk.tools import skill_manager, tavily_search, think_tool
+    from session.runtime_utils import load_subagents
 
     mcp_by_agent = _load_mcp_tools_cached()
     if not mcp_by_agent:
@@ -253,7 +253,7 @@ def _get_default_backend():
     """Build the default composite backend from current paths."""
     from deepagents.backends import CompositeBackend, FilesystemBackend
 
-    from .backends import CustomSandboxBackend, MergedReadOnlyBackend
+    from application.backends import CustomSandboxBackend, MergedReadOnlyBackend
 
     workspace_dir = str(_paths_mod.WORKSPACE_ROOT)
     set_active_workspace(workspace_dir)
@@ -284,7 +284,7 @@ def _get_default_backend():
 
 def _get_default_middleware():
     """Build the default middleware list."""
-    from .middleware import (
+    from sdk.middleware import (
         ContextOverflowMapperMiddleware,
         ToolErrorHandlerMiddleware,
         create_context_editing_middleware,
@@ -304,7 +304,7 @@ def _get_default_middleware():
     ]
 
     if cfg.enable_ask_user and not cfg.auto_approve:
-        from .middleware.ask_user import AskUserMiddleware
+        from sdk.middleware.ask_user import AskUserMiddleware
 
         mw.insert(0, AskUserMiddleware())
     return mw
@@ -364,9 +364,9 @@ def create_cli_agent(workspace_dir: str | None = None, checkpointer=None, config
     from deepagents import create_deep_agent
     from deepagents.backends import CompositeBackend, FilesystemBackend
 
-    from . import paths as _paths
-    from .backends import CustomSandboxBackend, MergedReadOnlyBackend
-    from .middleware import (
+    from session import paths as _paths
+    from application.backends import CustomSandboxBackend, MergedReadOnlyBackend
+    from sdk.middleware import (
         ContextOverflowMapperMiddleware,
         ToolErrorHandlerMiddleware,
         create_context_editing_middleware,
@@ -430,7 +430,7 @@ def create_cli_agent(workspace_dir: str | None = None, checkpointer=None, config
         create_memory_middleware(_mem_dir, extraction_model=model),
     ]
     if cfg.enable_ask_user and not cfg.auto_approve:
-        from .middleware.ask_user import AskUserMiddleware
+        from sdk.middleware.ask_user import AskUserMiddleware
 
         mw.insert(0, AskUserMiddleware())
 

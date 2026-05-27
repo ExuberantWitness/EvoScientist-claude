@@ -39,9 +39,10 @@ logger = logging.getLogger(__name__)
 
 # Track module file modification times at startup
 _MODULE_MTIMES: dict[str, float] = {}
-_MODULES_TO_WATCH = ["pes_controller", "plan_templates", "bootstrap",
-                      "domain_presets", "pipeline_protocol", "trainer_contract",
-                      "claim_chain", "schemas.atom"]
+_MODULES_TO_WATCH = ["pes_controller", "pes_controller.protocol", "pes_controller.bootstrap",
+                      "plugins.ideation.plan_templates", "plugins.ideation.domain_presets",
+                      "plugins.experimentation.trainer_contract",
+                      "claim_chain", "claim_chain.schemas.atom"]
 
 
 def _hot_reload_pipeline_modules():

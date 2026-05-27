@@ -802,7 +802,7 @@ def create_memory_middleware(
     """
     from deepagents.backends import FilesystemBackend
 
-    from ..paths import MEMORY_DIR as _DEFAULT_MEMORY_DIR
+    from session.paths import MEMORY_DIR as _DEFAULT_MEMORY_DIR
 
     if memory_dir is None:
         memory_dir = str(_DEFAULT_MEMORY_DIR)

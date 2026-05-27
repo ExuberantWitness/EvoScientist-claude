@@ -192,7 +192,7 @@ def create_tool_selector_middleware(
     from .utils import disable_thinking
 
     if model is None:
-        from EvoScientist.EvoScientist import _ensure_chat_model
+        from application.orchestrator import _ensure_chat_model
 
         model = _ensure_chat_model()
     safe_model = disable_thinking(model)
