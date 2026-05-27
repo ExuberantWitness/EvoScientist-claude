@@ -192,36 +192,45 @@ def structure_to_cc_atoms(
         # Pre-extract all source snippets for this directory
         all_snippets = extract_all_snippets(code_dir, {fname: data})
 
-        # Create component atoms
-        if cc is not None:
-            for node in data.get("nodes", []):
-                name = node.get("name", "?")
-                start_line = node.get("start_line", 0)
-                end_line = node.get("end_line", start_line + 5)
+        # Create component atoms (always, even without cc)
+        for node in data.get("nodes", []):
+            name = node.get("name", "?")
+            start_line = node.get("start_line", 0)
+            end_line = node.get("end_line", start_line + 5)
 
-                # Extract source snippet
-                snippet = extract_source_snippet(
-                    code_dir, fname, start_line, end_line
-                )
-                mechs = tag_mechanisms(snippet)
+            # Extract source snippet
+            snippet = extract_source_snippet(
+                code_dir, fname, start_line, end_line
+            )
+            mechs = tag_mechanisms(snippet)
 
+            atom_dict = {
+                "type": "component",
+                "title": f"{stem}.{name}",
+                "content": json.dumps({
+                    "kind": node.get("kind", ""),
+                    "file": fname,
+                    "line": start_line,
+                    "end_line": end_line,
+                    "qualified_name": node.get("qualified_name", ""),
+                    "signature": node.get("signature", ""),
+                    "source_snippet": snippet[:1500],
+                    "mechanisms": mechs,
+                }),
+                "tags": ["codegraph", stem, node.get("kind", "function")]
+                + [f"mech:{m}" for m in mechs],
+            }
+            atoms.append(atom_dict)
+
+            # If CC instance provided, also add to CC
+            if cc is not None:
                 atom = cc.add_atom(
-                    type="component",
-                    title=f"{stem}.{name}",
-                    content=json.dumps({
-                        "kind": node.get("kind", ""),
-                        "file": fname,
-                        "line": start_line,
-                        "end_line": end_line,
-                        "qualified_name": node.get("qualified_name", ""),
-                        "signature": node.get("signature", ""),
-                        "source_snippet": snippet[:1500],
-                        "mechanisms": mechs,
-                    }),
-                    tags=["codegraph", stem, node.get("kind", "function")]
-                    + [f"mech:{m}" for m in mechs],
+                    type=atom_dict["type"],
+                    title=atom_dict["title"],
+                    content=atom_dict["content"],
+                    tags=atom_dict["tags"],
                 )
-                    atoms[-1] = atom  # Replace dict with actual atom object
+                atoms[-1] = atom  # Replace dict with actual atom object
 
             # Create relation: algo → implements → each component
         if cc is not None:
