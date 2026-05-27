@@ -3038,7 +3038,7 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
     4. 代码路径 → CC.add_relation(type="implements")
     """
     from claim_chain.chain import ClaimChain
-    cc = ClaimChain(str(ws_path / "_index"), base_dir=str(ws_path / "_index"))
+    cc = ClaimChain(ws_path / "_index" / "cc.db")
 
     state = atomic_read(state_path)
     current_phase = state.get("phase", step.get("phase", ""))
@@ -3193,7 +3193,7 @@ async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
 
     grid = CellGrid(str(ws_path / "evolve_archive"))
     islands = IslandManager(ws_path / "evolve_archive")
-    cc = ClaimChain(str(ws_path / "_index"), base_dir=str(ws_path / "_index"))
+    cc = ClaimChain(ws_path / "_index" / "cc.db")
     assigned = 0
 
     # 读 CC atoms 找匹配的 experiment atom_id
