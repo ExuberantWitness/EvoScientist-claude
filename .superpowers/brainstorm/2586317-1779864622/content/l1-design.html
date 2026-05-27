@@ -1,0 +1,62 @@
+<h2>Layer 1: Claim Chain — Design Spec</h2>
+<p class="subtitle">底层文件系统 · 完整CC生态 · 工厂模式</p>
+
+<div class="section">
+  <h3>对外接口（仅2个）</h3>
+  <div class="mockup">
+    <div class="mockup-header">ClaimChainAPI — L1统一门面</div>
+    <div class="mockup-body">
+      <pre style="font-size: 0.85rem; text-align: left; line-height: 1.5;">
+class ClaimChainAPI:
+    """L1 工厂 — 只暴露两个功能"""
+
+    # 功能1: 写入
+    def ingest(source: CodeDir | PaperPDF | Text) -> IngestResult:
+        """代码/论文 → CodeGraph解析 → Ontology对齐 → CC atoms+relations"""
+        ...
+
+    # 功能2: 读取
+    def query(spec: QuerySpec) -> Subgraph:
+        """语义搜索 + 邻居遍历 + gap检测 → 返回子图"""
+        ...
+
+# 内部模块（不向上层暴露）
+# schemas/ ontology/ chain.py grounding.py query.py
+# codegraph.py cell_grid.py island_manager.py negative_archive.py
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>内部模块清单</h3>
+  <table style="width:100%; font-size: 0.85rem; text-align: left;">
+    <tr><th>模块</th><th>来源</th><th>职责</th><th>对外?</th></tr>
+    <tr><td>schemas/</td><td>schemas/atom + tools/{taxonomy,models,validation}</td><td>数据Schema</td><td>内部</td></tr>
+    <tr><td>ontology/alignment.py</td><td>ontology_schema_alignment</td><td>Palantir四要素对齐</td><td>内部</td></tr>
+    <tr><td>chain.py</td><td>claim_chain_v2 (SQLite)</td><td>CC CRUD + 事务</td><td>内部</td></tr>
+    <tr><td>grounding.py</td><td>cc_grounding</td><td>BGE-M3+LLM提取</td><td>内部</td></tr>
+    <tr><td>query.py</td><td>cc_query_interface</td><td>语义搜索+邻居+gap</td><td>内部</td></tr>
+    <tr><td>codegraph.py</td><td>codegraph_cc</td><td>CodeGraph→CC转换</td><td>内部</td></tr>
+    <tr><td>cell_grid.py</td><td>cell_grid</td><td>算法代码索引</td><td>内部</td></tr>
+    <tr><td>island_manager.py</td><td>island_manager</td><td>变体集群管理</td><td>内部</td></tr>
+    <tr><td>negative_archive.py</td><td>negative_archive</td><td>失败atom学习</td><td>内部</td></tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>关键决策</h3>
+  <div class="pros-cons">
+    <div class="pros"><h4>决策确认</h4><ul>
+      <li>CC v1(JSONL)→v2(SQLite) 一步到位</li>
+      <li>cell_grid+island 整合进L1（管理算法代码索引）</li>
+      <li>Ontology/Grounding/Query 全部接入（不独立暴露）</li>
+      <li>codegraph整体放L1（L2 SDK通过import使用）</li>
+    </ul></div>
+    <div class="cons"><h4>待确认</h4><ul>
+      <li>ingest() 的输入类型范围？CodeDir + PaperPDF + Text？</li>
+      <li>query() 的 QuerySpec 结构？</li>
+      <li>L1 内部模块是否允许 L1 内部互相 import？</li>
+    </ul></div>
+  </div>
+</div>

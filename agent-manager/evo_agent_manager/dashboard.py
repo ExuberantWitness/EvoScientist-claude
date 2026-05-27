@@ -2523,6 +2523,104 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
                           f"Verdict: {verdict}",
                           {"verdict": verdict, "details": verdict_result.get("details", "")[:200]})
 
+    elif action == "evaluate_novelty":
+        # Stage 1+2: BGE-M3 RND coarse + LLM Rubric fine → novelty score
+        from rnd_evaluator import RNDEvaluator
+        from rubric_novelty import RubricNoveltyEvaluator
+
+        proposals = step.get("proposals", [])
+        rnd_kb_path = Path(step.get("rnd_kb_path", ws_path / "_index" / "rnd_kb.jsonl"))
+
+        if not proposals:
+            result["detail"] = "RND: 无提案可评价"
+            return result
+
+        _push_internal_event(session_id, "rnd_started", {
+            "phase": phase, "step": step_name,
+            "detail": f"RND evaluation: {len(proposals)} proposals"
+        })
+
+        # Stage 1: BGE-M3 RND
+        rnd_eval = RNDEvaluator(kb_path=rnd_kb_path)
+        rnd_eval.load()
+        rnd_results = rnd_eval.compute_rnd_batch(proposals)
+        rnd_eval.save()
+
+        _push_internal_event(session_id, "rnd_coarse_done", {
+            "phase": phase, "step": step_name,
+            "detail": f"RND coarse: {[round(r['novelty_coarse'],3) for r in rnd_results]}"
+        })
+
+        # KB completeness check: if all proposals look too novel, KB may be incomplete
+        _check_kb_completeness(rnd_results, rnd_eval, proposals, session_id,
+                               phase, step_name, state_path)
+
+        # Stage 2: LLM Rubric fine evaluation
+        if mgr:
+            async def _llm_for_rubric(prompt: str) -> str:
+                sess = mgr.sessions.get(session_id)
+                if sess is None:
+                    sessions_list = mgr.list_sessions()
+                    for s in sessions_list:
+                        if s.get('workspace_dir') == str(ws_path):
+                            session_id_tmp = s.get('session_id', '')
+                            sess = mgr.sessions.get(session_id_tmp)
+                            break
+                if sess is None:
+                    raise RuntimeError(f'Session not found: {session_id}')
+                return await mgr._direct_llm_call(sess, prompt)
+
+            rubric_eval = RubricNoveltyEvaluator(llm_call=_llm_for_rubric)
+            try:
+                reports = await rubric_eval.evaluate_batch(proposals, rnd_results)
+            except Exception as e:
+                logger.warning(f"Rubric fine eval failed: {e}")
+                reports = None
+
+            if reports:
+                for i, p in enumerate(proposals):
+                    rnd_n = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
+                    fine_n = reports[i].novelty_score if i < len(reports) else 0.5
+                    p["rubric_novelty"] = round(0.5 * rnd_n + 0.5 * fine_n, 4)
+                    p["rnd_coarse"] = rnd_n
+                    p["rnd_fine"] = fine_n
+                    p["rnd_details"] = {
+                        "nearest": rnd_results[i].get("nearest_neighbors", []) if i < len(rnd_results) else [],
+                        "dimension_scores": reports[i].dimension_scores if i < len(reports) else {},
+                        "explanation": reports[i].explanation if i < len(reports) else "",
+                    }
+            else:
+                # Fallback: use coarse only
+                for i, p in enumerate(proposals):
+                    p["rubric_novelty"] = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
+                    p["rnd_coarse"] = p["rubric_novelty"]
+                    p["rnd_fine"] = 0.5
+        else:
+            for i, p in enumerate(proposals):
+                p["rubric_novelty"] = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
+
+        # Store results back
+        state = atomic_read(state_path)
+        state["last_persona_proposals"] = proposals
+        ctx = state.get("last_pipeline_context", {})
+        ctx["proposals"] = proposals
+        state["last_pipeline_context"] = ctx
+        atomic_write(state_path, state)
+
+        _push_internal_event(session_id, "rnd_completed", {
+            "phase": phase, "step": step_name,
+            "detail": f"RND: {[round(p.get('rubric_novelty',0.5),3) for p in proposals]}"
+        })
+
+        # Find worst proposal for re-generation
+        worst = min(proposals, key=lambda p: p.get("rnd_novelty", 0.5))
+        result["detail"] = (
+            f"RND 创新评价完成: novelty={[round(p.get('rubric_novelty',0),3) for p in proposals]}. "
+            f"最差: {worst.get('source_agent','?')} (novelty={worst.get('rnd_novelty',0):.3f})"
+        )
+        result["worst_proposal"] = worst.get("source_agent", "")
+        result["rnd_results"] = rnd_results[:2]  # keep result manageable
+
     elif action == "write_sme":
         sme_context = step.get("sme_context", {})
         state = atomic_read(state_path)
@@ -3352,6 +3450,50 @@ def _push_internal_event(session_id: str, event_type: str, data: dict):
             mgr.event_bus.publish(session_id, {"type": event_type, "data": data})
     except Exception:
         pass
+def _check_kb_completeness(rnd_results: list, rnd_eval, proposals: list,
+                           session_id: str, phase: str, step_name: str,
+                           state_path: Path):
+    """Detect when RND scores are universally high → KB may be incomplete.
+
+    When all proposals look novel (novelty_coarse > 0.8) in a small KB,
+    it usually means the knowledge base lacks relevant literature for
+    the research direction. This triggers a supplementary search suggestion.
+    """
+    if not rnd_results or len(rnd_results) < 2:
+        return
+
+    kb_size = rnd_eval.size if rnd_eval else 0
+    coarse_scores = [r["novelty_coarse"] for r in rnd_results]
+    avg_novelty = sum(coarse_scores) / len(coarse_scores)
+    all_high = all(s > 0.8 for s in coarse_scores)
+
+    if all_high and kb_size < 200:
+        _push_internal_event(session_id, "kb_incomplete_warning", {
+            "phase": phase,
+            "step": step_name,
+            "detail": (
+                f"RND 知识库可能不完整: {len(rnd_results)} 个提案平均 novelty={avg_novelty:.2f}, "
+                f"KB 仅 {kb_size} 条。建议补充文献调研以获取更准确的创新性评价。"
+            ),
+            "kb_size": kb_size,
+            "avg_novelty": round(avg_novelty, 3),
+            "suggestion": "supplementary_literature_search",
+        })
+        state = atomic_read(state_path)
+        state["kb_completeness_warning"] = {
+            "kb_size": kb_size,
+            "avg_novelty": round(avg_novelty, 3),
+            "proposal_count": len(rnd_results),
+            "suggestion": "建议针对高新颖性方向补充文献搜索，扩充 RND 知识库以提高评价准确性",
+            "needs_supplementary_search": True,
+        }
+        atomic_write(state_path, state)
+        logger.info(
+            f"KB completeness warning: avg_novelty={avg_novelty:.2f}, "
+            f"kb_size={kb_size}, proposals={len(rnd_results)}"
+        )
+
+
 def _record_deliverable(state_path: Path, step_name: str, phase: str,
                         deliverable_type: str, summary: str, detail: dict = None):
     """记录步骤交付物到 PIPELINE_STATE。Dashboard 前端据此展示进度和产物。"""

@@ -1,0 +1,99 @@
+<h2>L1: Claim Chain — 详细接口契约</h2>
+<p class="subtitle">每个模块 = 名称 + 职责 + 公开接口签名 + 依赖 + 被谁使用</p>
+
+<div class="section">
+<h3>1. api.py — 统一门面 (唯一对外暴露)</h3>
+<pre style="font-size:0.75rem;text-align:left;">
+class ClaimChainAPI:
+    """L1工厂。上层只通过此类访问CC。"""
+
+    def __init__(self, workspace_dir: Path):
+        """初始化CC存储(SQLite DB + JSONL索引)"""
+
+    # ── 写入 ──
+    def ingest_code(self, code_dir: Path, algo_names: list[str] | None = None) -> IngestResult:
+        """代码目录 → CodeGraph解析 → mechanism tag → ontology对齐 → CC atoms+relations
+        返回: IngestResult {atoms_added: int, relations_added: int, atom_ids: [int]}"""
+
+    def ingest_paper(self, paper_path: Path, metadata: dict | None = None) -> IngestResult:
+        """论文PDF/Markdown → 实体提取 → ontology对齐 → CC atoms+relations"""
+
+    def ingest_text(self, text: str, source: str, tags: list[str] | None = None) -> IngestResult:
+        """自由文本 → BGE-M3粗筛 → LLM细提取 → ontology对齐 → CC"""
+
+    # ── 读取 ──
+    def query(self, spec: QuerySpec) -> Subgraph:
+        """统一查询入口。QuerySpec {atom_id?, keywords?, neighbor_depth?, filters?}"""
+
+    def get_atom(self, atom_id: int) -> Atom | None: ...
+    def get_relations(self, source_id: int | None = None, target_id: int | None = None,
+                      rel_type: str | None = None, limit: int = 0) -> list[Relation]: ...
+
+    # ── 维护 ──
+    def validate(self) -> ValidationReport:
+        """Ontology校验 + 去重 + 三层对齐检查。返回问题列表。"""
+
+    def get_summary(self) -> dict:
+        """{atom_count, relation_count, relation_types, coverage_stats}"""
+</pre>
+</div>
+
+<div class="section">
+<h3>2. chain.py — CC CRUD (SQLite)</h3>
+<pre style="font-size:0.75rem;text-align:left;">
+class ClaimChain:
+    """SQLite-backed atom graph. 替换 v1 JSONL。"""
+    def __init__(self, db_path: Path): ...
+    def add_atom(self, type: AtomType, title: str, content: str,
+                 tags: list[str] | None = None, metadata: dict | None = None) -> Atom
+    def add_relation(self, source_id: int, target_id: int, rel_type: RelationType,
+                     evidence: str = "", metadata: dict | None = None) -> Relation
+    def get_atoms(self, type: str | None = None, tags: list[str] | None = None,
+                  limit: int = 0) -> list[Atom]
+    def get_relations(self, source_id: int | None = None, target_id: int | None = None,
+                      rel_type: str | None = None, limit: int = 0) -> list[Relation]
+    def deactivate_atom(self, atom_id: int) -> bool
+    def get_evolution_chain(self, seed_id: int, max_depth: int = 5) -> list[Relation]
+    def commit(self) / rollback(self)  # 事务支持
+</pre>
+</div>
+
+<div class="section">
+<h3>3. schemas/ — 数据定义</h3>
+<pre style="font-size:0.75rem;text-align:left;">
+# atom.py
+class RefinedAtom(BaseModel):
+    type: AtomType            # fact|method|component|hypothesis|experiment
+    title: str                # 唯一标识
+    content: str              # JSON-encoded 详细内容
+    tags: list[str]           # 分类标记
+    evidence_level: str       # user_confirmed|llm_analysis|experiment|literature
+    metadata: dict            # 扩展字段
+    created_at: str
+    deactivated: bool = False
+
+# taxonomy.py
+class AtomType(Enum): FACT, METHOD, COMPONENT, HYPOTHESIS, EXPERIMENT = ...
+class RelationType(Enum): IMPLEMENTS, DEPENDS_ON, SPECIALIZES, VALIDATES, CONTRADICTS, BASELINE_FOR, MOTIVATES = ...
+
+# models.py — Node, Edge Pydantic (用于SQLite映射)
+
+# validation.py
+def validate_atom(atom: dict, schema: AtomType) -> list[str]:  # 返回错误列表
+def validate_relation(rel: dict, rule: LinkRule) -> list[str]:
+</pre>
+</div>
+
+<div class="section">
+<h3>4-9. 其余内部模块</h3>
+<table style="width:100%;font-size:0.75rem;text-align:left;">
+<tr><th>模块</th><th>核心接口</th><th>被谁调用</th></tr>
+<tr><td>ontology/alignment.py</td><td>validate_atom(atom)→ValidationReport; dedup(atoms)→dedup_groups; build_merge_groups(atoms)→merge_plan; apply_merges(plan)→merged_atoms</td><td>api.ingest_*() 内部</td></tr>
+<tr><td>grounding.py</td><td>enrich_from_codegraph(code_dir)→atoms; enrich_from_literature(paper_text)→atoms; enrich_from_experiments(results)→atoms; maintain()→dedup+validate+align</td><td>api.ingest_code/paper() 内部</td></tr>
+<tr><td>query.py</td><td>query_related(keywords, top_k)→[Atom]; query_neighbors(atom_id, depth)→Subgraph; query_gaps()→[GapReport]</td><td>api.query() 内部</td></tr>
+<tr><td>codegraph.py</td><td>extract_structure(code_dir)→{file: {nodes,edges}}; structure_to_cc_atoms(structure,cc)→atoms; algo_mechanism_summary(code_dir,algo)→{mechanisms,key_diffs}</td><td>api.ingest_code() 内部</td></tr>
+<tr><td>cell_grid.py</td><td>add_cell(algo_name, metadata); query_cells(filters)→[Cell]; detect_anomalies()→[Anomaly]</td><td>api内部</td></tr>
+<tr><td>island_manager.py</td><td>assign_to_island(atom_id, island_id); merge_candidates()→[(island_a,island_b,similarity)]</td><td>api内部</td></tr>
+<tr><td>negative_archive.py</td><td>record_failure(atom_id, error_class, stderr); get_recent_failures(n)→[Failure]; should_ban_direction(atom_id)→bool</td><td>api.validate() 内部</td></tr>
+</table>
+</div>

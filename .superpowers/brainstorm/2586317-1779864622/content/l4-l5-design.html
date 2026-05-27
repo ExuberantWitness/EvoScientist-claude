@@ -1,0 +1,79 @@
+<h2>Layer 4-5: Session + Hyperagents</h2>
+<p class="subtitle">线程管理 + 应用层</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">L4: Session (线程管理)</div>
+    <div class="mockup-body">
+      <pre style="font-size: 0.75rem; text-align: left;">
+session/
+├── manager.py         Session生命周期 (1475L)
+├── factory.py         Agent创建工厂 (266L)
+├── backend.py         DeepAgents后端 (324L)
+├── registry.py        Agent注册 (113L)
+├── event_bus.py       事件总线 (69L)
+├── utils.py           工具函数 (22L)
+├── llm/
+│   ├── models.py      LLM模型配置 (473L)
+│   └── patches.py     Provider补丁 (220L)
+├── config/
+│   └── settings.py    Agent配置 (493L)
+├── stream/
+│   ├── events.py      SSE事件流 (856L)
+│   ├── state.py       流状态 (396L)
+│   └── ...            辅助模块
+├── paths.py           (90L)
+└── runtime_utils.py   (229L)
+      </pre>
+      <p style="font-size: 0.8rem; margin-top: 0.5rem;">
+      <strong>职责:</strong> Agent生命周期、LLM配置、事件流<br>
+      <strong>不负责:</strong> 管线编排(L3)、Agent行为(L5)
+      </p>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">L5: Hyperagents (应用)</div>
+    <div class="mockup-body">
+      <pre style="font-size: 0.75rem; text-align: left;">
+hyperagents/
+├── personas/          4-Persona agents
+│   ├── novel_academic.py
+│   ├── conservative_academic.py
+│   ├── novel_engineering.py
+│   └── conservative_engineering.py
+├── meta/
+│   └── meta_agent.py  Meta进化Agent (201L)
+├── evolution/
+│   ├── strategy.py    策略管理 (277L)
+│   ├── validator.py   进化验证 (103L)
+│   ├── trigger.py     进化触发 (54L)
+│   ├── scoring.py     质量评分 (190L)
+│   ├── pipeline.py    进化管线 (563L)
+│   └── tree_search.py Idea Tree (373L)
+├── orchestrator.py    Agent图构建 (450L)
+├── prompts.py         提示词模板 (363L)
+└── middleware/         8个中间件 (~1700L)
+      </pre>
+      <p style="font-size: 0.8rem; margin-top: 0.5rem;">
+      <strong>职责:</strong> Agent行为逻辑、进化、提示词<br>
+      <strong>参考:</strong> facebookresearch/hyperagents
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>L4-L5 接口关系</h3>
+  <pre style="font-size: 0.8rem; text-align: left;">
+L5 Hyperagents (应用)
+  │ import L4 Session (manager, factory, llm)
+  │ import L3 PES Controller (protocol, elo)
+  │ import L2 SDK (tools, search)
+  │ import L1 Claim Chain (query)
+  ▼
+L4 Session (线程)
+  │ 提供: Agent创建、LLM调用、事件流
+  │ 不依赖上层
+  ▼
+  </pre>
+</div>

@@ -6,7 +6,7 @@ Designed as the knowledge hub (L4) in the four-layer architecture:
                       ↔ L3 (Islands)
 
 Atom types (OpenResearch-compatible):
-  fact, method, theorem, verification
+  fact, method, theorem, verification, component
 
 Relation types:
   motivates, derives, validates, contradicts, implements,
@@ -90,7 +90,7 @@ class ClaimChain:
         Returns:
             The created Atom dict with assigned id.
         """
-        assert type in ("fact", "method", "theorem", "verification"), f"Invalid atom type: {type}"
+        assert type in ("fact", "method", "theorem", "verification", "component"), f"Invalid atom type: {type}"
         assert evidence_level in ("experiment", "literature", "llm_analysis")
 
         atom = {
@@ -135,8 +135,17 @@ class ClaimChain:
         valid_types = (
            "motivates", "derives", "validates", "contradicts", "implements",
             "compares_to", "causes", "boundary_of", "specializes",
+            "depends_on", "baseline_for",
         )
         assert type in valid_types, f"Invalid relation type: {type}"
+
+        # Dedup: skip if identical (source, target, type) already exists
+        existing = self.get_relations()
+        for r in existing:
+            if (str(r.get("source_id")) == str(source_id)
+                and str(r.get("target_id")) == str(target_id)
+                and r.get("type") == type):
+                return r  # already exists, return existing
 
         relation = {
             "id": self._next_rel_id,
@@ -159,9 +168,9 @@ class ClaimChain:
         type: str | None = None,
         tags: list[str] | None = None,
         status: str = "active",
-        limit: int = 100,
+        limit: int = 0,
     ) -> list[dict]:
-        """Query atoms with optional filters."""
+        """Query atoms with optional filters. limit=0 means no limit."""
         results = []
         if not self.atoms_path.exists():
             return results
@@ -185,7 +194,7 @@ class ClaimChain:
                     if not all(t in atom_tags for t in tags):
                         continue
                 results.append(atom)
-                if len(results) >= limit:
+                if limit > 0 and len(results) >= limit:
                     break
 
         return results
@@ -195,7 +204,7 @@ class ClaimChain:
         source_id: int | None = None,
         target_id: int | None = None,
         type: str | None = None,
-        limit: int = 100,
+        limit: int = 0,
     ) -> list[dict]:
         """Query relations with optional filters."""
         results = []
@@ -219,7 +228,7 @@ class ClaimChain:
                 if type and rel.get("type") != type:
                     continue
                 results.append(rel)
-                if len(results) >= limit:
+                if limit > 0 and len(results) >= limit:
                     break
 
         return results
@@ -345,7 +354,7 @@ class ClaimChain:
                 all_tags.add(tag)
 
         # Missing atom types (common research pipeline types)
-        all_known_types = {"fact", "method", "theorem", "verification", "hypothesis", "observation"}
+        all_known_types = {"fact", "method", "theorem", "verification", "hypothesis", "observation", "component"}
         missing_types = sorted(all_known_types - set(type_counts.keys()))
 
         # Missing relation types
@@ -378,7 +387,7 @@ class ClaimChain:
 
         for atom in atoms:
             label = atom["title"].replace('"', '\\"')
-            color = {"fact": "lightblue", "method": "lightgreen", "theorem": "lightyellow", "verification": "lightsalmon"}
+            color = {"fact": "lightblue", "method": "lightgreen", "theorem": "lightyellow", "verification": "lightsalmon", "component": "lightcyan"}
             c = color.get(atom["type"], "white")
             lines.append(f'  a{atom["id"]} [label="{label}" style=filled fillcolor={c}];')
 

@@ -1,0 +1,68 @@
+<h2>Layer 2: SDK — Design Spec</h2>
+<p class="subtitle">底层驱动 · 工具集 · 不包含业务逻辑</p>
+
+<div class="section">
+  <h3>职责定位</h3>
+  <p>SDK层提供<strong>工具和基础设施</strong>，不包含管线业务逻辑。所有模块都是"被调用"的工具，不主动编排流程。</p>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">SDK 子模块</div>
+    <div class="mockup-body">
+      <pre style="font-size: 0.8rem; text-align: left;">
+sdk/
+├── server.py          MCP Server (713L)
+├── dashboard/
+│   ├── monitor.py     HTTP+SSE+步骤执行 (4150L)
+│   └── frontend.py    HTML (932L)
+├── search/
+│   └── web_search.py  DuckDuckGo/Tavily
+├── literature/
+│   ├── ingest.py      PDF→Markdown
+│   └── mineru.py      MinerU管道
+├── memory/
+│   ├── memory.py      进化记忆 (684L)
+│   └── evo_auto_evolve.py (1668L)
+├── status/
+│   └── fitness.py     跨loop性能监控
+├── mcp/
+│   ├── client.py
+│   └── registry.py
+└── tools/
+    ├── execute.py
+    ├── search.py
+    ├── skill_manager.py
+    └── think.py
+      </pre>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">关键问题</div>
+    <div class="mockup-body">
+      <ol style="text-align: left; font-size: 0.85rem;">
+        <li><strong>dashboard.py(4150L)</strong> — 用户确认整体保留不分拆。HTTP+SSE+步骤执行耦合在一起，但作为监控系统的完整单元。</li>
+        <li><strong>memory模块</strong> — 包含进化记忆+自动进化引擎。是否需要对外暴露统一API？</li>
+        <li><strong>status模块</strong> — fitness追踪跨loop性能变化。和memory的关系？合并还是独立？</li>
+        <li><strong>mcp+tools</strong> — 来自evoscientist_core。哪些是agent_factory真正需要的？</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>SDK vs 其他层的区分</h3>
+  <div class="pros-cons">
+    <div class="pros"><h4>SDK的职责</h4><ul>
+      <li>MCP Server通信</li>
+      <li>Dashboard监控显示</li>
+      <li>搜索/文献/记忆/状态工具</li>
+      <li>被L3/L4/L5调用，不主动编排</li>
+    </ul></div>
+    <div class="cons"><h4>SDK不做的</h4><ul>
+      <li>管线流程编排 → L3 PES Controller</li>
+      <li>Session生命周期 → L4 Session</li>
+      <li>Agent行为逻辑 → L5 Hyperagents</li>
+    </ul></div>
+  </div>
+</div>

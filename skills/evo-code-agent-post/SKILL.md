@@ -37,6 +37,36 @@ find <SESSION_DIR> -name "*.py" -exec python -m py_compile {} \; 2>&1
 find <SESSION_DIR> -type f -size 0
 ```
 
+## 步骤 2.5: CodeGraph 最终变更核验
+
+使用 CodeGraph MCP tools 生成实现代码的完整结构变更摘要：
+
+### 2.5.1 索引代码目录
+```
+cd <SESSION_DIR> && npx @colbymchenry/codegraph init -i
+```
+
+### 2.5.2 对每个 proposal algorithm 分析
+- `codegraph_files` — 确认所有 plan 中的文件存在
+- `codegraph_search <algo_name>` — 找到对应 class/function
+- `codegraph_impact <main_function>` — 分析变更影响范围
+- `codegraph_node <symbol>` — 获取签名和实现细节
+
+### 2.5.3 生成变更摘要
+```
+| 算法 | 新增 Class | 新增 Fn | 修改 Fn | 删除 | 新增依赖 |
+|------|----------|--------|--------|------|---------|
+| sac | 0 | 0 | 0 | 0 | 0 |
+| td3 | 0 | 0 | 0 | 0 | 0 |
+| cdr_critic | 2 | 3 | 1 | 0 | 5 |
+```
+
+### 2.5.4 与 implementation_plan 对比
+将变更摘要与 implementation_plan.md 的 deliverables 清单对比，确认每个计划中的文件都存在且有内容。
+
+### 2.5.5 写入 PIPELINE_STATE
+将 CodeGraph 变更摘要存入 `code_results.codegraph_diff`
+
 ## 步骤 3: AskUserQuestion 逐项确认交付
 
 向用户确认每个交付物：

@@ -1185,6 +1185,11 @@ class AgentManager:
                     "method_sketch": p.get("method_sketch", "")[:500],
                     "elo_rating": p.get("elo_rating", 1500),
                     "product_satisfaction": p.get("product_satisfaction", 0),
+                    "source_agent": p.get("source_agent", ""),
+                    "rubric_novelty": p.get("rubric_novelty", 0.5),
+                    "rubric_novelty_scored": p.get("rubric_novelty_scored", 5.0),
+                    "rnd_coarse": p.get("rnd_coarse", 0.5),
+                    "rnd_fine": p.get("rnd_fine", 0.5),
                     # Phase-specific dimension scores
                     **{d: p.get(d, 0) for d in dim_names},
                 }

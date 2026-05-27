@@ -1,0 +1,87 @@
+<h2>EvoScientist 重构: 当前 vs 目标架构</h2>
+<p class="subtitle">从双目录混乱 → 7层分离架构</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">当前: 双目录 + God Class</div>
+    <div class="mockup-body">
+      <pre style="font-size: 0.75rem; line-height: 1.4; text-align: left;">
+tools/ (42 .py, 16K LOC)
+├── pes_controller.py (3598L) ← God Class
+├── dashboard dependents...
+├── claim_chain.py
+├── codegraph_cc.py
+├── rnd_evaluator.py
+├── (ontology/grounding/query 写了没用)
+└── ... 38 more files
+
+agent-manager/
+├── dashboard.py (4150L) ← God Class
+├── manager.py (1475L)
+├── server.py (713L)
+├── evolution/ (11 files)
+└── evoscientist_core/ (30+ files)
+
+问题:
+• tools/ ↔ agent-manager/ 双向耦合
+• 常量重复 (AGENT_SDK_PHASES×2)
+• ontology写了但零调用
+• CC v1+v2 并存</pre>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">目标: 7层分离</div>
+    <div class="mockup-body">
+      <pre style="font-size: 0.75rem; line-height: 1.4; text-align: left;">
+L7 外置Session/ — AUTORESEARCH/sessions/
+
+L6 plugins/ — 应用插件
+  grounding/ ideation/ experimentation/
+  writing/ validation/ reporting/
+
+L5 hyperagents/ — 应用
+  personas/ meta/ evolution/
+  orchestrator/ middleware/
+
+L4 session/ — 线程管理
+  manager/ factory/ llm/ stream/
+
+L3 pes_controller/ — 操作系统
+  protocol/ controller/ elo/ rubric/
+
+L2 sdk/ — 底层驱动
+  server/ dashboard/ search/
+  literature/ memory/ status/
+
+L1 claim_chain/ — 文件系统
+  schemas/ ontology/ chain/ grounding/
+  query/ codegraph/ cell_grid/</pre>
+    </div>
+  </div>
+</div>
+
+<h3>关键设计问题</h3>
+
+<div class="options">
+  <div class="option" data-choice="layer-boundaries" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>各层职责边界</h3>
+      <p>每层定义清晰的职责、接口契约和 import 规则</p>
+    </div>
+  </div>
+  <div class="option" data-choice="spec-per-layer" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>逐层写 Spec</h3>
+      <p>从 L1 (Claim Chain) 开始，逐层向上，每层产出 spec → plan → impl</p>
+    </div>
+  </div>
+  <div class="option" data-choice="god-class-split" onclick="toggleSelect(this)">
+    <div class="letter">3</div>
+    <div class="content">
+      <h3>God Class 拆分策略</h3>
+      <p>pes_controller(3598L) 和 dashboard(4150L) 如何拆？拆到什么粒度？</p>
+    </div>
+  </div>
+</div>

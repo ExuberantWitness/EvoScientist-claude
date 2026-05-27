@@ -73,8 +73,9 @@ TRANSITIONS = {
 # W3.5 Ideate: same structure, personas focus on pseudocode
 # Shared chain for all persona-driven phases (W2.1/2.2/2.3, W3, W3.5)
 _PERSONA_CHAIN = [
-    "invoke_four_personas", "elo_tournament", "verify_products",
-    "evolution_memory", "write_sme", "write_claim_chain",
+    "invoke_four_personas", "evaluate_novelty", "elo_tournament",
+    "verify_products", "evolution_memory", "write_sme",
+    "write_claim_chain",
 ]
 
 CHAIN_STEPS = {
@@ -804,6 +805,30 @@ class PESController:
                 f"## 上游 SME Context(从前序阶段传递)\n{sme_context_text or '(无——这是第一个阶段)'}\n\n"
             )
 
+            # Inject experiment feedback from previous iterations
+            if state.get("iteration", 0) > 0:
+                exp_fb = _build_experiment_feedback(state, self.session_dir)
+                if exp_fb:
+                    persona_topic += f"## 上一轮实验结果与反馈\n{exp_fb}\n\n"
+
+            # Inject Claim Chain ideation context (structure-guided)
+            cc_ctx = _build_cc_ideation_context(state, self.session_dir, phase)
+            if cc_ctx:
+                persona_topic += f"## Claim Chain 引导 (Structure-Guided Ideation)\n{cc_ctx}\n\n"
+
+            # Inject regeneration feedback: tell personas what was missing last time
+            if state.get("needs_regeneration"):
+                last_verif = state.get("last_verification", {})
+                if last_verif:
+                    persona_topic += "## REGENERATION: 上次方案被拒绝的原因\n"
+                    persona_topic += f"拒绝原因: {last_verif.get('details', '不符合产物规格')}\n"
+                    failures = last_verif.get('failures_per_proposal', {})
+                    if failures:
+                        persona_topic += "各方案缺失项:\n"
+                        for title, reason in list(failures.items())[:4]:
+                            persona_topic += f"  - {title[:60]}: {reason}\n"
+                    persona_topic += "\n请严格对照产物规格重新生成。不要重复上次被拒绝的方案格式。\n\n"
+
             # Build phase-specific JSON output format that maps PRODUCT_SPECS to fields
             required_items = product_spec.get("required", [])
             if phase == PHASE_PLAN_1:
@@ -856,6 +881,18 @@ class PESController:
                 f"注意: method_sketch 必须包含产物规格中的所有必要项。\n"
             )
 
+            # W2.3-specific: inject few-shot example to prevent W3-format proposals
+            if phase == PHASE_PLAN_3:
+                persona_topic += (
+                    f"\n## W2.3 正确输出示例 (Few-Shot)\n"
+                    f"以下是W2.3阶段正确格式的示例。注意：这个阶段输出的是**检索策略**，不是算法方案！\n"
+                    f"不要描述修改什么组件、不要写损失函数、不要给伪代码。只输出检索策略。\n\n"
+                    f'{{"title": "Actor-Critic梯度方差与熵正则化方向文献检索策略",\n'
+                    f' "hypothesis": "从策略梯度方差降低和自适应熵正则化两个子主题切入，覆盖理论分析、方法改进和实验验证三类文献，可系统覆盖Actor-Critic改进的关键文献",\n'
+                    f' "method_sketch": "(1)检索词列表: [\\\\"actor critic policy gradient variance reduction\\\\", \\\\"adaptive entropy regularization reinforcement learning\\\\", \\\\"twin Q overestimation bias Hopper\\\\", \\\\"gradient clipping advantage estimation PPO\\\\", \\\\"state-dependent temperature SAC\\\\", \\\\"double Q target noise smooth\\\\"]; (2)每个检索词的搜索目标: actor critic policy gradient variance → 搜索降低策略梯度方差的理论和方法论文(如GAE、PPO-clip、Stein control variate); adaptive entropy regularization → 搜索自适应熵正则化的最新方法(如SAC with learned alpha、state-dependent entropy); twin Q overestimation → 搜索双Q网络和过估计偏差问题的论文(如Clipped Double Q、REDQ); gradient clipping advantage → 搜索PPO和advantage估计改进的论文; state-dependent temperature → 搜索状态依赖温度参数的SAC变体; double Q target noise → 搜索TD3目标平滑和目标噪声技术; (3)预期命中文献类型: ICML/NeurIPS/ICLR会议论文(理论和方法), JMLR/arXiv综述(系统性覆盖), GitHub开源实现(代码参考); (4)覆盖的子主题列表: [策略梯度估计, 优势函数设计, 熵自适应, 值函数正则化, 探索-利用平衡, 目标网络更新策略]",\n'
+                    f' "search_results_summary": "已知关键文献: SAC(Haarnoja 2018), TD3(Fujimoto 2018), PPO(Schulman 2017), GAE(Schulman 2016), REDQ(Chen 2021)"}}\n'
+                )
+
             return {
                 "done": False,
                 "phase": phase,
@@ -869,6 +906,22 @@ class PESController:
                 "instruction": (
                     f"[{phase}] 4 Persona 独立调用。每个 persona 独立完成: "
                     f"SME创造性思维 → {search_focus} → 产出方案。"
+                ),
+            }
+
+        elif step_name == "evaluate_novelty":
+            # RND coarse + LLM rubric fine evaluation
+            proposals = state.get("last_persona_proposals", [])
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "evaluate_novelty",
+                "proposals": proposals,
+                "rnd_kb_path": str(self.session_dir / "_index" / "rnd_kb.jsonl"),
+                "instruction": (
+                    f"[{phase}] RND 创新评价: BGE-M3 粗筛 → LLM 5维 rubric 精筛."
                 ),
             }
 
@@ -3380,6 +3433,143 @@ def _start_http_server(port: int = 8421):
     server = HTTPServer(("0.0.0.0", port), TransitionHandler)
     print(f"[PES HTTP] Listening on port {port} for Dashboard transitions")
     server.serve_forever()
+
+
+# ---------------------------------------------------------------------------
+# Experiment feedback builder (for persona prompts in subsequent iterations)
+# ---------------------------------------------------------------------------
+
+def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> str:
+    """Build Claim Chain context for structure-guided ideation.
+
+    Returns a CC subgraph summary for persona agents to anchor proposals.
+    """
+    try:
+        # Import here to avoid circular deps
+        from claim_chain import ClaimChain
+        from cc_query_interface import CCQueryInterface
+        from rnd_evaluator import RNDEvaluator
+
+        cc = ClaimChain(session_dir, base_dir=session_dir / "_index")
+        kb_path = session_dir / "_index" / "rnd_kb.jsonl"
+        rnd_eval = RNDEvaluator(kb_path=kb_path) if kb_path.exists() else None
+        if rnd_eval:
+            try:
+                rnd_eval.load()
+            except Exception:
+                rnd_eval = None
+
+        qif = CCQueryInterface(cc, rnd_evaluator=rnd_eval)
+
+        # Get related atoms for the research topic
+        topic = state.get("research_topic", "")
+        related = qif.query_related(topic, top_k=10)
+
+        # Get graph gaps
+        gaps = qif.query_gaps()
+
+        # Phase-specific CC guidance level
+        guidance_levels = {
+            "W2.1 Problem Analysis": "low",
+            "W2.2 Solution Directions": "medium",
+            "W2.3 Search Keywords": "medium",
+            "W3 Research": "high",
+            "W3.5 Ideate": "highest",
+        }
+        level = guidance_levels.get(phase, "medium")
+
+        lines = []
+        lines.append(f"CC 引导级别: {level}")
+        lines.append(f"CC 图谱规模: {gaps.get('total_atoms', 0)} atoms, {gaps.get('total_relations', 0)} relations")
+        lines.append(f"孤立 atoms (无关联): {gaps.get('orphan_count', 0)}")
+
+        if related.get("related_atoms"):
+            lines.append("\n### 与研究方向最相关的 CC Atoms (BGE-M3 检索)")
+            for i, a in enumerate(related["related_atoms"][:8]):
+                lines.append(
+                    f"{i+1}. [{a['type']}] {a['title'][:80]} "
+                    f"(tags: {', '.join(a.get('tags', [])[:3])})"
+                )
+
+        if level in ("high", "highest"):
+            lines.append("\n### 提案锚定要求")
+            lines.append("你的 method_sketch 必须明确标注:")
+            lines.append("- CC 锚点: 提案基于哪些已有 CC atom(s)?")
+            lines.append("- 新增 atoms: 提案引入了哪些新概念/方法/组件?")
+            lines.append("- 关系变更: 新增了哪些 relations (implements/motivates/depends_on 等)?")
+            lines.append("- 与已有知识的区分: 提案与最相似的已有 atom 的本质差异是什么?")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.warning(f"_build_cc_ideation_context failed: {e}")
+        return ""
+
+
+def _build_experiment_feedback(state: dict, session_dir: Path) -> str:
+    """Extract experiment results from state + events.jsonl for persona prompts."""
+    lines = []
+
+    # 1. From code_results
+    cr = state.get("code_results", {})
+    if isinstance(cr, dict) and cr:
+        best = cr.get("best_proposal", "")
+        ranking = cr.get("final_ranking", {})
+        sig = cr.get("cdr_vs_td3_significance", cr.get("significance", {}))
+        if best:
+            lines.append(f"- **最佳提案**: {best}")
+        if ranking and isinstance(ranking, dict):
+            lines.append("- **最终排名**:")
+            for algo, info in ranking.items():
+                if isinstance(info, dict):
+                    val = info.get('mean', info.get('score', info.get('rank', '?')))
+                    # Clean key: "1_sac" -> "sac", "2_cdr_critic" -> "cdr_critic"
+                    label = algo.split('_', 1)[-1] if '_' in algo else algo
+                    lines.append(f"  - {label}: {val}")
+        if sig and isinstance(sig, dict):
+            p_val = sig.get('p_bonferroni', sig.get('p_raw', sig.get('p_value', sig.get('p', '?'))))
+            lines.append(f"- **统计显著性**: p={p_val}")
+
+    # 2. From events.jsonl
+    events_path = session_dir / "_index" / "events.jsonl"
+    if events_path.exists():
+        algo_scores = {}
+        try:
+            with open(events_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    evt = json.loads(line)
+                    if evt.get("event_type") == "expt_completed":
+                        pl = evt.get("payload", {})
+                        if isinstance(pl, dict):
+                            algo_scores[pl.get("algo_id", "?")] = pl
+                    elif evt.get("event_type") == "algo_status_change":
+                        pl = evt.get("payload", {})
+                        if isinstance(pl, dict):
+                            oid = evt.get("object_id", "")
+                            if oid not in algo_scores:
+                                algo_scores[oid] = {}
+                            algo_scores[oid]["status"] = pl.get("new_status", "")
+            if algo_scores:
+                lines.append("\n### 已测试算法及结果")
+                lines.append("| 算法 | 分数 (mean±std) | 状态 |")
+                lines.append("|------|----------------|------|")
+                for name, info in sorted(algo_scores.items()):
+                    if isinstance(info, dict):
+                        mean = info.get("score_mean", "?")
+                        std = info.get("score_std", "?")
+                        status = info.get("status", "?")
+                        lines.append(f"| {name} | {mean}±{std} | {status} |")
+        except Exception:
+            pass
+
+    if not lines:
+        return ""
+
+    lines.insert(0, "### 关键发现")
+    return "\n".join(lines)
 
 
 def main():

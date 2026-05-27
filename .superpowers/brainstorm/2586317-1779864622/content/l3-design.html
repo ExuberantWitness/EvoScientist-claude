@@ -1,0 +1,48 @@
+<h2>Layer 3: PES Controller — Design Spec</h2>
+<p class="subtitle">操作系统 · 流程管控 · ELO评价 · 阶段状态机</p>
+
+<div class="section">
+  <h3>模块清单</h3>
+  <pre style="font-size: 0.8rem; text-align: left;">
+pes_controller/
+├── protocol.py          原子读写+管线协议 (337L)
+├── controller.py        状态机+步骤分发 (核心从3598L拆出)
+├── stages.py            阶段定义+Pydantic Schema (181L)
+├── bootstrap.py         管线初始化 (128L)
+├── pipeline_bridge.py   AgentManager↔Pipeline桥接 (260L)
+├── elo/
+│   ├── tournament.py    5维ELO pairwise (571L)
+│   └── neighborhood.py  RND邻域评价 (258L)
+├── rubric/
+│   ├── novelty.py       5维rubric新颖性 (274L)
+│   ├── scheduler.py     Rubric调度 (254L)
+│   └── format_verifier.py ← NEW
+└── watchdog.py          管线健康监控 (758L)
+  </pre>
+</div>
+
+<div class="section">
+  <h3>pes_controller.py 拆分策略（核心问题）</h3>
+  <div class="options">
+    <div class="option" data-choice="split-by-concern" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>按职责拆分</h3>
+        <p>状态机+步骤分发→L3 core。基线发现(_search_github)+代码计划(_generate_code_plan)+实验反馈(_build_experiment_feedback)→L6 plugins。</p>
+      </div>
+    </div>
+    <div class="option" data-choice="keep-whole" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>整体保留，只减不拆</h3>
+        <p>pes_controller.py整体保留在L3。只把_build_cc_ideation_context等独立辅助函数移出。不改变核心结构。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>ELO 评价体系</h3>
+  <p>5维: elo_novelty + validity + impact + reliability + product_satisfaction</p>
+  <p>+ rubric_novelty (RND BGE-M3) 作为第6个维度 (rubric_novelty_scored)</p>
+</div>

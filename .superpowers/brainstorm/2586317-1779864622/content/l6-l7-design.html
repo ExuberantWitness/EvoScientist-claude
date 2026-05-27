@@ -1,0 +1,74 @@
+<h2>Layer 6-7: Process Plugin + 外置Session</h2>
+<p class="subtitle">应用插件 + 临时数据存储</p>
+
+<div class="section">
+  <h3>L6: Process Plugin (应用插件)</h3>
+  <p>含 Python 工具模块 + 21个 Claude Code SKILL.md</p>
+
+  <table style="width:100%; font-size: 0.8rem; text-align: left;">
+    <tr><th>子目录</th><th>Python 工具</th><th>Skills (SKILL.md)</th></tr>
+    <tr>
+      <td>ideation/</td>
+      <td>structure_mapping, plan_templates, domain_presets</td>
+      <td>evo-planner, evo-ideation, evo-intake, idea-creator, brainstorming, writing-plans</td>
+    </tr>
+    <tr>
+      <td>experimentation/</td>
+      <td>recorder, agent_task, trainer_contract</td>
+      <td>evo-code, evo-run, evo-debug, run-experiment, monitor-experiment, experiment-plan</td>
+    </tr>
+    <tr>
+      <td>research/</td>
+      <td>—</td>
+      <td>evo-research, research-lit, arxiv, semantic-scholar, comm-lit-review</td>
+    </tr>
+    <tr>
+      <td>validation/</td>
+      <td>verify_atom, verify_plan, cleanup</td>
+      <td>evo-claim, evo-review, result-to-claim, novelty-check</td>
+    </tr>
+    <tr>
+      <td>writing/</td>
+      <td>research_wiki, markdown_parser</td>
+      <td>evo-write, paper-write, paper-plan, paper-compile, paper-figure</td>
+    </tr>
+    <tr>
+      <td>reporting/</td>
+      <td>event_log, vault_manager</td>
+      <td>evo-analyze, analyze-results, training-check</td>
+    </tr>
+    <tr>
+      <td>pipeline/</td>
+      <td>—</td>
+      <td>evo-pipeline, evo-boot, evo-iterate, evo-memory, evo-evolve</td>
+    </tr>
+    <tr>
+      <td>grounding/</td>
+      <td>literature_search (placeholder)</td>
+      <td>—</td>
+    </tr>
+  </table>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">L7: 外置 Session</div>
+  <div class="mockup-body">
+    <pre style="font-size: 0.8rem; text-align: left;">
+AUTORESEARCH/sessions/
+└── sess_xxx/
+    ├── PIPELINE_STATE.json     管线状态
+    ├── _index/                 CC数据 (atoms.jsonl + relations.jsonl)
+    ├── vault/                  基线代码
+    │   └── baselines/          SAC/TD3/PPO/DDPG/A2C
+    ├── artifacts/              实验产物
+    ├── iterations/             迭代记录
+    └── memory/                 进化记忆
+    </pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Skills 归并规则</h3>
+  <p>21个SKILL.md 按<strong>功能阶段</strong>分散到L6子目录。每个子目录的skill可以被对应阶段的Hyperagent调用。</p>
+  <p>superpowers的14个skill已在~/.claude/skills/全局安装，项目级不重复。</p>
+</div>

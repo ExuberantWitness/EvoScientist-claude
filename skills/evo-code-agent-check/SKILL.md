@@ -30,6 +30,33 @@ find <SESSION_DIR> -type f | sort
 - 部分完成 → 标记 [PARTIAL]
 - 未开始 → 标记 [TODO]
 
+## 步骤 2.5: CodeGraph 结构差异分析
+
+对每个已修改的算法文件，使用 CodeGraph MCP tools 检查代码结构变更是否与 proposal 一致：
+
+### 2.5.1 确保 CodeGraph 索引是最新的
+```
+npx @colbymchenry/codegraph init -i
+```
+
+### 2.5.2 对每个 modified 文件分析
+- 使用 `codegraph_node <function_name>` 获取修改后的函数签名
+- 使用 `codegraph_impact <modified_symbol>` 分析变更影响范围
+- 使用 `codegraph_callers <modified_symbol>` 检查上游依赖是否受影响
+
+### 2.5.3 与 refined_proposal 对比
+读取 `refined_proposals/<algo_name>.json` 中的 `core_method_body`:
+- proposal 说 **ADD** class X → `codegraph_search X` 确认 X 存在?
+- proposal 说 **MODIFY** fn Y → `codegraph_node Y` 签名是否匹配预期改动?
+- proposal 说 **REMOVE** module Z → `codegraph_files` 中 Z 是否已移除?
+
+### 2.5.4 检测三类偏差
+- **Missing**: proposal 要求的架构改动未在代码中体现
+- **Extra**: 新增了 proposal 未提及的 class/function (scope creep)
+- **Mismatch**: 改动存在但方向与 proposal 描述不一致
+
+将 CodeGraph 差异报告写入 `code_check_result.codegraph_diff`。
+
 ## 步骤 3: 检测偏离
 
 对比当前实现与 plan 的差异：

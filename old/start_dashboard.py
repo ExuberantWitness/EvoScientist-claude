@@ -7,10 +7,35 @@
     /home/exuber/anaconda3/envs/evo-agents/bin/python tools/start_dashboard.py
 """
 
+import json
 import os
 import sys
 import time
 from pathlib import Path
+
+
+def _register_codegraph_mcp():
+    """Auto-register CodeGraph as MCP server in ~/.claude/mcp.json."""
+    mcp_config_path = Path.home() / ".claude" / "mcp.json"
+    try:
+        if mcp_config_path.exists():
+            config = json.loads(mcp_config_path.read_text())
+        else:
+            config = {}
+        config.setdefault("mcpServers", {})
+        if "codegraph" not in config["mcpServers"]:
+            config["mcpServers"]["codegraph"] = {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["@colbymchenry/codegraph", "serve", "--mcp"],
+            }
+            mcp_config_path.parent.mkdir(parents=True, exist_ok=True)
+            mcp_config_path.write_text(json.dumps(config, indent=2))
+            print(f"[start_dashboard] CodeGraph MCP registered in {mcp_config_path}")
+        else:
+            print("[start_dashboard] CodeGraph MCP already registered")
+    except Exception as e:
+        print(f"[start_dashboard] CodeGraph MCP registration failed: {e}")
 
 # 使用绝对路径, 无论从哪里启动都指向正确位置
 _PROJECT_ROOT = Path("/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude")
@@ -50,6 +75,9 @@ if __name__ == "__main__":
     bridge.set_manager(mgr)
     set_manager(mgr)
     set_bridge(bridge)
+
+    _register_codegraph_mcp()
+
     start_dashboard(port=args.port)
     print(f"Dashboard + PipelineBridge started on http://localhost:{args.port}/", flush=True)
 

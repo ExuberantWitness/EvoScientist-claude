@@ -29,41 +29,127 @@ logger = logging.getLogger(__name__)
 
 ELO_DIMENSIONS: dict[str, dict] = {
     "W2.1 Problem Analysis": {
-        "dimensions": ["clarity", "reasonableness", "product_satisfaction"],
-        "clarity": "问题难点分析的清晰度——是否准确识别了核心瓶颈？表述是否具体而非笼统？",
-        "reasonableness": "难点分析的合理度——是否基于对算法的深入理解？分析是否有因果逻辑链？",
-        "product_satisfaction": "产物满足度——是否包含了该阶段要求的全部产物？每个产物的质量是否达标？",
+        "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
+        "elo_novelty": "科学创新性——是否具备相对于先前工作的非显而易见性？是否有合理的科学实用性？是否开辟专家认为值得探索的研究方向？",
+        "validity": "潜在有效性——问题-方法-执行-结论链条是否合理？方法是否适当？证据是否支撑主张？",
+        "impact": "潜在影响力——是否可能加速有意义的研究？成果是否可复用？是否有领域长期价值？",
+        "reliability": "潜在可靠性——行为是否一致稳定？对扰动是否鲁棒？是否能检测并恢复故障？",
+        "product_satisfaction": "产物规格满足度——方案是否完整覆盖了产物规格中所有必选项？每个必选项是否充分展开？",
         "scenario": "导师组会 — 问题讨论环节",
     },
     "W2.2 Solution Directions": {
-        "dimensions": ["reasonableness", "product_satisfaction"],
-        "reasonableness": "解决思路的合理性——方向是否针对识别的难点？是否有理论或实验依据？",
-        "product_satisfaction": "产物满足度——是否包含了该阶段要求的全部产物？每个产物的质量是否达标？",
+        "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
+        "elo_novelty": "科学创新性——方向是否具有非显而易见性？是否基于对难点的深入理解提出新路径？",
+        "validity": "潜在有效性——方向的论证链条是否合理？技术路径是否有理论或实验依据？",
+        "impact": "潜在影响力——该方向如果成功，是否可能显著提升Hopper-v4控制能力？",
+        "reliability": "潜在可靠性——该方向是否足够稳健，不会因实现细节差异而完全失效？",
+        "product_satisfaction": "产物规格满足度——方向描述是否完整覆盖了产物规格中的所有必选项？",
         "scenario": "导师组会 — 方向讨论环节",
     },
     "W2.3 Search Keywords": {
-        "dimensions": ["detail", "reasonableness", "product_satisfaction"],
-        "detail": "检索词的详细度——是否覆盖了方向的所有子主题？是否包含同义词和变体？",
-        "reasonableness": "检索词的合理性——是否能命中相关文献而非噪声？",
-        "product_satisfaction": "产物满足度——是否包含了该阶段要求的全部产物？每个产物的质量是否达标？",
+        "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
+        "elo_novelty": "科学创新性——检索策略是否覆盖了非显而易见的子主题和跨领域关联？",
+        "validity": "潜在有效性——检索词是否能命中相关文献而非噪声？覆盖是否全面？",
+        "impact": "潜在影响力——检索策略是否可能发现具有高影响力的关键文献？",
+        "reliability": "潜在可靠性——检索策略在不同数据库中是否一致有效？是否有鲁棒的同义词覆盖？",
+        "product_satisfaction": "产物规格满足度——是否完整提供了检索词列表、搜索目标、预期文献类型和子主题覆盖？",
         "scenario": "导师组会 — 搜索策略讨论环节",
     },
     "W3 Research": {
-        "dimensions": ["feasibility", "novelty", "relevance", "product_satisfaction"],
-        "feasibility": "方案可行性——在给定算力和时间内能否实现？依赖是否合理？",
-        "novelty": "方案创新性——是否与已有工作有明确区分？贡献点是否清晰？",
-        "relevance": "方案相关性——是否直接针对问题难点？是否基于文献依据？",
-        "product_satisfaction": "产物满足度——是否包含了该阶段要求的全部产物？每个产物的质量是否达标？",
+        "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
+        "elo_novelty": "科学创新性——方案是否具备相对于先前工作的非显而易见性？是否有合理的科学实用性？是否开辟专家认为值得探索的研究方向？",
+        "validity": "潜在有效性——方案是否有文献依据？方法是否适当？论证链条是否合理？",
+        "impact": "潜在影响力——方案如果成功，是否可能显著提升Hopper-v4控制能力？成果是否可复用？",
+        "reliability": "潜在可靠性——方案在算力/时间约束下是否可实现？对实现细节是否鲁棒？",
+        "product_satisfaction": "产物规格满足度——方案是否包含修改组件/文献依据/可行性估计/量化对比预期？",
         "scenario": "学术论文答辩 — 专家评审团",
     },
     "W3.5 Ideate": {
-        "dimensions": ["feasibility", "relevance", "product_satisfaction"],
-        "feasibility": "伪代码可实现性——是否能直接翻译为代码？架构改动是否清晰？计算开销是否可接受？",
-        "relevance": "方案与原始问题的一致性——是否偏离了问题难点和解决思路？",
-        "product_satisfaction": "产物满足度——是否包含了该阶段要求的全部产物？每个产物的质量是否达标？",
+        "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
+        "elo_novelty": "科学创新性——伪代码层面的实现是否体现了非显而易见的创新？",
+        "validity": "潜在有效性——伪代码是否能直接翻译为可运行代码？架构改动是否合理？",
+        "impact": "潜在影响力——该实现如果完成，是否可能对Hopper-v4控制产生显著影响？",
+        "reliability": "潜在可靠性——实现是否对超参数/环境变化鲁棒？计算开销是否可接受？",
+        "product_satisfaction": "产物规格满足度——是否包含伪代码/架构改动列表/损失函数签名/计算开销估计？",
         "scenario": "软件开发 — 专家评审团",
     },
 }
+
+
+# ── Structural pre-check: deterministic keyword validation per product spec ──
+# Maps Chinese/English required-item descriptions to detection regex patterns.
+# Each pattern list is OR'd — if NONE match, the item is deemed missing.
+_STRUCTURAL_PATTERNS: dict[str, list[str]] = {
+    # W2.1 Problem Analysis
+    "具体难点": [r"(难点|瓶颈|问题|bottleneck|limitation|challenge)"],
+    "因果分析": [r"(因果|causal|because|由于|导致|causes?)"],
+    "baseline为何无法解决": [r"(baseline|基线|无法解决|cannot|cannot solve|局限|limitation)"],
+    # W2.2 Solution Directions
+    "方向描述": [r"(方向|direction|approach|方案|proposal|解决)"],
+    "针对哪些难点": [r"(针对|address|target|关联|W2\\.1|难点)"],
+    "技术路径概要": [r"(技术路径|technical|method|方法|architecture|架构|pipeline)"],
+    "与baseline的区分点": [r"(区分|不同于|different|unlike|distinct|区别于|baseline)"],
+    # W2.3 Search Keywords
+    "检索词列表": [r"(检索词|search term|keyword|查询|query|搜索词)"],
+    "搜索目标": [r"(搜索目标|search (target|goal|objective)|搜什么|search for)"],
+    "预期命中": [r"(预期命中|expected|literature type|文献类型|paper type|conference|journal|预期找到)"],
+    "子主题列表": [r"(子主题|subtopic|sub-topic|覆盖|coverage|领域|domain)"],
+    # W3 Research
+    "修改哪些组件": [r"(修改|modif|组件|component|module|Critic|Actor|网络|network|损失|loss)"],
+    "文献依据": [r"(文献|literature|paper|引用|reference|citation|et al\\.|arXiv|ICML|NeurIPS)"],
+    "可行性估计": [r"(可行|feasib|计算开销|comput\w* cost|复杂度|complexity|实现|implement)"],
+    "量化对比预期": [r"(对比|compar\w*|baseline|基线|提升|improv|better|outperform|预期|expect)"],
+    # W3.5 Ideate
+    "伪代码": [r"(伪代码|pseudocode|python|def |class |```)"],
+    "架构改动列表": [r"(架构改动|architect\w* (change|modif)|ADD|MODIFY|REMOVE|增|删|改)"],
+    "损失函数签名": [r"(损失函数|loss function|def .*\\(.*\\)|fn_name|Tensor|损失.*签名)"],
+    "计算开销估计": [r"(计算开销|comput\w* cost|复杂度|complexity|overhead|FLOPs|参数|param)"],
+}
+
+
+def _structural_check(proposals: list[dict], product_spec: dict) -> list[str]:
+    """Deterministic structural check: verify required items exist in proposal text.
+
+    Returns list of failure descriptions. Empty list = all checks passed.
+    This catches format-level mismatches (e.g., W3 proposals submitted for W2.3 spec)
+    BEFORE the expensive LLM judge runs.
+    """
+    required = product_spec.get("required", [])
+    if not required:
+        return []
+
+    import re as _re_sc
+    failures = []
+    for item_desc in required:
+        patterns = None
+        for key, pats in _STRUCTURAL_PATTERNS.items():
+            if key in item_desc:
+                patterns = pats
+                break
+
+        if patterns is None:
+            continue
+
+        found = False
+        for p in proposals:
+            text = " ".join([
+                p.get("method_sketch", ""),
+                p.get("hypothesis", ""),
+                p.get("title", ""),
+            ])
+            for pat in patterns:
+                if _re_sc.search(pat, text, _re_sc.IGNORECASE):
+                    found = True
+                    break
+            if found:
+                break
+
+        if not found:
+            failures.append(
+                f"MISSING: '{item_desc}' — no proposal contains required patterns: {patterns[:3]}"
+            )
+
+    return failures
 
 
 class RegenerationVerdict(Enum):
@@ -266,6 +352,21 @@ class EloTournament:
                 "supplemented_text": None,
                 "failures_per_proposal": failures,
             }
+
+        # ── Structural pre-check: deterministic keyword/pattern validation ──
+        # Runs BEFORE LLM judge to catch format-level mismatches.
+        if product_spec:
+            struct_failures = _structural_check(ranked_proposals[:3], product_spec)
+            if struct_failures:
+                return {
+                    "verdict": "missing",
+                    "details": f"Structural check failed: {'; '.join(struct_failures[:5])}",
+                    "supplemented_text": None,
+                    "failures_per_proposal": {
+                        p.get("title", "?")[:60]: "Required items missing per structural check"
+                        for p in ranked_proposals[:3]
+                    },
+                }
 
         # Use LLM judge for deeper verification: check for missing items / format issues
         top3 = ranked_proposals[:3]
