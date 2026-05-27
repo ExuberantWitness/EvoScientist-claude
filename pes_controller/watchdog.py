@@ -656,7 +656,7 @@ class PipelineWatchdog:
         phase = state.get("phase", "")
         step_idx = state.get("sub_loop_step", 0)
 
-        from pes_controller import CHAIN_STEPS
+        from pes_controller.controller import CHAIN_STEPS
         steps = CHAIN_STEPS.get(phase, [])
         if steps and step_idx < len(steps):
             return steps[step_idx]

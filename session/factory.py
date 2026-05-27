@@ -48,10 +48,10 @@ def create_agent(
         _add_core_to_path(base_dir)
 
     # Lazy import after path is set up
-    from EvoScientist.config.settings import get_effective_config, apply_config_to_env
-    from EvoScientist.llm.models import get_chat_model
-    from EvoScientist.prompts import get_system_prompt
-    from EvoScientist.utils import load_subagents
+    from session.config.settings import get_effective_config, apply_config_to_env
+    from session.llm.models import get_chat_model
+    from application.prompts import get_system_prompt
+    from session.runtime_utils import load_subagents
     # SKILLS_DIR is defined in EvoScientist.py, not paths.py
     SKILLS_DIR = str(Path(base_dir) / "evoscientist_core" / "EvoScientist" / "skills")
 
@@ -69,26 +69,26 @@ def create_agent(
     # Build tool registry
     tools = []
     try:
-        from EvoScientist.tools import think_tool
+        from sdk.tools.think import think_tool
         tools.append(think_tool)
     except ImportError:
         pass
 
     if os.environ.get("TAVILY_API_KEY"):
         try:
-            from EvoScientist.tools import tavily_search
+            from sdk.tools.search import tavily_search
             tools.append(tavily_search)
         except ImportError:
             pass
 
     try:
-        from EvoScientist.tools import skill_manager
+        from sdk.tools.skill_manager import skill_manager
         tools.append(skill_manager)
     except ImportError:
         pass
 
     try:
-        from EvoScientist.tools import execute_tool
+        from sdk.tools.execute import execute_tool
         tools.append(execute_tool)
         logger.info("execute_tool registered for sub-agents")
     except ImportError:
@@ -197,7 +197,7 @@ def _build_prompt_refs():
     """Build prompt references for sub-agent loading."""
     try:
         import datetime
-        from EvoScientist.prompts import RESEARCHER_INSTRUCTIONS
+        from application.prompts import RESEARCHER_INSTRUCTIONS
         return {
             "RESEARCHER_INSTRUCTIONS": RESEARCHER_INSTRUCTIONS.format(
                 date=datetime.date.today().isoformat()
@@ -210,9 +210,9 @@ def _build_prompt_refs():
 def _inject_subagent_middleware(subagents, model):
     """Inject standard middleware into each sub-agent."""
     try:
-        from EvoScientist.middleware.context_editing import create_context_editing_middleware
-        from EvoScientist.middleware.tool_error_handler import ToolErrorHandlerMiddleware
-        from EvoScientist.middleware.context_overflow import ContextOverflowMapperMiddleware
+        from sdk.middleware.context_editing import create_context_editing_middleware
+        from sdk.middleware.tool_error_handler import ToolErrorHandlerMiddleware
+        from sdk.middleware.context_overflow import ContextOverflowMapperMiddleware
 
         for sub in subagents:
             existing = sub.get("middleware", [])
@@ -231,31 +231,31 @@ def _build_middleware(cfg, model, workspace_dir):
     middleware = []
 
     try:
-        from EvoScientist.middleware.context_editing import create_context_editing_middleware
+        from sdk.middleware.context_editing import create_context_editing_middleware
         middleware.append(create_context_editing_middleware(model))
     except ImportError:
         pass
 
     try:
-        from EvoScientist.middleware.context_overflow import ContextOverflowMapperMiddleware
+        from sdk.middleware.context_overflow import ContextOverflowMapperMiddleware
         middleware.append(ContextOverflowMapperMiddleware())
     except ImportError:
         pass
 
     try:
-        from EvoScientist.middleware.tool_error_handler import ToolErrorHandlerMiddleware
+        from sdk.middleware.tool_error_handler import ToolErrorHandlerMiddleware
         middleware.append(ToolErrorHandlerMiddleware())
     except ImportError:
         pass
 
     try:
-        from EvoScientist.middleware.tool_selector import create_tool_selector_middleware
+        from sdk.middleware.tool_selector import create_tool_selector_middleware
         middleware.extend(create_tool_selector_middleware())
     except ImportError:
         pass
 
     try:
-        from EvoScientist.middleware.memory import create_memory_middleware
+        from sdk.middleware.memory import create_memory_middleware
         memory_dir = str(Path(workspace_dir) / "memory")
         os.makedirs(memory_dir, exist_ok=True)
         middleware.append(create_memory_middleware(memory_dir, extraction_model=model))

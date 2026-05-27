@@ -25,11 +25,11 @@ TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from claim_chain import ClaimChain
-from cell_grid import CellGrid
-from rubric_scheduler import RubricScheduler
-from island_manager import IslandManager
-from fitness_tracker import FitnessTracker
+from claim_chain.chain import ClaimChain
+from claim_chain.cell_grid import CellGrid
+from pes_controller.rubric.scheduler import RubricScheduler
+from claim_chain.island_manager import IslandManager
+from claim_chain.cell_grid import FitnessTracker
 
 
 # ── Phase constants ──
@@ -329,7 +329,7 @@ def _get_domain_config(state: dict) -> dict:
         return dc
     # Fallback: try to load from domain_presets
     try:
-        from tools.domain_presets import get_domain_preset
+        from domain_presets import get_domain_preset
         domain_name = state.get("domain_name", "general")
         return get_domain_preset(domain_name)
     except ImportError:
@@ -625,7 +625,7 @@ class PESController:
     def _get_phase_dims(phase: str) -> list[str]:
         """Get ELO dimension names for a phase."""
         try:
-            from evo_agent_manager.evolution.elo import ELO_DIMENSIONS
+            from pes_controller.elo.tournament import ELO_DIMENSIONS
         except ImportError:
             return ["novelty", "feasibility", "relevance", "clarity"]
         dims = ELO_DIMENSIONS.get(phase, {})
@@ -1290,7 +1290,7 @@ class PESController:
             raw = atoms_path.read_text(encoding='utf-8')
             # Sanitize CC context to remove philosophical buzzwords before embedding in plan
             try:
-                from tools.plan_templates import sanitize_plan_text
+                from plan_templates import sanitize_plan_text
                 raw_display = sanitize_plan_text(raw[:3000])
             except ImportError:
                 raw_display = raw[:3000]
@@ -1554,7 +1554,7 @@ class PESController:
             refined_json = _find_refined_json(refined_dir, fname)
             if refined_json and refined_json.exists():
                 try:
-                    from tools.plan_templates import render_algo_section
+                    from plan_templates import render_algo_section
                     spec_lines = [render_algo_section(refined_json, filename=f"{fname}")]
                     specs.append("\n".join(spec_lines))
                     continue  # skip manual spec building
@@ -1655,7 +1655,7 @@ class PESController:
                 refined_json = _find_refined_json(refined_dir, algo_abbr, atom_id=atom_id_for_lookup)
                 if refined_json and refined_json.exists():
                     try:
-                        from tools.plan_templates import render_algo_section
+                        from plan_templates import render_algo_section
                         spec = render_algo_section(refined_json, filename=f"{algo_abbr}")
                         specs.append(spec)
                         continue  # skip to next proposal
@@ -1790,7 +1790,7 @@ session_folder: ""
 
         # Final sanitize: remove residual buzzwords from the full plan text
         try:
-            from tools.plan_templates import sanitize_plan_text
+            from plan_templates import sanitize_plan_text
             plan_content = sanitize_plan_text(plan_content)
         except ImportError:
             pass
@@ -2467,7 +2467,7 @@ session_folder: ""
         # SME: 跨域关系同构搜索 (Structure Mapping Engine)
         sme_mappings = []
         try:
-            from structure_mapping_engine import StructureMappingEngine
+            from plugins.ideation.structure_mapping import StructureMappingEngine
             sme = StructureMappingEngine()
             seed_concepts = []
             for p in primitives[:10]:
@@ -2581,7 +2581,7 @@ session_folder: ""
 
         # ── Source 1: SME cross-domain isomorphism search ──
         try:
-            from structure_mapping_engine import StructureMappingEngine
+            from plugins.ideation.structure_mapping import StructureMappingEngine
             sme = StructureMappingEngine()
             isos = sme.find_isomorphisms_across_library([topic[:60]], min_similarity=0.4)
             for iso in isos[:8]:
@@ -3385,7 +3385,7 @@ session_folder: ""
 # 工具函数 (不再作为 MCP Server 暴露)
 # ═══════════════════════════════════════════════════════════════════
 
-from pipeline_protocol import atomic_read, atomic_write, dashboard_write, dashboard_write_approval
+from pes_controller.protocol import atomic_read, atomic_write, dashboard_write, dashboard_write_approval
 
 _controller: PESController | None = None
 
@@ -3446,9 +3446,9 @@ def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> st
     """
     try:
         # Import here to avoid circular deps
-        from claim_chain import ClaimChain
-        from cc_query_interface import CCQueryInterface
-        from rnd_evaluator import RNDEvaluator
+        from claim_chain.chain import ClaimChain
+        from claim_chain.query import CCQueryInterface
+        from pes_controller.elo.neighborhood import RNDEvaluator
 
         cc = ClaimChain(session_dir, base_dir=session_dir / "_index")
         kb_path = session_dir / "_index" / "rnd_kb.jsonl"

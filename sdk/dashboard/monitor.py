@@ -16,14 +16,14 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 from sse_starlette.sse import EventSourceResponse
 
-from .frontend import DASHBOARD_HTML
+from sdk.dashboard.frontend import DASHBOARD_HTML
 
 # Dashboard 直驱 PESController + pipeline_protocol
 _TOOLS_DIR = str(Path(__file__).resolve().parent.parent.parent / "tools")
 if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, _TOOLS_DIR)
 
-from pipeline_protocol import (
+from pes_controller.protocol import (
     atomic_read, atomic_write, dashboard_write,
     dashboard_write_approval, dashboard_heartbeat_age,
     dashboard_get_heartbeat,
@@ -2433,7 +2433,7 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
 
     elif action == "verify_products":
         # Post-ELO product verification: call verify_and_judge_regeneration()
-        from evo_agent_manager.evolution.elo import EloTournament
+        from pes_controller.elo.tournament import EloTournament
 
         state = atomic_read(state_path)
         tourney = state.get("last_tournament_result", {})

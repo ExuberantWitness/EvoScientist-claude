@@ -10,11 +10,11 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from tools.event_log import EventLog, create_event_log
-    from tools.vault_manager import VaultManager
+    from plugins.reporting.event_log import EventLog, create_event_log
+    from plugins.reporting.vault_manager import VaultManager
 except ImportError:
-    from event_log import EventLog, create_event_log
-    from vault_manager import VaultManager
+    from plugins.reporting.event_log import EventLog, create_event_log
+    from plugins.reporting.vault_manager import VaultManager
 
 # 状态机转换表
 VALID_TRANSITIONS = {

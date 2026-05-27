@@ -62,7 +62,7 @@ def _fuzzy_match(quote: str, text: str, threshold: float = 0.85) -> bool:
 
 def _quick_check(atom_path: Path) -> tuple[bool, str]:
     """L1: Pydantic + AST + py_compile (~2s)."""
-    from schemas.atom import RefinedAtom
+    from claim_chain.schemas.atom import RefinedAtom
 
     # 1) Schema validation
     data = json.loads(atom_path.read_text(encoding="utf-8"))
@@ -102,7 +102,7 @@ def _quick_check(atom_path: Path) -> tuple[bool, str]:
 
 def _full_check(session_dir: Path, atom_path: Path) -> tuple[bool, str]:
     """L2: All 8 checks (~10s)."""
-    from schemas.atom import RefinedAtom
+    from claim_chain.schemas.atom import RefinedAtom
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -123,7 +123,7 @@ def _full_check(session_dir: Path, atom_path: Path) -> tuple[bool, str]:
 
     # --- 4) issubclass ---
     try:
-        from tools.trainer_contract import BaseAlgorithm
+        from plugins.experimentation.trainer_contract import BaseAlgorithm
 
         ns: dict = {}
         exec(code, ns)

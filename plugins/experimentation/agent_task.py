@@ -23,7 +23,7 @@ TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from pipeline_protocol import (
+from pes_controller.protocol import (
     atomic_read, atomic_write,
     agent_write_heartbeat, agent_write_approval_request,
     agent_wait_approval, agent_write_report,

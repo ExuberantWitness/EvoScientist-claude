@@ -203,7 +203,7 @@ class EventLog:
 
     def check_contradictions(self) -> list[dict]:
         """检测矛盾: 同一对节点同时有 validates 和 contradicts."""
-        from markdown_parser import _read_jsonl
+        from plugins.writing.markdown_parser import _read_jsonl
         relations = _read_jsonl(self.session_dir / "_index" / "relations.jsonl")
         pairs = defaultdict(set)
         contradictions = []

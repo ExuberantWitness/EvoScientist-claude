@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .event_bus import EventBus
-from .utils import generate_session_id, now_iso, truncate
+from session.event_bus import EventBus
+from session.utils import generate_session_id, now_iso, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -379,7 +379,7 @@ class AgentManager:
         """Rebuild agent for a recovered session if needed."""
         if session.agent is not None:
             return
-        from .agent_factory import create_agent
+        from session.factory import create_agent
         checkpointer = await self._get_checkpointer()
         session.agent = create_agent(
             workspace_dir=session.workspace_dir,
@@ -397,7 +397,7 @@ class AgentManager:
         provider: str | None = None,
     ) -> dict:
         """Create a new agent session."""
-        from .agent_factory import create_agent
+        from session.factory import create_agent
 
         session_id = generate_session_id()
         checkpointer = await self._get_checkpointer()
@@ -962,7 +962,7 @@ class AgentManager:
 
         # Add fitness stats if available
         try:
-            from .evolution.fitness import FitnessTracker
+            from sdk.status.fitness import FitnessTracker
             fitness = FitnessTracker(session.workspace_dir)
             result["fitness"] = fitness.get_stats()
         except Exception:
@@ -1134,7 +1134,7 @@ class AgentManager:
     async def _get_evolution_memory(self, session: AgentSession):
         """Lazy-init evolution memory for a session."""
         if session.evolution_memory is None:
-            from .evolution.memory import EvolutionMemory
+            from sdk.memory.memory import EvolutionMemory
             session.evolution_memory = EvolutionMemory(session.workspace_dir)
         return session.evolution_memory
 
@@ -1148,7 +1148,7 @@ class AgentManager:
         if not session:
             return {"error": f"Session {session_id} not found"}
 
-        from .evolution.elo import EloTournament
+        from pes_controller.elo.tournament import EloTournament
 
         # Hook: 发射 task_start
         self._hook.emit("task_start", session_id, {
@@ -1304,8 +1304,8 @@ class AgentManager:
     async def _run_agent_rich(self, session: AgentSession, message: str) -> str:
         """Run agent with full event streaming for dashboard."""
         try:
-            from EvoScientist.stream.events import stream_agent_events
-            from EvoScientist.stream.state import StreamState
+            from session.stream.events import stream_agent_events
+            from session.stream.state import StreamState
         except ImportError:
             raise RuntimeError("Rich streaming imports not available")
 
@@ -1435,8 +1435,8 @@ class AgentManager:
         (Tavily rate limits, search errors, etc.) that produce empty outputs.
         """
         try:
-            from EvoScientist.config.settings import get_effective_config, apply_config_to_env
-            from EvoScientist.llm.models import get_chat_model
+            from session.config.settings import get_effective_config, apply_config_to_env
+            from session.llm.models import get_chat_model
             from langchain_core.messages import HumanMessage, SystemMessage
 
             cfg = get_effective_config()

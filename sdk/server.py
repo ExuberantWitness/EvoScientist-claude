@@ -21,7 +21,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from .manager import AgentManager
+from session.manager import AgentManager
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +485,7 @@ async def handle_tool(name: str, arguments: dict) -> str:
         if not session:
             result = {"error": f"Session {arguments['session_id']} not found"}
         else:
-            from .evolution.fitness import FitnessTracker
+            from sdk.status.fitness import FitnessTracker
             fitness = FitnessTracker(session.workspace_dir)
             result = {
                 "stats": fitness.get_stats(),
@@ -496,7 +496,7 @@ async def handle_tool(name: str, arguments: dict) -> str:
         if not session:
             result = {"error": f"Session {arguments['session_id']} not found"}
         else:
-            from .evolution.strategy import StrategyManager
+            from application.evolution.strategy import StrategyManager
             sm = StrategyManager(session.workspace_dir)
             filename = arguments.get("filename", "distillation_strategy.md")
             content = sm.load_strategy(filename)
@@ -512,7 +512,7 @@ async def handle_tool(name: str, arguments: dict) -> str:
         if not session:
             result = {"error": f"Session {arguments['session_id']} not found"}
         else:
-            from .evolution.strategy import StrategyManager
+            from application.evolution.strategy import StrategyManager
             sm = StrategyManager(session.workspace_dir)
             filename = arguments.get("filename", "distillation_strategy.md")
             archive_path = sm.apply_patch(
@@ -530,7 +530,7 @@ async def handle_tool(name: str, arguments: dict) -> str:
         if not session:
             result = {"error": f"Session {arguments['session_id']} not found"}
         else:
-            from .evolution.strategy import StrategyManager
+            from application.evolution.strategy import StrategyManager
             sm = StrategyManager(session.workspace_dir)
             success = sm.rollback(
                 version=arguments.get("version"),
@@ -542,11 +542,11 @@ async def handle_tool(name: str, arguments: dict) -> str:
         if not session:
             result = {"error": f"Session {arguments['session_id']} not found"}
         else:
-            from .evolution.fitness import FitnessTracker
-            from .evolution.meta_agent import MetaAgent
-            from .evolution.strategy import StrategyManager
-            from .evolution.trigger import MetaCognitionTrigger
-            from .evolution.validator import EvolutionValidator
+            from sdk.status.fitness import FitnessTracker
+            from application.meta.meta_agent import MetaAgent
+            from application.evolution.strategy import StrategyManager
+            from application.evolution.trigger import MetaCognitionTrigger
+            from application.evolution.validator import EvolutionValidator
 
             fitness = FitnessTracker(session.workspace_dir)
             scores = fitness.get_recent_scores(n=10)
