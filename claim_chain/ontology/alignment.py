@@ -302,7 +302,19 @@ class OntologyGatekeeper:
             List of existing atoms that are near-duplicates
         """
         if embeddings is None:
-            return []
+            # Compute BGE-M3 embeddings on-demand
+            try:
+                from pes_controller.elo.neighborhood import RNDEvaluator
+                rnd = RNDEvaluator()
+                texts = [json.dumps(new_atom, ensure_ascii=False)] + [
+                    json.dumps(a, ensure_ascii=False) for a in existing_atoms
+                ]
+                embs = rnd._encode(texts)
+                embeddings = {str(new_atom.get("title", "")): embs[0]}
+                for i, a in enumerate(existing_atoms):
+                    embeddings[str(a.get("title", ""))] = embs[i + 1]
+            except Exception:
+                return []  # BGE-M3 not available, skip dedup
 
         new_id = str(new_atom.get("id", new_atom.get("title", "")))
         new_emb = embeddings.get(new_id)

@@ -32,7 +32,7 @@ class ClaimChainAPI:
         # Step 3: BGE-M3 dedup (check new atoms against existing CC)
         dedup_count = 0
         existing = self.chain.all_nodes()
-        existing_dicts = [{"title": n.name, "content": n.content or "{}"} for n in existing]
+        existing_dicts = [n.to_dict() for n in existing]
         for atom in all_atoms:
             dupes = gatekeeper.find_duplicates(atom, existing_dicts, threshold=0.85)
             if dupes:
