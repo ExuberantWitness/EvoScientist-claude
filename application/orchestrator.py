@@ -27,7 +27,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 from session import paths as _paths_mod
 from session.config.settings import apply_config_to_env, get_effective_config
-from .paths import set_active_workspace, set_workspace_root
+from session.paths import set_active_workspace, set_workspace_root
 from .prompts import RESEARCHER_INSTRUCTIONS, get_system_prompt
 
 # Suppress noisy warnings from deepagents skill loader (non-string frontmatter fields, etc.)
