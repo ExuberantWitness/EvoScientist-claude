@@ -25,8 +25,8 @@ from pathlib import Path
 
 from langchain.agents.middleware import AgentMiddleware
 
-from . import paths as _paths_mod
-from .config import apply_config_to_env, get_effective_config
+from session import paths as _paths_mod
+from session.config.settings import apply_config_to_env, get_effective_config
 from .paths import set_active_workspace, set_workspace_root
 from .prompts import RESEARCHER_INSTRUCTIONS, get_system_prompt
 
