@@ -349,7 +349,7 @@ class ClaimChainV2:
         node = Node(
             id=str(node_id),
             title=title,
-            type=type if type in ("method", "bottleneck", "paper") else "method",
+            type=type if type in ("method", "fact", "component", "hypothesis", "experiment", "bottleneck", "paper") else "method",
             summary=content[:500] if content else "",
             addresses=metadata.get("addresses", []) if metadata else [],
             created_at=datetime.now(timezone.utc),
