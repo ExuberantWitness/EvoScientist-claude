@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """PESController: 单一状态机 + 五步渐进式发现管线 + MCP Server。
 
 MCP Tools (7):
@@ -432,7 +434,7 @@ class PESController:
         self.index_dir = self.session_dir / "_index"
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.session_dir / "PIPELINE_STATE.json"
-        self.cc = ClaimChain(self.session_dir, base_dir=self.index_dir)
+        self.cc = ClaimChain(self.index_dir / 'cc.db')
         self.grid = CellGrid(self.session_dir / "evolve_archive")
         self.rubric = RubricScheduler(self.cc)
         self.islands = IslandManager(self.session_dir / "evolve_archive")
@@ -494,10 +496,7 @@ class PESController:
         # Claim Chain — create empty JSONL files
         self.cc.get_graph_summary()
         # touch empty files if they don't exist
-        if not self.cc.atoms_path.exists():
-            self.cc.atoms_path.write_text("", encoding="utf-8")
-        if not self.cc.relations_path.exists():
-            self.cc.relations_path.write_text("", encoding="utf-8")
+        # DB auto-created by SQLite, no need to touch files
 
         # Cell Grid: Part1(内置) + Part2(用户定义)
         dims = part2_dimensions or []
@@ -3450,7 +3449,7 @@ def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> st
         from claim_chain.query import CCQueryInterface
         from pes_controller.elo.neighborhood import RNDEvaluator
 
-        cc = ClaimChain(session_dir, base_dir=session_dir / "_index")
+        cc = ClaimChain(session_dir / "_index" / "cc.db")
         kb_path = session_dir / "_index" / "rnd_kb.jsonl"
         rnd_eval = RNDEvaluator(kb_path=kb_path) if kb_path.exists() else None
         if rnd_eval:
@@ -3502,7 +3501,7 @@ def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> st
         return "\n".join(lines)
 
     except Exception as e:
-        logger.warning(f"_build_cc_ideation_context failed: {e}")
+        import logging; logging.warning(f"_build_cc_ideation_context failed: {e}")
         return ""
 
 

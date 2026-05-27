@@ -414,6 +414,50 @@ class ClaimChainV2:
         return {"total_nodes": nodes, "total_edges": edges}
 
 
+
+    # ── Compatibility with old ClaimChain API ──
+    
+    @property
+    def atoms_path(self):
+        """Compatibility: old code expects this path attribute"""
+        return self.db_path.parent / "atoms.jsonl"
+    
+    @property
+    def relations_path(self):
+        """Compatibility: old code expects this path attribute"""
+        return self.db_path.parent / "relations.jsonl"
+    
+    def get_atoms(self, limit: int = 0, type: str | None = None, tags: list[str] | None = None):
+        """Compatibility wrapper for all_nodes()"""
+        nodes = self.all_nodes()
+        result = []
+        for n in nodes:
+            d = {"id": n.id, "type": n.type.value if hasattr(n.type, 'value') else str(n.type),
+                 "title": n.name, "content": n.content or "{}", "tags": n.tags or []}
+            result.append(d)
+        return result[:limit] if limit > 0 else result
+    
+    def get_relations(self, limit: int = 0, source_id: str | None = None, 
+                      target_id: str | None = None, type: str | None = None):
+        """Compatibility wrapper for all_edges()"""
+        edges = self.all_edges()
+        result = []
+        for e in edges:
+            d = {"source_id": e.source_id, "target_id": e.target_id, 
+                 "type": e.type.value if hasattr(e.type, 'value') else str(e.type),
+                 "evidence": e.evidence or "{}", "id": e.id}
+            result.append(d)
+        return result[:limit] if limit > 0 else result
+    
+    def get_atom(self, atom_id):
+        """Compatibility: lookup atom by id"""
+        nodes = self.all_nodes()
+        for n in nodes:
+            if str(n.id) == str(atom_id):
+                return {"id": n.id, "type": str(n.type), "title": n.name, 
+                        "content": n.content or "{}", "tags": n.tags or []}
+        return None
+
 class ValidationError(Exception):
     """Raised when post-validation fails at commit time."""
     def __init__(self, errors: list[str]):
