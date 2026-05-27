@@ -622,6 +622,24 @@ class AgentManager:
                     "data": {"name": "tavily_search", "content": f"{len(results)} papers found"}
                 })
                 logger.info(f"invoke_agent({agent_name}): Tavily returned {len(results)} results")
+
+                # ── Sync search results to Claim Chain ──
+                try:
+                    from claim_chain.api import ClaimChainAPI
+                    ws = Path(session.workspace_dir) if hasattr(session, 'workspace_dir') else Path(session.workspace_dir)
+                    api = ClaimChainAPI(ws)
+                    for r in results[:5]:
+                        title = r.get('title', '')[:200]
+                        content = r.get('content', '')[:1000]
+                        if title and content:
+                            api.ingest_text(
+                                f"{title}\n{content}",
+                                source="web_search",
+                                tags=["literature", "web_search", agent_name]
+                            )
+                    logger.info(f"invoke_agent({agent_name}): Synced {min(len(results),5)} search results to CC")
+                except Exception as e:
+                    logger.warning(f"invoke_agent({agent_name}): CC sync failed: {e}")
         except Exception as e:
             logger.warning(f"invoke_agent({agent_name}): Tavily search failed: {e}")
 
