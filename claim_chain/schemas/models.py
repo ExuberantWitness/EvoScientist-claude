@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 try:
-    from tools.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL
+    from claim_chain.schemas.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL
 except ImportError:
-    from taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL
+    from claim_chain.schemas.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL
 
 
 # ── ρ(e) Evidence Record (§3.3) ──

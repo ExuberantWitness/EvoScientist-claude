@@ -12,9 +12,9 @@ Rules:
 
 import sqlite3
 try:
-    from tools.taxonomy import STRONG_CAUSAL
+    from claim_chain.schemas.taxonomy import STRONG_CAUSAL
 except ImportError:
-    from taxonomy import STRONG_CAUSAL
+    from claim_chain.schemas.taxonomy import STRONG_CAUSAL
 
 
 def run_post_validation(conn: sqlite3.Connection) -> list[str]:

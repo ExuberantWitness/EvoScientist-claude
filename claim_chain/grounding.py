@@ -39,8 +39,8 @@ class CCGrounding:
 
         Returns: {algo_name: atom_count}
         """
-        from codegraph_cc import extract_structure, structure_to_cc_atoms, structure_summary
-        from ontology_schema_alignment import get_gatekeeper
+        from claim_chain.codegraph import extract_structure, structure_to_cc_atoms, structure_summary
+        from claim_chain.ontology.alignment import get_gatekeeper
 
         gatekeeper = get_gatekeeper()
 
@@ -134,7 +134,7 @@ class CCGrounding:
 
         Creates verification atoms + validates/contradicts relations.
         """
-        from ontology_schema_alignment import get_gatekeeper
+        from claim_chain.ontology.alignment import get_gatekeeper
         gatekeeper = get_gatekeeper()
 
         created_atoms = 0
@@ -183,7 +183,7 @@ class CCGrounding:
 
         Returns maintenance report.
         """
-        from ontology_schema_alignment import get_gatekeeper
+        from claim_chain.ontology.alignment import get_gatekeeper
         gatekeeper = get_gatekeeper()
 
         atoms = self._cc.get_atoms(limit=500)
@@ -319,7 +319,7 @@ Respond with ONLY a JSON object:
 
     def _write_extracted_to_cc(self, extracted: dict, paper: dict) -> tuple[int, int]:
         """Write extracted entities + relations to CC through gatekeeper."""
-        from ontology_schema_alignment import get_gatekeeper
+        from claim_chain.ontology.alignment import get_gatekeeper
         gatekeeper = get_gatekeeper()
 
         e_count = 0

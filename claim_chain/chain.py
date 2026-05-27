@@ -21,11 +21,11 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from tools.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL, BOTTLENECK_CATEGORIES
-    from tools.models import Rho, Edge, Node
+    from claim_chain.schemas.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL, BOTTLENECK_CATEGORIES
+    from claim_chain.schemas.models import Rho, Edge, Node
 except ImportError:
-    from taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL, BOTTLENECK_CATEGORIES
-    from models import Rho, Edge, Node
+    from claim_chain.schemas.taxonomy import EdgeType, BottleneckCategory, STRONG_CAUSAL, BOTTLENECK_CATEGORIES
+    from claim_chain.schemas.models import Rho, Edge, Node
 
 
 SCHEMA = """
@@ -295,9 +295,9 @@ class ClaimChainV2:
     def commit(self):
         """Run post-validation, then commit. Rolls back on failure."""
         try:
-            from tools.validation import run_post_validation
+            from claim_chain.schemas.validation import run_post_validation
         except ImportError:
-            from validation import run_post_validation
+            from claim_chain.schemas.validation import run_post_validation
         errors = run_post_validation(self.conn)
         if errors:
             self.conn.rollback()
@@ -371,9 +371,9 @@ class ClaimChainV2:
                      evidence: str = "", metadata: dict | None = None) -> dict:
         """Backward-compatible API mirroring claim_chain.py add_relation()."""
         try:
-            from tools.taxonomy import EdgeType as ET
+            from claim_chain.schemas.taxonomy import EdgeType as ET
         except ImportError:
-            from taxonomy import EdgeType as ET
+            from claim_chain.schemas.taxonomy import EdgeType as ET
 
         try:
             edge_type = ET(type)

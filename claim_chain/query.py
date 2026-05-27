@@ -176,7 +176,7 @@ class CCQueryInterface:
                 })
 
         # Missing relation types: types that exist in schema but not in graph
-        from ontology_schema_alignment import LINK_TYPE_RULES
+        from claim_chain.ontology.alignment import LINK_TYPE_RULES
         used_types = set(r.get("type", "") for r in relations)
         missing_types = set(LINK_TYPE_RULES.keys()) - used_types
 

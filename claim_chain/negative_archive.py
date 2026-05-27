@@ -8,7 +8,7 @@ Separate from cell_grid.py anomaly detection — those are runtime
 experiment anomalies, these are schema-level failures.
 
 Usage:
-  from tools.negative_archive import NegativeArchive
+  from claim_chain.negative_archive import NegativeArchive
   na = NegativeArchive(session_dir)
   na.record_failure(atom_id, attempt, error_class, stderr_snippet, model)
   na.get_recent_failures(n=5)  # for anti-pattern few-shot
@@ -131,7 +131,7 @@ def atom_verify_gate(atom_json_path: Path, session_dir: Path | None = None) -> t
     Called before fitness evaluation. Returns (pass, reason).
 
     Usage in fitness function:
-      from tools.negative_archive import atom_verify_gate
+      from claim_chain.negative_archive import atom_verify_gate
       ok, reason = atom_verify_gate(atom_path)
       if not ok:
           return -float('inf')
