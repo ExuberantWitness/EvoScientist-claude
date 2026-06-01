@@ -113,6 +113,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <a id="navGraph" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Claim Chain</a>
     <a id="navGrid" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Evolve Grid</a>
     <a id="navPipeline" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Pipeline</a>
+    <a id="navReplay" class="btn" href="#" target="_blank" style="text-decoration:none;display:none">Replay</a>
     <span id="statusBadge" style="padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface)">idle</span>
     <button class="btn" id="btnRestart" onclick="restartDashboard()" title="Restart dashboard service">Restart</button>
   </div>
@@ -362,13 +363,14 @@ async function loadSessions() {
 }
 
 function updateNavLinks(sid) {
-  const g = $('#navGraph'), gr = $('#navGrid'), p = $('#navPipeline');
+  const g = $('#navGraph'), gr = $('#navGrid'), p = $('#navPipeline'), r = $('#navReplay');
   if (sid) {
     g.href = '/sessions/' + sid + '/graph'; g.style.display = '';
     gr.href = '/sessions/' + sid + '/grid'; gr.style.display = '';
     p.href = '/sessions/' + sid + '/pipeline'; p.style.display = '';
+    r.href = '/sessions/' + sid + '/replay'; r.style.display = '';
   } else {
-    g.style.display = 'none'; gr.style.display = 'none'; p.style.display = 'none';
+    g.style.display = 'none'; gr.style.display = 'none'; p.style.display = 'none'; r.style.display = 'none';
   }
 }
 

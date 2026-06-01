@@ -83,12 +83,14 @@ def _build_context(workspace: Path, task: str) -> str:
     if plan_path.exists():
         parts.append(f"## 实验计划\n{plan_path.read_text(encoding='utf-8')[:5000]}")
 
-    # Claim Chain
-    cc_dir = workspace / "claim_chain"
-    if cc_dir.exists():
-        atoms_path = cc_dir / "atoms.jsonl"
-        if atoms_path.exists():
-            parts.append(f"## Claim Chain 原子\n{atoms_path.read_text(encoding='utf-8')[:3000]}")
+    # Claim Chain (from cc.db — canonical SQL store)
+    from claim_chain.chain import ClaimChainV2
+    cc = ClaimChainV2(workspace / "_index" / "cc.db")
+    atoms = cc.get_atoms()
+    if atoms:
+        cc_lines = [json.dumps(a, ensure_ascii=False) for a in atoms[:50]]
+        parts.append(f"## Claim Chain 原子\n" + "\n".join(cc_lines)[:3000])
+    cc.close()
 
     # Research notes
     rn_path = workspace / "research_notes.md"

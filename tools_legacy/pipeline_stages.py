@@ -132,7 +132,7 @@ def stage2_seed(context: dict) -> dict:
     session_dir = Path(context["session_dir"])
     retriever = GoSRetriever(session_dir)
     exp_algos = [e.get("algo_id", "") for e in context["experiments"]]
-    keywords = ["rl", "actor-critic", "hopper"]  # from research topic
+    keywords = context.get("seed_keywords", ["rl", "actor-critic"])  # from research topic / domain config
     seeds = retriever.seed(exp_algos, keywords)
     ranked = retriever.traceback(seeds)
     hydrated = retriever.hydrate(ranked)

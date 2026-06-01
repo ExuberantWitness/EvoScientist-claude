@@ -28,28 +28,40 @@ class CCQueryInterface:
     def query_related(self, topic: str, top_k: int = 10) -> dict:
         """Find CC atoms most semantically related to a topic.
 
-        Returns JSON:
-          {related_atoms: [{id, type, title, content_preview, tags}],
-           summary: "N atoms found across types: ..."}
+        Uses pre-computed embeddings from SQL (cc.db nodes.embedding column).
+        Only encodes the topic once via BGE-M3. Falls back to keyword match
+        for atoms without embeddings.
         """
-        atoms = self._cc.get_atoms(limit=500)
-        if not atoms or not self._rnd:
-            return self._fallback_related(atoms, topic, top_k)
+        atoms = self._cc.get_atoms_with_embeddings()
+        if not atoms:
+            return self._fallback_related([], topic, top_k)
 
-        # BGE-M3 semantic search
-        topic_emb = self._rnd._encode([topic])[0]
+        # Separate atoms with and without pre-computed embeddings
+        embedded = [a for a in atoms if a.get("embedding")]
+        non_embedded = [a for a in atoms if not a.get("embedding")]
+
         scored = []
-        for a in atoms:
-            text = f"{a.get('title','')}: {a.get('content','')[:300]}"
-            try:
-                a_emb = self._rnd._encode([text])[0]
-                dist = float(1.0 - np.dot(
-                    topic_emb / (np.linalg.norm(topic_emb) + 1e-8),
-                    a_emb / (np.linalg.norm(a_emb) + 1e-8),
-                ))
-                scored.append((dist, a))
-            except Exception:
-                pass
+
+        if embedded and self._rnd:
+            # Encode topic once, then compute cosine distance against pre-computed embeddings
+            topic_emb = self._rnd._encode([topic])[0]
+            topic_norm = topic_emb / (np.linalg.norm(topic_emb) + 1e-8)
+
+            emb_matrix = np.array([a["embedding"] for a in embedded], dtype=np.float32)
+            emb_norm = emb_matrix / (np.linalg.norm(emb_matrix, axis=1, keepdims=True) + 1e-8)
+            sims = np.dot(emb_norm, topic_norm)
+            dists = 1.0 - sims
+
+            for i, a in enumerate(embedded):
+                scored.append((float(dists[i]), a))
+
+        # Keyword fallback for non-embedded atoms
+        keywords = set(topic.lower().split())
+        for a in non_embedded:
+            text = f"{a.get('title','')} {a.get('content','')}".lower()
+            kw_score = sum(1 for kw in keywords if kw in text)
+            if kw_score > 0:
+                scored.append((1.0 - kw_score * 0.1, a))
 
         scored.sort(key=lambda x: x[0])
         top = scored[:top_k]
@@ -78,10 +90,17 @@ class CCQueryInterface:
                 + ", ".join(f"{v} {k}" for k, v in type_counts.items())
             ),
             "topic": topic,
+            "embedding_status": {
+                "precomputed": len(embedded),
+                "keyword_fallback": len(non_embedded),
+            },
         }
 
     def query_neighbors(self, atom_id: int | str, depth: int = 1) -> dict:
         """Get the neighborhood subgraph around an atom.
+
+        Uses atom IDs (not titles) for relation matching. Relations store
+        source_id/target_id as Node IDs which correspond to atom["id"].
 
         Returns JSON:
           {center: {id, type, title},
@@ -94,29 +113,27 @@ class CCQueryInterface:
         atom_id_str = str(atom_id)
         center = None
         atom_map_by_id = {}
-        atom_map_by_title = {}
         for a in atoms:
             aid = str(a.get("id", ""))
             title = str(a.get("title", ""))
             atom_map_by_id[aid] = a
-            atom_map_by_title[title] = a
             if aid == atom_id_str or title == atom_id_str:
                 center = {"id": aid, "type": a.get("type", ""), "title": title}
 
         if center is None:
             return {"error": f"Atom not found: {atom_id}", "center": None, "neighbors": []}
 
-        center_title = center["title"]
+        center_id = center["id"]
 
-        # Find direct neighbors (relations use titles as source/target keys)
+        # Find direct neighbors using atom IDs (relations use Node IDs)
         neighbors = []
         for r in relations:
             src = str(r.get("source_id", ""))
             tgt = str(r.get("target_id", ""))
             rtype = r.get("type", "")
 
-            if src == center_title:
-                tgt_atom = atom_map_by_title.get(tgt)
+            if src == center_id:
+                tgt_atom = atom_map_by_id.get(tgt)
                 if tgt_atom:
                     neighbors.append({
                         "id": str(tgt_atom.get("id", "")),
@@ -125,8 +142,8 @@ class CCQueryInterface:
                         "relation_type": rtype,
                         "direction": "outgoing",
                     })
-            elif tgt == center_title:
-                src_atom = atom_map_by_title.get(src)
+            elif tgt == center_id:
+                src_atom = atom_map_by_id.get(src)
                 if src_atom:
                     neighbors.append({
                         "id": str(src_atom.get("id", "")),
@@ -144,8 +161,8 @@ class CCQueryInterface:
                 {"source": r.get("source_id"), "target": r.get("target_id"),
                  "type": r.get("type")}
                 for r in relations
-                if str(r.get("source_id")) == center_title
-                or str(r.get("target_id")) == center_title
+                if str(r.get("source_id")) == center_id
+                or str(r.get("target_id")) == center_id
             ],
         }
 

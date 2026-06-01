@@ -18,11 +18,6 @@ from sse_starlette.sse import EventSourceResponse
 
 from sdk.dashboard.frontend import DASHBOARD_HTML
 
-# Dashboard 直驱 PESController + pipeline_protocol
-_TOOLS_DIR = str(Path(__file__).resolve().parent.parent.parent / "tools")
-if _TOOLS_DIR not in sys.path:
-    sys.path.insert(0, _TOOLS_DIR)
-
 from pes_controller.protocol import (
     atomic_read, atomic_write, dashboard_write,
     dashboard_write_approval, dashboard_heartbeat_age,
@@ -70,7 +65,7 @@ _manager_ref = None
 _bridge_ref = None
 _watchdog_ref = None
 
-# Agent SDK 子进程的阶段 (W4 Code 改为 Plan-driven 模式，不再用 SDK)
+# Agent SDK 子进程的阶段 (W5 Code 改为 Plan-driven 模式，不再用 SDK)
 AGENT_SDK_PHASES = {PHASE_WRITE, PHASE_REVIEW}
 
 
@@ -126,10 +121,29 @@ async def homepage(request):
 
 async def list_sessions_api(request):
     mgr = _mgr()
-    if not mgr:
-        return JSONResponse({"error": "manager not initialized"})
-    mgr.refresh_sessions()
-    return JSONResponse(mgr.list_sessions())
+    if mgr:
+        mgr.refresh_sessions()
+        return JSONResponse(mgr.list_sessions())
+    # Fallback: scan sessions directory when AgentManager not initialized
+    sessions = []
+    sessions_base = Path('/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions')
+    if sessions_base.exists():
+        for sd in sorted(sessions_base.glob('sess_*'), key=lambda p: p.stat().st_mtime, reverse=True):
+            sp = sd / 'PIPELINE_STATE.json'
+            if not sp.exists():
+                continue
+            try:
+                state = json.loads(sp.read_text(encoding='utf-8'))
+                sessions.append({
+                    'session_id': sd.name,
+                    'workspace_dir': str(sd),
+                    'status': state.get('status', 'unknown'),
+                    'phase': state.get('phase', ''),
+                    'created_at': state.get('created_at', ''),
+                })
+            except Exception:
+                pass
+    return JSONResponse(sessions)
 
 
 async def session_detail_api(request):
@@ -208,8 +222,11 @@ async def claim_chain_api(request):
     session = mgr.sessions[sid]
     workspace = Path(session.workspace_dir) / "_index"
 
-    atoms = _read_jsonl(workspace / "atoms.jsonl")
-    relations = _read_jsonl(workspace / "relations.jsonl")
+    from claim_chain.chain import ClaimChainV2
+    cc = ClaimChainV2(workspace / "cc.db")
+    atoms = cc.get_atoms()
+    relations = cc.get_relations()
+    cc.close()
 
     # Build summary
     active_atoms = [a for a in atoms if a.get("status") == "active"]
@@ -619,6 +636,44 @@ async def evolve_grid_page(request):
     return HTMLResponse(_EVOLVE_GRID_PAGE_HTML)
 
 
+async def agent_replay_page(request):
+    """Serve self-contained Agent Session Replay page.
+
+    Reads agent conversation logs from _index/agents/ and generates
+    an interactive timeline with proposal cards, prompt inspection,
+    and per-agent navigation. Zero external dependencies.
+    """
+    session_id = request.path_params.get("session_id", "")
+    workspace_dir = request.query_params.get("workspace", "")
+    if not workspace_dir:
+        # Look up workspace from session registry
+        rpath = Path(
+            os.path.join(
+                os.path.dirname(__file__), "..", "..",
+                ".evo_session_registry.json"
+            )
+        )
+        if rpath.exists():
+            try:
+                registry = json.loads(rpath.read_text(encoding="utf-8"))
+                workspace_dir = registry.get(session_id, "")
+            except Exception:
+                pass
+
+    if not workspace_dir:
+        return HTMLResponse("<h1>Session not found</h1>", status_code=404)
+
+    try:
+        from session.replay import build_replay_html
+        html = build_replay_html(Path(workspace_dir))
+        return HTMLResponse(html)
+    except Exception as e:
+        return HTMLResponse(
+            f"<h1>Replay Error</h1><pre>{e}</pre>",
+            status_code=500,
+        )
+
+
 async def post_internal_event(request):
     """接收 PESController 推送的事件，转发到 EventBus SSE 流。"""
     try:
@@ -913,7 +968,7 @@ a:hover{color:var(--text)}
   </div>
 </div>
 
-<!-- W4 Code 用户操作指引 (generate_code_plan / wait_user_code 时显示) -->
+<!-- W5 代码实现 用户操作指引 (generate_code_plan / wait_user_code 时显示) -->
 <div class="steps-section" id="code-instruction" style="display:none"></div>
 
 <!-- 命令行输入区 -->
@@ -972,18 +1027,16 @@ a:hover{color:var(--text)}
 const sid = window.location.pathname.split('/')[2];
 document.getElementById('session-label').textContent = 'Session: ' + sid;
 
-const PHASES = ["W2.1 Problem Analysis","W2.2 Solution Directions","W2.3 Search Keywords","W3 Research","W3.5 Ideate","W4 Code","W5 Analyze","W6 Write","W7 Review","已终止"];
-const PHASE_LABELS = {"W2.1 Problem Analysis":"问题分析","W2.2 Solution Directions":"方案方向","W2.3 Search Keywords":"检索策略","W3 Research":"Research","W3.5 Ideate":"Ideate","W4 Code":"Code","W5 Analyze":"Analyze","W6 Write":"Write","W7 Review":"Review","已终止":"终止"};
+const PHASES = ["W2 问题分析","W3 方案方向","W4 具体方案生成","W5 代码实现","W6 结果分析","W7 论文写作","W8 审阅","已终止"];
+const PHASE_LABELS = {"W2 问题分析":"W2 问题分析","W3 方案方向":"W3 方案方向","W4 具体方案生成":"W4 具体方案生成","W5 代码实现":"W5 代码实现","W6 结果分析":"W6 结果分析","W7 论文写作":"W7 论文写作","W8 审阅":"W8 审阅","已终止":"终止"};
 const CHAIN_STEPS = {
-  "W2.1 Problem Analysis": ["4-Persona调用","ELO锦标赛","产物验证","Evolution Memory","写入SME","写入Claim Chain"],
-  "W2.2 Solution Directions": ["4-Persona调用","ELO锦标赛","产物验证","Evolution Memory","写入SME","写入Claim Chain"],
-  "W2.3 Search Keywords": ["4-Persona调用","ELO锦标赛","产物验证","Evolution Memory","写入SME","写入Claim Chain"],
-  "W3 Research":  ["4-Persona调用","ELO锦标赛","产物验证","Evolution Memory","写入SME","写入Claim Chain"],
-  "W3.5 Ideate":  ["4-Persona调用","ELO锦标赛","产物验证","Evolution Memory","写入SME","写入Claim Chain"],
-  "W4 Code":     ["STEP管线分析","写入Claim Chain","生成代码计划","等待用户实现"],
-  "W5 Analyze":  ["STEP管线分析","实验分析扫描","多Agent Judge","Evolution Memory","写入Claim Chain","Island分配"],
-  "W6 Write":    ["撰写论文"],
-  "W7 Review":   ["审阅论文"]
+  "W2 问题分析": ["set_style","search_literature","sync_to_cc","generate_proposal","evaluate_novelty","elo_tournament","verify_products","evolution_memory","write_claim_chain"],
+  "W3 方案方向": ["set_style","search_literature","sync_to_cc","generate_proposal","evaluate_novelty","elo_tournament","verify_products","evolution_memory","write_claim_chain"],
+  "W4 具体方案生成": ["set_style","search_literature","sync_to_cc","generate_proposal","evaluate_novelty","elo_tournament","verify_products","evolution_memory","write_claim_chain"],
+  "W5 代码实现": ["generate_code_spec","run_step_pipeline","generate_code_plan","wait_user_code"],
+  "W6 结果分析": ["run_step_pipeline","scan_islands_rubrics","multi_agent_discuss","evolution_memory","island_assign","refine_atoms","write_claim_chain"],
+  "W7 论文写作": ["invoke_skill_write"],
+  "W8 审阅": ["invoke_skill_review"]
 };
 
 let workspaceDir = "";
@@ -1002,8 +1055,8 @@ function addLog(msg, cls) {
 
 function renderStageStrip(state, currentPhase) {
   var strip = document.getElementById('stage-strip');
-  var phases = ["W2.1 Problem Analysis","W2.2 Solution Directions","W2.3 Search Keywords","W3 Research","W3.5 Ideate","W4 Code","W5 Analyze","W6 Write","W7 Review"];
-  var labels = {"W2.1 Problem Analysis":"问题分析","W2.2 Solution Directions":"方案方向","W2.3 Search Keywords":"检索策略","W3 Research":"Research","W3.5 Ideate":"Ideate","W4 Code":"Code","W5 Analyze":"Analyze","W6 Write":"Write","W7 Review":"Review"};
+  var phases = ["W2 问题分析","W3 方案方向","W4 具体方案生成","W5 代码实现","W6 结果分析","W7 论文写作","W8 审阅"];
+  var labels = {"W2 问题分析":"W2 问题分析","W3 方案方向":"W3 方案方向","W4 具体方案生成":"W4 具体方案生成","W5 代码实现":"W5 代码实现","W6 结果分析":"W6 结果分析","W7 论文写作":"W7 论文写作","W8 审阅":"W8 审阅"};
   var deliverables = state.deliverables || [];
   var currentIdx = phases.indexOf(currentPhase);
   if (currentIdx < 0 && currentPhase === '已终止') currentIdx = phases.length;
@@ -1017,7 +1070,7 @@ function renderStageStrip(state, currentPhase) {
   });
 
   // Expected steps per phase (from CHAIN_STEPS)
-  var expected = {"W2.1 Problem Analysis":6,"W2.2 Solution Directions":6,"W2.3 Search Keywords":6,"W3 Research":6,"W3.5 Ideate":6,"W4 Code":4,"W5 Analyze":6,"W6 Write":1,"W7 Review":1};
+  var expected = {"W2 问题分析":9,"W3 方案方向":9,"W4 具体方案生成":9,"W5 代码实现":4,"W6 结果分析":7,"W7 论文写作":1,"W8 审阅":1};
 
   var html = '';
   phases.forEach(function(p, i) {
@@ -1219,9 +1272,19 @@ function renderTournament(tourney, ctx) {
         '<div class="winner-title">' + (winner.title || winner.id || '') + '</div>' +
         '<div class="winner-meta">' +
           'Elo: <strong style="color:var(--yellow)">' + (typeof winner.elo_rating === 'number' ? winner.elo_rating.toFixed(0) : winner.elo_rating || '--') + '</strong>' +
-          ' | 新颖性: <strong>' + (typeof winner.novelty === 'number' ? winner.novelty.toFixed(1) : winner.novelty || '--') + '</strong>' +
-          ' | 可行性: <strong>' + (typeof winner.feasibility === 'number' ? winner.feasibility.toFixed(1) : winner.feasibility || '--') + '</strong>' +
-          ' | 相关性: <strong>' + (typeof winner.relevance === 'number' ? winner.relevance.toFixed(1) : winner.relevance || '--') + '</strong>' +
+          (function() {
+            var dims = tourney.dimensions || [];
+            var labels = {elo_novelty:'新颖性', validity:'有效性', impact:'影响力', reliability:'可靠性', product_satisfaction:'规格满足度'};
+            var parts = [];
+            for (var i = 0; i < dims.length; i++) {
+              var d = dims[i], v = winner[d];
+              parts.push(' | ' + (labels[d]||d) + ': <strong>' + (typeof v==='number' ? v.toFixed(1) : v||'--') + '</strong>');
+            }
+            if (winner._novelty_unverified) {
+              parts.push(' | <span style="color:var(--red)">⚠ 新颖性未经验证(仅LLM主观评分)</span>');
+            }
+            return parts.join('');
+          })() +
         '</div>' +
       '</div>';
   } else {
@@ -1229,10 +1292,26 @@ function renderTournament(tourney, ctx) {
   }
 
   // Build table
-  var hasScores = items.length > 0 && (items[0].elo_rating !== undefined || items[0].novelty !== undefined);
+  var dimKeys = tourney && tourney.dimensions ? tourney.dimensions : [];
+  var dimLabels = {elo_novelty:'新颖性', validity:'有效性', impact:'影响力', reliability:'可靠性', product_satisfaction:'规格满足度'};
+  var hasScores = items.length > 0 && (items[0].elo_rating !== undefined || dimKeys.length > 0);
   var shown = items.slice(0, 10);
   var htm = '<thead><tr><th>#</th><th>标题</th>';
-  if (hasScores) htm += '<th>Elo</th><th>新颖性</th><th>可行性</th><th>相关性</th>';
+  var hasVerifiedNovelty = items.some(function(p) { return p.verified_novelty !== undefined && p.verified_novelty !== null; });
+  var hasUnverified = items.some(function(p) { return p._novelty_unverified === true; });
+  // 警告横幅: 存在未经RND验证的方案
+  if (hasUnverified && highlight) {
+    var warnBanner = document.createElement('div');
+    warnBanner.style.cssText = 'background:rgba(255,100,100,0.15);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--red)';
+    warnBanner.innerHTML = '⚠ 警告：以下新颖性分数未经 RND+Rubric 验证，仅为 LLM 主观评分。请先运行 evaluate_novelty 步骤。';
+    highlight.parentNode.insertBefore(warnBanner, highlight.nextSibling);
+  }
+  if (hasScores) {
+    htm += '<th>Elo</th>';
+    for (var di = 0; di < dimKeys.length; di++) {
+      htm += '<th>' + (dimLabels[dimKeys[di]] || dimKeys[di]) + '</th>';
+    }
+  }
   htm += '<th>方法概要</th></tr></thead><tbody>';
   shown.forEach(function(p, i) {
     var isWinner = winner && (p.id || p.title) === (winner.id || winner.title);
@@ -1245,16 +1324,20 @@ function renderTournament(tourney, ctx) {
       '<td>' + (i + 1) + '</td>' +
       '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (p.title || '').replace(/"/g,'&quot;') + '">' + title + '</td>';
     if (hasScores) {
-      htm += '<td class="elo">' + (typeof p.elo_rating === 'number' ? p.elo_rating.toFixed(0) : '--') + '</td>' +
-        '<td class="score-num ' + scoreClass(p.novelty || 0) + '">' + (typeof p.novelty === 'number' ? p.novelty.toFixed(1) : '--') + '</td>' +
-        '<td class="score-num ' + scoreClass(p.feasibility || 0) + '">' + (typeof p.feasibility === 'number' ? p.feasibility.toFixed(1) : '--') + '</td>' +
-        '<td class="score-num ' + scoreClass(p.relevance || 0) + '">' + (typeof p.relevance === 'number' ? p.relevance.toFixed(1) : '--') + '</td>';
+      htm += '<td class="elo">' + (typeof p.elo_rating === 'number' ? p.elo_rating.toFixed(0) : '--') + '</td>';
+      for (var di = 0; di < dimKeys.length; di++) {
+        var dk = dimKeys[di], dv = p[dk];
+        htm += '<td class="score-num ' + scoreClass(dv || 0) + '">' + (typeof dv === 'number' ? dv.toFixed(1) : '--') + '</td>';
+      }
+      if (p._novelty_unverified) {
+        htm += '<td style="color:var(--red);font-size:0.75em" title="新颖性未经过RND+Rubric验证，仅为LLM主观评分">⚠未验证</td>';
+      }
     }
     htm += '<td style="font-size:11px;color:var(--dim);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + method.replace(/"/g,'&quot;') + '">' + method + '</td>' +
       '</tr>';
   });
   if (items.length > 10) {
-    htm += '<tr><td colspan="' + (hasScores ? 7 : 3) + '" style="text-align:center;color:var(--dim);padding:8px">... 以及 ' + (items.length - 10) + ' 个更多方案</td></tr>';
+    htm += '<tr><td colspan="' + (hasScores ? (3 + dimKeys.length) : 3) + '" style="text-align:center;color:var(--dim);padding:8px">... 以及 ' + (items.length - 10) + ' 个更多方案</td></tr>';
   }
   htm += '</tbody>';
   table.innerHTML = htm;
@@ -1266,7 +1349,7 @@ function renderProgressSummary(state, phase, stepIdx) {
   var items = [];
 
   // Phase label mapping
-  var phaseLabels = {'W2.1 Problem Analysis':'问题分析','W2.2 Solution Directions':'方案方向','W2.3 Search Keywords':'检索策略','W3 Research':'Research','W3.5 Ideate':'Ideate','W4 Code':'Code','W5 Analyze':'Analyze','W6 Write':'Write','W7 Review':'Review'};
+  var phaseLabels = {'W2 问题分析':'W2 问题分析','W3 方案方向':'W3 方案方向','W4 具体方案生成':'W4 具体方案生成','W5 代码实现':'W5 代码实现','W6 结果分析':'W6 结果分析','W7 论文写作':'W7 论文写作','W8 审阅':'W8 审阅'};
   var phaseLabel = phaseLabels[phase] || phase;
 
   // 1. 研究问题 (always first)
@@ -1315,7 +1398,7 @@ function renderProgressSummary(state, phase, stepIdx) {
     items.push({label: 'Gap Analysis', value: 'Target: ' + state.last_gap_analysis.target_score, icon: 'done'});
   }
 
-  // 6. Agent report (W6 Write / W7 Review via Agent SDK)
+  // 6. Agent report (W7 论文写作 / W8 审阅 via Agent SDK)
   if (state.last_report) {
     var rpt = state.last_report;
     var rptSummary = (rpt.step_name || '') + ': ' + (rpt.result || '').substring(0, 60);
@@ -1456,7 +1539,7 @@ function showCodeInstruction(text) {
   var panel = document.getElementById('code-instruction');
   if (!panel) return;
   panel.style.display = '';
-  panel.innerHTML = '<h2>W4 Code — 用户操作指引</h2><pre style=\"white-space:pre-wrap;font-size:13px;color:var(--accent);background:rgba(88,166,255,0.08);padding:12px;border-radius:6px;border:1px solid var(--accent);\">' + text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
+  panel.innerHTML = '<h2>W5 代码实现 — 用户操作指引</h2><pre style=\"white-space:pre-wrap;font-size:13px;color:var(--accent);background:rgba(88,166,255,0.08);padding:12px;border-radius:6px;border:1px solid var(--accent);\">' + text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
 }
 
 function hideCodeInstruction() {
@@ -1509,8 +1592,8 @@ async function refreshState() {
     statusEl.className = 'value' + (status === 'awaiting_decision' ? ' awaiting' : '') + (status === 'terminated' ? ' terminated' : '') + (status === 'in_progress' ? ' in-progress' : '');
     document.getElementById('iter-val').textContent = iter;
 
-    // 非 W4 Code 阶段时隐藏旧的用户操作指引
-    if (phase !== 'W4 Code' || status !== 'awaiting_user_code') {
+    // 非 W5 代码实现 阶段时隐藏旧的用户操作指引
+    if (phase !== 'W5 代码实现' || status !== 'awaiting_user_code') {
       document.getElementById('code-instruction').style.display = 'none';
     }
 
@@ -1641,9 +1724,10 @@ function connectSSE() {
   eventSource.addEventListener('agent_event', function(e) {
     try {
       const ev = JSON.parse(e.data);
-      if (ev.type && ev.type.startsWith('pipeline_')) {
+      if (ev.type) {
         const detail = ev.data ? JSON.stringify(ev.data) : '';
-        addLog('[' + ev.type + '] ' + detail, 'info');
+        const cls = ev.type.endsWith('_error') ? 'error' : 'info';
+        addLog('[' + ev.type + '] ' + detail, cls);
       }
     } catch(ex) {}
   });
@@ -1738,13 +1822,13 @@ async def pes_pipeline_transition_api(request):
         state["sub_loop_step"] = 0
         state["status"] = "in_progress"
         state.pop("command", None)
-        if phase == "W5 Analyze":
+        if phase == "W6 结果分析":
             state["iteration"] = state.get("iteration", 0) + 1
         # 记录账本
         ledger_entry["to_phase"] = next_phase
         ledger_entry["validation_passed"] = validation.get("valid", True)
         state["decision_ledger"].append(ledger_entry)
-        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        atomic_write(state_path, state)
         # 追加可读记忆文件 (AutoR-inspired)
         try:
             _append_phase_memory(phase, state, Path(workspace))
@@ -1754,46 +1838,46 @@ async def pes_pipeline_transition_api(request):
                             "validation": {"passed": True, "warnings": validation.get("warnings", [])}})
 
     elif action == "unsatisfied":
-        if phase == "W7 Review":
-            state["phase"] = "W6 Write"
+        if phase == "W8 审阅":
+            state["phase"] = "W7 论文写作"
         state["sub_loop_step"] = 0
         state["status"] = "in_progress"
         state.pop("command", None)
         ledger_entry["to_phase"] = state["phase"]
         state["decision_ledger"].append(ledger_entry)
-        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        atomic_write(state_path, state)
         return JSONResponse({"transitioned": False, "phase": state["phase"],
                             "message": f"重做阶段 '{state['phase']}'"})
 
     elif action == "jump_to_plan":
-        state["phase"] = "W2.1 Problem Analysis"
+        state["phase"] = "W2 问题分析"
         state["sub_loop_step"] = 0
         state["status"] = "in_progress"
         state["iteration"] = state.get("iteration", 0) + 1
-        ledger_entry["to_phase"] = "W2.1 Problem Analysis"
+        ledger_entry["to_phase"] = "W2 问题分析"
         state["decision_ledger"].append(ledger_entry)
-        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-        return JSONResponse({"transitioned": True, "to": "W2.1 Problem Analysis", "iteration": state["iteration"]})
+        atomic_write(state_path, state)
+        return JSONResponse({"transitioned": True, "to": "W2 问题分析", "iteration": state["iteration"]})
 
     elif action == "jump_to_write":
         gap = state.get("last_gap_analysis")
         if not gap or gap.get("target_score") is None:
             return JSONResponse({"error": "无法进入写作：未定义成功目标。请先创建 success_criteria.md"}, status_code=400)
-        state["phase"] = "W6 Write"
+        state["phase"] = "W7 论文写作"
         state["sub_loop_step"] = 0
         state["status"] = "in_progress"
         state.pop("command", None)
-        ledger_entry["to_phase"] = "W6 Write"
+        ledger_entry["to_phase"] = "W7 论文写作"
         state["decision_ledger"].append(ledger_entry)
-        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-        return JSONResponse({"transitioned": True, "to": "W6 Write"})
+        atomic_write(state_path, state)
+        return JSONResponse({"transitioned": True, "to": "W7 论文写作"})
 
     elif action == "terminate":
         state["phase"] = "已终止"
         state["status"] = "terminated"
         ledger_entry["to_phase"] = "已终止"
         state["decision_ledger"].append(ledger_entry)
-        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        atomic_write(state_path, state)
         return JSONResponse({"transitioned": True, "to": "已终止"})
 
     return JSONResponse({"error": f"Unknown action: {action}"}, status_code=400)
@@ -1814,8 +1898,8 @@ def _validate_phase_artifacts(phase: str, state: dict, ws_path: Path) -> dict:
     deliverables = state.get("deliverables", [])
     phase_dls = [d for d in deliverables if d.get("phase") == phase]
 
-    if phase in ("W2.1 Problem Analysis", "W2.2 Solution Directions", "W2.3 Search Keywords"):
-        # State checks
+    if phase in ("W2 问题分析", "W3 方案方向", "W4 具体方案生成"):
+        # Persona-driven phases: check proposals, ELO ranking, CC atoms
         proposals = ctx.get("proposals", [])
         if not proposals:
             missing.append("last_pipeline_context.proposals 为空")
@@ -1823,55 +1907,35 @@ def _validate_phase_artifacts(phase: str, state: dict, ws_path: Path) -> dict:
         ranked = tourney.get("ranked") or tourney.get("proposals") or []
         if not ranked:
             missing.append("last_tournament_result.ranked 为空 — ELO 锦标赛未完成")
-        # File checks
-        atoms_files = list(index_dir.glob("atoms*.jsonl")) if index_dir.exists() else []
-        if not atoms_files:
-            missing.append("_index/ 中无 atoms 文件 — write_claim_chain 未执行")
+        # File checks — cc.db is canonical store
+        cc_db = index_dir / "cc.db" if index_dir.exists() else None
+        if not cc_db or not cc_db.exists():
+            missing.append("_index/ 中无 cc.db — write_claim_chain 未执行")
         # Content checks
-        if atoms_files:
+        if cc_db and cc_db.exists():
             try:
-                atom_count = sum(1 for _ in open(atoms_files[0]) if _.strip())
+                from claim_chain.chain import ClaimChainV2
+                cc = ClaimChainV2(cc_db)
+                atom_count = len(cc.get_atoms())
+                cc.close()
                 details["cc_atoms"] = atom_count
                 if len(proposals) > 0 and atom_count < len(proposals):
                     warnings.append(f"CC atoms ({atom_count}) 少于 proposals ({len(proposals)})")
             except Exception:
-                warnings.append("无法读取 CC atoms 文件")
+                warnings.append("无法读取 CC atoms")
         details["proposals"] = len(proposals)
         details["ranked"] = len(ranked)
+        # W3 方案方向: also check research notes
+        if phase == "W3 方案方向":
+            notes_path = ws_path / "research_notes.md"
+            if not notes_path.exists():
+                warnings.append("research_notes.md 不存在，将自动创建空文件")
+                notes_path.write_text("# Research Notes\n\nResearch notes for this phase.\n", encoding="utf-8")
+            elif notes_path.stat().st_size < 200:
+                warnings.append(f"research_notes.md 内容较少 ({notes_path.stat().st_size} bytes)")
+            details["research_notes_bytes"] = notes_path.stat().st_size if notes_path.exists() else 0
 
-    elif phase == "W3 Research":
-        # Inherit W2 checks + research notes
-        proposals = ctx.get("proposals", [])
-        if not proposals:
-            missing.append("last_pipeline_context.proposals 为空")
-        tourney = state.get("last_tournament_result", {})
-        ranked = tourney.get("ranked") or tourney.get("proposals") or []
-        if not ranked:
-            missing.append("last_tournament_result 为空")
-        notes_path = ws_path / "research_notes.md"
-        if not notes_path.exists():
-            warnings.append("research_notes.md 不存在，将自动创建空文件")
-            notes_path.write_text("# Research Notes\n\nResearch notes for this phase.\n", encoding="utf-8")
-        elif notes_path.stat().st_size < 200:
-            warnings.append(f"research_notes.md 内容较少 ({notes_path.stat().st_size} bytes)")
-        details["research_notes_bytes"] = notes_path.stat().st_size if notes_path.exists() else 0
-
-    elif phase == "W3.5 Ideate":
-        # Same as W2.x persona phases
-        proposals = ctx.get("proposals", [])
-        if not proposals:
-            missing.append("last_pipeline_context.proposals 为空")
-        tourney = state.get("last_tournament_result", {})
-        ranked = tourney.get("ranked") or tourney.get("proposals") or []
-        if not ranked:
-            missing.append("last_tournament_result.ranked 为空")
-        atoms_files = list(index_dir.glob("atoms*.jsonl")) if index_dir.exists() else []
-        if not atoms_files:
-            missing.append("_index/ 中无 atoms 文件")
-        details["proposals"] = len(proposals)
-        details["ranked"] = len(ranked)
-
-    elif phase == "W4 Code":
+    elif phase == "W5 代码实现":
         # Plan may be at workspace root or iterations/N/implementation_plan.md
         plan_path = ws_path / "implementation_plan.md"
         if not plan_path.exists():
@@ -1889,7 +1953,7 @@ def _validate_phase_artifacts(phase: str, state: dict, ws_path: Path) -> dict:
             warnings.append("code_results 为空且无代码交付物记录 — 实验可能未执行")
         details["plan_bytes"] = plan_path.stat().st_size if plan_path.exists() else 0
 
-    elif phase == "W5 Analyze":
+    elif phase == "W6 结果分析":
         analysis = state.get("analysis_summary", {})
         algorithms = analysis.get("algorithms", [])
         if not algorithms:
@@ -1902,8 +1966,8 @@ def _validate_phase_artifacts(phase: str, state: dict, ws_path: Path) -> dict:
             missing.append("缺少 island_assign 交付物")
         details["algorithms"] = len(algorithms)
 
-    elif phase in ("W6 Write", "W7 Review"):
-        # W6/W7 走 Agent SDK 子进程，轻量验证
+    elif phase in ("W7 论文写作", "W8 审阅"):
+        # W7/W8 走 Agent SDK 子进程，轻量验证
         if not state.get("last_report"):
             warnings.append("last_report 为空 — Agent SDK 可能未产出")
         has_paper = any(d.get("type") == "paper" for d in phase_dls)
@@ -1987,12 +2051,12 @@ def _clear_stale_agent_state(state: dict) -> None:
 
 def _auto_next_phase(phase: str, state: dict) -> str:
     """内联流转逻辑，不依赖 PESController 类导入。"""
-    order = ["W2.1 Problem Analysis", "W2.2 Solution Directions", "W2.3 Search Keywords",
-             "W3 Research", "W3.5 Ideate", "W4 Code", "W5 Analyze", "W6 Write", "W7 Review"]
-    if phase == "W5 Analyze":
+    order = ["W2 问题分析", "W3 方案方向", "W4 具体方案生成",
+             "W5 代码实现", "W6 结果分析", "W7 论文写作", "W8 审阅"]
+    if phase == "W6 结果分析":
         sc_path = Path(state.get("config", {}).get("workspace", "")) / "success_criteria.md"
         if not sc_path.exists():
-            return "W2.1 Problem Analysis"
+            return "W2 问题分析"
         import re
         content = sc_path.read_text(encoding="utf-8")
         target = None
@@ -2013,12 +2077,12 @@ def _auto_next_phase(phase: str, state: dict) -> str:
                         except Exception:
                             continue
             if best >= target:
-                return "W6 Write"
-        return "W2.1 Problem Analysis"
-    if phase == "W6 Write":
-        return "已终止"  # 满意→终止（不满意由用户选W7 Review）
-    if phase == "W7 Review":
-        return "W6 Write"  # Review后回到Write
+                return "W7 论文写作"
+        return "W2 问题分析"
+    if phase == "W7 论文写作":
+        return "已终止"  # 满意→终止（不满意由用户选W8 审阅）
+    if phase == "W8 审阅":
+        return "W7 论文写作"  # Review后回到Write
     idx = order.index(phase) if phase in order else -1
     if idx >= 0 and idx < len(order) - 1:
         return order[idx + 1]
@@ -2039,7 +2103,7 @@ async def pes_pipeline_state_api(request):
         state = json.loads(state_path.read_text(encoding="utf-8"))
         # Auto-migrate old phase names
         phase = state.get("phase", "")
-        _MIGRATION = {"方案提出":"W2.1 Problem Analysis","文献调研":"W3 Research","ELO筛选":"W3.5 Ideate","实验执行":"W4 Code","结果分析":"W5 Analyze","论文写作":"W6 Write","论文审阅":"W7 Review"}
+        _MIGRATION = {"方案提出":"W2 问题分析","文献调研":"W3 方案方向","ELO筛选":"W4 具体方案生成","实验执行":"W5 代码实现","结果分析":"W6 结果分析","论文写作":"W7 论文写作","论文审阅":"W8 审阅"}
         if phase in _MIGRATION:
             state["phase"] = _MIGRATION[phase]
 
@@ -2073,7 +2137,7 @@ async def pes_pipeline_state_api(request):
                     cleared = True
             if cleared:
                 state.pop("active_task", None)
-                state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                atomic_write(state_path, state)
 
         # Auto-register session metadata so it appears on home page
         if sid:
@@ -2111,7 +2175,7 @@ async def pes_pipeline_init_api(request):
 
     state_path = ws_path / "PIPELINE_STATE.json"
     state = {
-        "phase": "W2.1 Problem Analysis",
+        "phase": "W2 问题分析",
         "iteration": 0,
         "sub_loop_step": 0,
         "status": "in_progress",
@@ -2123,24 +2187,23 @@ async def pes_pipeline_init_api(request):
         "needs_init": True,
         "needs_intake": True,
     }
-    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    atomic_write(state_path, state)
 
-    # 注册到 .evo_sessions/ (Dashboard 通过此目录发现 session)
-    import time as _time
-    session_meta = {
-        "session_id": session_id,
-        "workspace_dir": str(ws_path),
-        "data_dir": str(data_dir),
-        "research_topic": research_topic,
-        "created_at": _time.time(),
-    }
+    # 注册到 .evo_sessions/ + 全局 registry (AgentManager 恢复依赖)
+    _ensure_session_registered(session_id, workspace)
+    # 补充 research_topic 到 meta 文件
     evo_dir = ws_path / ".evo_sessions"
-    evo_dir.mkdir(parents=True, exist_ok=True)
-    (evo_dir / f"{session_id}.json").write_text(
-        json.dumps(session_meta, indent=2, ensure_ascii=False))
+    meta_file = evo_dir / f"{session_id}.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            meta["research_topic"] = research_topic
+            meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+        except Exception:
+            pass
 
     return JSONResponse({"initialized": True, "workspace_dir": workspace,
-                         "session_id": session_id, "phase": "W2.1 Problem Analysis"})
+                         "session_id": session_id, "phase": "W2 问题分析"})
 
 
 async def pes_pipeline_command_api(request):
@@ -2175,7 +2238,7 @@ async def pes_pipeline_command_api(request):
         "result": None,
         "timestamp": __import__("time").time(),
     }
-    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    atomic_write(state_path, state)
 
     return JSONResponse({"command_written": True, "command_id": cmd_id, "action": action})
 
@@ -2184,8 +2247,8 @@ async def pes_pipeline_execute_api(request):
     """Dashboard 驱动执行管线步骤。
 
     根据当前阶段选择执行方式:
-    - W2/W3/W3.5/W5: Dashboard 直驱 (调 PESController + evo-agents)
-    - W4/W6/W7: spawn Agent SDK 子进程
+    - W2/W3/W4: Dashboard 直驱 (调 PESController + evo-agents)
+    - W5/W7/W8: spawn Agent SDK 子进程
     """
     try:
         body = await request.json()
@@ -2340,11 +2403,22 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
 
         persona_agents = step.get("persona_agents", [])
         topic = step.get("topic", "")
+        regen_ctx = step.get("regen_context", {})
+        prev_proposals = regen_ctx.get("prev_proposals", [])
         all_proposals = []
+
+        # Build per-agent lookup of previous proposals (keyed by source_agent)
+        _prev_by_agent = {}
+        if prev_proposals:
+            for _pp in prev_proposals:
+                _sa = _pp.get("source_agent", "")
+                if _sa and _sa not in _prev_by_agent:
+                    _prev_by_agent[_sa] = _pp
 
         _push_internal_event(session_id, "pipeline_step", {
             "phase": phase, "step": step_name,
-            "detail": f"Starting {len(persona_agents)} Persona agents...",
+            "detail": f"Starting {len(persona_agents)} Persona agents..."
+                      + (" (再生修订模式)" if prev_proposals else ""),
             "persona_count": len(persona_agents)
         })
         for persona_name in persona_agents:
@@ -2354,10 +2428,26 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
                     "persona": persona_name,
                     "detail": f"Invoking {persona_name}..."
                 })
+
+                # When regenerating, inject this agent's previous proposal so
+                # they can REVISE rather than regenerate from scratch.
+                agent_prompt = topic
+                if prev_proposals:
+                    _mine = _prev_by_agent.get(persona_name)
+                    if _mine:
+                        agent_prompt = (
+                            f"{topic}\n\n"
+                            f"## 你上一次生成的方案（请在此基础修改，不要重写）\n"
+                            f"标题: {_mine.get('title', 'N/A')}\n"
+                            f"核心假设: {_mine.get('hypothesis', 'N/A')[:800]}\n"
+                            f"方法描述: {_mine.get('method_sketch', 'N/A')[:2000]}\n"
+                            f"\n请直接修改上述方案：保留结构和正确内容，针对审核反馈补充缺失项、加深分析深度。"
+                        )
+
                 persona_resp = await mgr.invoke_agent(
                     session_id=session_id,
                     agent_name=persona_name,
-                    prompt=topic,
+                    prompt=agent_prompt,
                 )
                 if isinstance(persona_resp, dict):
                     persona_resp["source_agent"] = persona_name
@@ -2424,6 +2514,9 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
         ctx = state.get("last_pipeline_context", {})
         ctx["proposals"] = all_proposals
         state["last_pipeline_context"] = ctx
+        # Clear regeneration flag since revision has completed
+        if prev_proposals:
+            state["needs_regeneration"] = False
         atomic_write(state_path, state)
 
         result["detail"] = f"4 Persona 完成: {len(all_proposals)} proposals (cleaned)"
@@ -2443,7 +2536,7 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
 
         # ── Regeneration cap: max 2 attempts to prevent infinite loop ──
         regen_count = state.get("regeneration_attempts", 0)
-        MAX_REGEN = 2
+        MAX_REGEN = 9999
         if regen_count >= MAX_REGEN:
             result["verdict"] = "pass"
             result["detail"] = f"产物验证: 已达重跑上限({MAX_REGEN}次)，强制通过。方案质量可能不完美。"
@@ -2525,7 +2618,8 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
                           {"verdict": verdict, "details": verdict_result.get("details", "")[:200]})
 
     elif action == "evaluate_novelty":
-        # Stage 1+2: BGE-M3 RND coarse + LLM Rubric fine → novelty score
+        # Stage 1+2: BGE-M3 RND coarse + LLM Rubric fine -> novelty score
+        # Runs BEFORE elo_tournament. verified_novelty feeds into tournament judge.
         from pes_controller.elo.neighborhood import RNDEvaluator
         from pes_controller.rubric.novelty import RubricNoveltyEvaluator
 
@@ -2536,91 +2630,155 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
             result["detail"] = "RND: 无提案可评价"
             return result
 
-        _push_internal_event(session_id, "rnd_started", {
-            "phase": phase, "step": step_name,
-            "detail": f"RND evaluation: {len(proposals)} proposals"
-        })
+        try:
+            _push_internal_event(session_id, "rnd_started", {
+                "phase": phase, "step": step_name,
+                "detail": f"RND evaluation: {len(proposals)} proposals"
+            })
 
-        # Stage 1: BGE-M3 RND
-        rnd_eval = RNDEvaluator(kb_path=rnd_kb_path)
-        rnd_eval.load()
-        rnd_results = rnd_eval.compute_rnd_batch(proposals)
-        rnd_eval.save()
+            # Stage 1: BGE-M3 RND — seed KB from CC atoms if empty
+            rnd_eval = RNDEvaluator(kb_path=rnd_kb_path)
+            rnd_eval.load()
+            if rnd_eval.size == 0:
+                try:
+                    st = atomic_read(state_path)
+                    cc_atoms = st.get("_cc_atoms_cache", [])
+                    if cc_atoms:
+                        batch = []
+                        for a in cc_atoms[:200]:
+                            text = a.get("title", "") + " " + a.get("content", "")
+                            if len(text) > 20:
+                                batch.append({"text": text[:2000], "source_type": "cc_atom",
+                                              "metadata": {"atom_id": a.get("id", ""), "tags": a.get("tags", [])}})
+                        if batch:
+                            rnd_eval.add_batch(batch)
+                except Exception:
+                    pass
+            rnd_results = rnd_eval.compute_rnd_batch(proposals)
+            rnd_eval.save()
 
-        _push_internal_event(session_id, "rnd_coarse_done", {
-            "phase": phase, "step": step_name,
-            "detail": f"RND coarse: {[round(r['novelty_coarse'],3) for r in rnd_results]}"
-        })
+            _push_internal_event(session_id, "rnd_coarse_done", {
+                "phase": phase, "step": step_name,
+                "detail": f"RND coarse: {[round(r['novelty_coarse'],3) for r in rnd_results]}"
+            })
 
-        # KB completeness check: if all proposals look too novel, KB may be incomplete
-        _check_kb_completeness(rnd_results, rnd_eval, proposals, session_id,
-                               phase, step_name, state_path)
+            # KB completeness check
+            _check_kb_completeness(rnd_results, rnd_eval, proposals, session_id,
+                                   phase, step_name, state_path)
 
-        # Stage 2: LLM Rubric fine evaluation
-        if mgr:
-            async def _llm_for_rubric(prompt: str) -> str:
-                sess = mgr.sessions.get(session_id)
-                if sess is None:
-                    sessions_list = mgr.list_sessions()
-                    for s in sessions_list:
-                        if s.get('workspace_dir') == str(ws_path):
-                            session_id_tmp = s.get('session_id', '')
-                            sess = mgr.sessions.get(session_id_tmp)
-                            break
-                if sess is None:
-                    raise RuntimeError(f'Session not found: {session_id}')
-                return await mgr._direct_llm_call(sess, prompt)
+            # Stage 2: LLM Rubric fine evaluation
+            if mgr:
+                async def _llm_for_rubric(prompt: str) -> str:
+                    sess = mgr.sessions.get(session_id)
+                    if sess is None:
+                        sessions_list = mgr.list_sessions()
+                        for s in sessions_list:
+                            if s.get('workspace_dir') == str(ws_path):
+                                session_id_tmp = s.get('session_id', '')
+                                sess = mgr.sessions.get(session_id_tmp)
+                                break
+                    if sess is None:
+                        raise RuntimeError(f'Session not found: {session_id}')
+                    return await mgr._direct_llm_call(sess, prompt)
 
-            rubric_eval = RubricNoveltyEvaluator(llm_call=_llm_for_rubric)
-            try:
-                reports = await rubric_eval.evaluate_batch(proposals, rnd_results)
-            except Exception as e:
-                logger.warning(f"Rubric fine eval failed: {e}")
-                reports = None
+                rubric_eval = RubricNoveltyEvaluator(llm_call=_llm_for_rubric)
+                try:
+                    st = atomic_read(state_path)
+                    cc_atoms = st.get("_cc_atoms_cache", [])
+                    confirmed = st.get("confirmed_baselines", [])
+                    baseline_descs = RubricNoveltyEvaluator.load_baselines_from_cc(cc_atoms, confirmed)
+                    if baseline_descs:
+                        rubric_eval = RubricNoveltyEvaluator(llm_call=_llm_for_rubric, baselines=baseline_descs)
+                except Exception:
+                    pass
+                try:
+                    reports = await rubric_eval.evaluate_batch(proposals, rnd_results)
+                except Exception as e:
+                    logger.warning(f"Rubric fine eval failed: {e}")
+                    reports = None
 
-            if reports:
-                for i, p in enumerate(proposals):
-                    rnd_n = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
-                    fine_n = reports[i].novelty_score if i < len(reports) else 0.5
-                    p["rubric_novelty"] = round(0.5 * rnd_n + 0.5 * fine_n, 4)
-                    p["rnd_coarse"] = rnd_n
-                    p["rnd_fine"] = fine_n
-                    p["rnd_details"] = {
-                        "nearest": rnd_results[i].get("nearest_neighbors", []) if i < len(rnd_results) else [],
-                        "dimension_scores": reports[i].dimension_scores if i < len(reports) else {},
-                        "explanation": reports[i].explanation if i < len(reports) else "",
-                    }
+                if reports:
+                    for i, p in enumerate(proposals):
+                        rnd_n = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
+                        fine_n = reports[i].novelty_score if i < len(reports) else 0.5
+                        p["rubric_novelty"] = round(0.5 * rnd_n + 0.5 * fine_n, 4)
+                        p["rnd_coarse"] = rnd_n
+                        p["rnd_fine"] = fine_n
+                        p["rnd_details"] = {
+                            "nearest": rnd_results[i].get("nearest_neighbors", []) if i < len(rnd_results) else [],
+                            "dimension_scores": reports[i].dimension_scores if i < len(reports) else {},
+                            "explanation": reports[i].explanation if i < len(reports) else "",
+                        }
+                else:
+                    for i, p in enumerate(proposals):
+                        p["rubric_novelty"] = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
+                        p["rnd_coarse"] = p["rubric_novelty"]
+                        p["rnd_fine"] = 0.5
             else:
-                # Fallback: use coarse only
                 for i, p in enumerate(proposals):
                     p["rubric_novelty"] = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
-                    p["rnd_coarse"] = p["rubric_novelty"]
-                    p["rnd_fine"] = 0.5
-        else:
-            for i, p in enumerate(proposals):
-                p["rubric_novelty"] = rnd_results[i]["novelty_coarse"] if i < len(rnd_results) else 0.5
 
-        # Store results back
-        state = atomic_read(state_path)
-        state["last_persona_proposals"] = proposals
-        ctx = state.get("last_pipeline_context", {})
-        ctx["proposals"] = proposals
-        state["last_pipeline_context"] = ctx
-        atomic_write(state_path, state)
+            # Compute verified_novelty (1-10 scale) from RND+Rubric
+            # No Elo blend — runs before tournament.
+            for p in proposals:
+                rubric_n = p.get("rubric_novelty", 0.5)
+                p["verified_novelty"] = round(rubric_n * 10, 2)
+                p["rubric_novelty_scored"] = round(rubric_n * 10, 2)
 
-        _push_internal_event(session_id, "rnd_completed", {
-            "phase": phase, "step": step_name,
-            "detail": f"RND: {[round(p.get('rubric_novelty',0.5),3) for p in proposals]}"
-        })
+            # Write enriched proposals to state for downstream elo_tournament
+            import json as _json
+            state = atomic_read(state_path)
+            state["last_persona_proposals"] = proposals
+            ctx = state.get("last_pipeline_context", {})
+            ctx["proposals"] = proposals
+            state["last_pipeline_context"] = ctx
+            try:
+                atomic_write(state_path, state)
+            except Exception as _we:
+                logger.error(f"atomic_write failed in evaluate_novelty: {_we}")
+                # Direct write fallback
+                state_path.write_text(_json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # Find worst proposal for re-generation
-        worst = min(proposals, key=lambda p: p.get("rnd_novelty", 0.5))
-        result["detail"] = (
-            f"RND 创新评价完成: novelty={[round(p.get('rubric_novelty',0),3) for p in proposals]}. "
-            f"最差: {worst.get('source_agent','?')} (novelty={worst.get('rnd_novelty',0):.3f})"
-        )
-        result["worst_proposal"] = worst.get("source_agent", "")
-        result["rnd_results"] = rnd_results[:2]  # keep result manageable
+            # Verify write persisted to disk
+            _verify = atomic_read(state_path)
+            _vp = _verify.get("last_persona_proposals", [])
+            _vn_count = sum(1 for _p in _vp if _p.get("verified_novelty") is not None)
+            if _vn_count == 0 and len(proposals) > 0:
+                logger.error(
+                    f"evaluate_novelty: verified_novelty NOT persisted ({_vn_count}/{len(proposals)}). "
+                    f"Direct write fallback."
+                )
+                state_path.write_text(_json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            # Record deliverable
+            _record_deliverable(state_path, step_name, phase,
+                              "evaluate_novelty",
+                              f"RND+Rubric完成: {len(proposals)}提案, "
+                              f"verified_novelty={[round(p.get('verified_novelty',0),1) for p in proposals]}",
+                              {"count": len(proposals),
+                               "novelty_scores": [round(p.get("verified_novelty", 0), 2) for p in proposals]})
+
+            _push_internal_event(session_id, "rnd_completed", {
+                "phase": phase, "step": step_name,
+                "detail": f"RND verified: {[round(p.get('verified_novelty',0),2) for p in proposals]}"
+            })
+
+            worst = min(proposals, key=lambda p: p.get("rubric_novelty", 0.5))
+            result["detail"] = (
+                f"RND 创新评价完成: verified_novelty={[round(p.get('verified_novelty',0),1) for p in proposals]}. "
+                f"最差: {worst.get('source_agent','?')} (rubric_novelty={worst.get('rubric_novelty',0):.3f})"
+            )
+            result["worst_proposal"] = worst.get("source_agent", "")
+            result["rnd_results"] = rnd_results[:2]
+
+        except Exception as e:
+            logger.exception(f"evaluate_novelty failed (non-fatal): {e}")
+            _push_internal_event(session_id, "rnd_failed", {
+                "phase": phase, "step": step_name,
+                "detail": f"RND evaluation failed (pipeline continues): {str(e)[:200]}"
+            })
+            result["detail"] = f"RND 创新验证失败 (管线继续): {str(e)[:200]}"
+            result["rnd_error"] = str(e)[:200]
 
     elif action == "write_sme":
         sme_context = step.get("sme_context", {})
@@ -2738,15 +2896,71 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
             for i, p in enumerate(proposals):
                 if "id" not in p:
                     p["id"] = p.get("title", f"proposal_{i}")
+
+            # Fallback: merge verified_novelty from last_persona_proposals if
+            # last_pipeline_context.proposals don't have it (evaluate_novelty persistence failure)
+            _persona_props = state.get("last_persona_proposals", [])
+            if _persona_props:
+                _persona_by_title = {}
+                for _pp in _persona_props:
+                    _t = _pp.get("title", "")
+                    if _t and _pp.get("verified_novelty") is not None:
+                        _persona_by_title[_t] = {
+                            "verified_novelty": _pp.get("verified_novelty"),
+                            "rubric_novelty": _pp.get("rubric_novelty"),
+                            "rubric_novelty_scored": _pp.get("rubric_novelty_scored"),
+                        }
+                if _persona_by_title:
+                    _merged = 0
+                    for p in proposals:
+                        if p.get("verified_novelty") is None:
+                            _src = _persona_by_title.get(p.get("title", ""))
+                            if _src is not None:
+                                p["verified_novelty"] = _src["verified_novelty"]
+                                p["rubric_novelty"] = _src["rubric_novelty"]
+                                p["rubric_novelty_scored"] = _src["rubric_novelty_scored"]
+                                _merged += 1
+                    if _merged > 0:
+                        logger.info(f"elo_tournament: merged verified_novelty from "
+                                    f"last_persona_proposals for {_merged}/{len(proposals)} proposals")
+
             if not proposals:
                 result["warning"] = "无proposals可供锦标赛排序"
             else:
+                # 前置门控: 检查 evaluate_novelty 是否已成功完成
+                unverified = [p for p in proposals if p.get("verified_novelty") is None]
+                if unverified:
+                    _push_internal_event(session_id, "tournament_blocked", {
+                        "phase": phase, "step": step_name,
+                        "detail": f"锦标赛前置条件不满足: {len(unverified)}/{len(proposals)} 方案缺少 RND 验证新颖性。请先完成 evaluate_novelty。"
+                    })
+                    result["warning"] = f"跳过锦标赛: {len(unverified)}个方案未完成RND验证"
+                    result["blocked"] = True
+                    result["unverified_count"] = len(unverified)
+                    _record_deliverable(state_path, step_name, phase,
+                                      "elo_tournament_blocked",
+                                      f"锦标赛被阻止: {len(unverified)}个方案缺少verified_novelty",
+                                      {"blocked": True, "unverified_count": len(unverified)})
+                    return result
+                # 门控通过，继续锦标赛
                 try:
                     tourney_result = await mgr.run_tournament(
                         session_id=session_id,
                         proposals=proposals,
                         phase=phase,
                     )
+                    # Post-tournament: verified_novelty (0-10, from RND+Rubric) IS elo_novelty
+                    # The 5 Elo dims: novelty(evaluate_novelty), validity, impact, reliability, product_satisfaction
+                    for rp in tourney_result.get("ranked", []):
+                        vn = rp.get("verified_novelty")
+                        en = rp.get("elo_novelty", 5.0)
+                        if vn is not None:
+                            rp["elo_novelty_raw"] = en
+                            rp["elo_novelty"] = float(vn)
+                        else:
+                            # evaluate_novelty failed or hasn't run — mark as unverified
+                            rp["elo_novelty_raw"] = en
+                            rp["_novelty_unverified"] = True
                     state["last_tournament_result"] = tourney_result
                     atomic_write(state_path, state)
                     ranked = tourney_result.get("ranked", [])
@@ -2772,24 +2986,24 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
                     "distill_type": distill_type,
                     "proposals": tourney.get("ranked") if tourney else None,
                 }
-                # ive (W3 Research): pass prior failures from analysis_summary
+                # ive (W3 方案方向): pass prior failures from analysis_summary
                 if distill_type == "ive":
                     analysis = state.get("analysis_summary", {})
                     contradicted = analysis.get("contradicted", [])
                     if contradicted:
                         kwargs["failure_info"] = {
                             "direction": contradicted[0],
-                            "reason": f"W3 Research: {len(contradicted)} contradictions found",
+                            "reason": f"W3 方案方向: {len(contradicted)} contradictions found",
                             "score": 0.0,
                         }
                     else:
-                        # Fallback: record that W3 Research ran without finding contradictions
+                        # Fallback: record that W3 方案方向 ran without finding contradictions
                         kwargs["failure_info"] = {
-                            "direction": "W3 Research completed",
+                            "direction": "W3 方案方向 completed",
                             "reason": "No contradictions found — all proposals passed feasibility",
                             "score": 1.0,
                         }
-                # ese (W5 Analyze): pass experiment strategy results
+                # ese (W6 结果分析): pass experiment strategy results
                 elif distill_type == "ese":
                     analysis = state.get("analysis_summary", {})
                     validated = analysis.get("validated", [])
@@ -2802,7 +3016,7 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
                         }
                     else:
                         kwargs["strategy_info"] = {
-                            "strategy": "W5 Analyze completed",
+                            "strategy": "W6 结果分析 completed",
                             "outcome": "PARTIAL",
                             "details": analysis.get("agent_conclusion", "")[:500],
                             "score": 0.5,
@@ -2818,7 +3032,7 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
 
     elif action == "invoke_skill":
         skill = step.get("skill", "")
-        # ── W5 Analyze: 三个关键步骤的实际执行 ──
+        # ── W6 结果分析: 三个关键步骤的实际执行 ──
         if skill == "/evo-analyze":
             result = await _do_scan_islands_rubrics(step, ws_path, session_id, state_path, mgr, result)
         elif skill == "/evo-claim":
@@ -2826,23 +3040,36 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
         elif skill == "/evo-iterate":
             result = await _do_island_assign(step, ws_path, session_id, state_path, result)
         elif skill == "/evo-research":
-            # W3 Research: 从 pipeline context 生成研究笔记，写入 session
+            # W3 方案方向: 从 pipeline context 生成研究笔记，写入 session
             result = await _do_web_research(step, ws_path, session_id, state_path, result)
         elif skill == "/evo-write":
-            # W6 Write: 确保 deliverable 可见 — 在 state 中记录路径
+            # W7 论文写作: 确保 deliverable 可见 — 在 state 中记录路径
             result = await _do_write_paper(step, ws_path, session_id, state_path, result)
         elif skill == "/evo-review":
-            # W7 Review: 确保 deliverable 可见
+            # W8 审阅: 确保 deliverable 可见
             result = await _do_review_paper(step, ws_path, session_id, state_path, result)
         else:
             _push_internal_event(session_id, "skill_invoked",
                                  {"phase": phase, "skill": skill})
             result["detail"] = f"Skill {skill} 已调用"
 
+    elif action == "sync_to_cc":
+        # Sync persona search results + proposals to CC via CCGrounding gatekeeper
+        result = await _do_sync_to_cc(step, ws_path, session_id, state_path, result)
+
     elif action == "ingest_results":
         state = atomic_read(state_path)
         ingested = state.get("ingested_results", [])
         result["detail"] = f"已扫描 {len(ingested)} 个实验结果"
+
+    elif action == "generate_code_spec":
+        spec_path = step.get("spec_path", "")
+        result["detail"] = f"build_spec.json 已生成: {step.get('instruction', '')}"
+        result["spec_path"] = spec_path
+        result["spec"] = step.get("spec", {})
+        result["validation_errors"] = step.get("validation_errors", [])
+        _push_internal_event(session_id, "code_spec_generated",
+                             {"phase": phase, "spec_path": spec_path})
 
     elif action == "generate_code_plan":
         plan_path = step.get("plan_path", "")
@@ -2867,11 +3094,11 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
     return result
 
 
-# ── W5 Analyze 辅助函数 ──
+# ── W6 结果分析 辅助函数 ──
 
 async def _do_scan_islands_rubrics(step: dict, ws_path: Path, session_id: str,
                                      state_path: Path, mgr, result: dict) -> dict:
-    """W5 Analyze Step 1: 扫描实验结果，生成结构化分析，调 agents 评判。
+    """W6 结果分析 Step 1: 扫描实验结果，生成结构化分析，调 agents 评判。
 
     Python 硬编码编排流程:
     1. 读 PIPELINE_STATE.code_results (由 /evo-code-agent-post 写入)
@@ -2938,7 +3165,7 @@ async def _do_scan_islands_rubrics(step: dict, ws_path: Path, session_id: str,
     if mgr and session_id in mgr.sessions:
         summary_json = json.dumps(algo_summary, indent=2, ensure_ascii=False)
         analysis_prompt = (
-            f"[W5 Analyze] 实验数据分析。以下是 {len(algo_summary)} 个算法的实验结果:\n\n"
+            f"[W6 结果分析] 实验数据分析。以下是 {len(algo_summary)} 个算法的实验结果:\n\n"
             f"{summary_json}\n\n"
             "请分析:\n"
             "1. 排名: 哪个算法最强? 是否有统计显著差异?\n"
@@ -3002,7 +3229,7 @@ async def _do_scan_islands_rubrics(step: dict, ws_path: Path, session_id: str,
         result["detail"] = f"实验统计完成: {len(algo_summary)} 个算法 (无 AgentManager)"
 
     _push_internal_event(session_id, "analysis_completed",
-                         {"phase": "W5 Analyze", "algorithms": len(algo_summary)})
+                         {"phase": "W6 结果分析", "algorithms": len(algo_summary)})
 
     # 将实验分析结论蒸馏到 Evolution Memory (ese type)
     if mgr and session_id in mgr.sessions:
@@ -3027,9 +3254,63 @@ async def _do_scan_islands_rubrics(step: dict, ws_path: Path, session_id: str,
     return result
 
 
+async def _do_sync_to_cc(step: dict, ws_path: Path, session_id: str,
+                           state_path: Path, result: dict) -> dict:
+    """Sync search results + persona proposals to CC via CCGrounding gatekeeper.
+
+    Tiered fallback:
+      1. LLM EvidenceCard extraction (if LLM available)
+      2. Rule-based fallback (_fallback_evidence)
+      3. Direct add_atom with gatekeeper validation
+
+    Writes to CC through OntologyGatekeeper + BGE-M3 dedup.
+    """
+    from claim_chain.chain import ClaimChain
+    from claim_chain.grounding import CCGrounding
+
+    cc = ClaimChain(ws_path / "_index" / "cc.db")
+    grounding = CCGrounding(cc)
+
+    state = atomic_read(state_path)
+    current_phase = state.get("phase", step.get("phase", ""))
+    proposals = step.get("proposals", state.get("last_persona_proposals", []))
+
+    atom_count = 0
+    rel_count = 0
+
+    if proposals:
+        # Extract search results from proposals for literature enrichment
+        search_items = []
+        for prop in proposals:
+            if not isinstance(prop, dict):
+                continue
+            summary = prop.get("search_results_summary", "")
+            if summary:
+                search_items.append({
+                    "title": prop.get("title", "")[:200],
+                    "abstract": summary[:1000],
+                    "source": "persona_search",
+                })
+
+        # Sync search results as literature → CC (gatekeeper-validated)
+        # Then sync proposals as method atoms
+        report = grounding.enrich_from_proposals(proposals, phase=current_phase)
+        atom_count = report.get("atoms_added", 0)
+        rel_count = report.get("relations_added", 0)
+
+    result["detail"] = (
+        f"sync_to_cc: {atom_count} proposal atoms + {rel_count} relations "
+        f"synced to CC via CCGrounding gatekeeper (phase={current_phase})"
+    )
+    _push_internal_event(session_id, "cc_synced",
+                         {"phase": current_phase, "atoms": atom_count,
+                          "relations": rel_count})
+    return result
+
+
 async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
                                   state_path: Path, result: dict) -> dict:
-    """W5 Analyze Step 4: 写入 CC atoms + relations。
+    """W6 结果分析 Step 4: 写入 CC atoms + relations。
 
     Python 硬编码:
     1. 读 state["analysis_summary"]
@@ -3052,29 +3333,13 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
     written_relations = []
     atom_id_map = {}  # name → atom_id
 
-    # ── 路径 A: 无实验数据 → 从 pipeline proposals 写入 CC atoms ──
+    # ── 路径 A: 无实验数据 → 从 pipeline proposals 写入 CC atoms (via CCGrounding gatekeeper) ──
     if not algorithms and proposals:
-        for i, prop in enumerate(proposals):
-            title = prop.get("title", f"proposal_{i}")
-            hypothesis = prop.get("hypothesis", "")
-            method = prop.get("method_sketch", "")[:800]
-            content = json.dumps({
-                "title": title,
-                "hypothesis": hypothesis,
-                "method_sketch": method,
-                "novelty_claim": prop.get("novelty_claim", ""),
-                "primitives_used": prop.get("primitives_used", []),
-            }, ensure_ascii=False)
-            atom = cc.add_atom(
-                type="method",
-                title=title,
-                content=content,
-                tags=["proposal", "ideation", f"rank_{i+1}"],
-                evidence_level="llm_analysis",
-                metadata={"proposal_id": prop.get("id", ""), "elo_rating": prop.get("elo_rating", 0)},
-            )
-            written_atoms.append(atom["id"])
-            atom_id_map[title] = atom["id"]
+        from claim_chain.grounding import CCGrounding
+        grounding = CCGrounding(cc)
+        report = grounding.enrich_from_proposals(proposals, phase=current_phase)
+        written_atoms = list(range(report.get("atoms_added", 0)))  # placeholder IDs for tracking
+        written_relations = list(range(report.get("relations_added", 0)))
 
         # 如果 tournament 已排序, 创建 validates relations (rank N → rank N+1)
         tourney = state.get("last_tournament_result", {})
@@ -3083,21 +3348,22 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
             for k in range(len(ranked) - 1):
                 winner = ranked[k].get("title", "")
                 loser = ranked[k + 1].get("title", "")
-                w_id = atom_id_map.get(winner)
-                l_id = atom_id_map.get(loser)
-                if w_id and l_id:
-                    rel = cc.add_relation(type="validates", source_id=w_id, target_id=l_id,
-                                          evidence=f"ELO tournament: rank {k+1} > rank {k+2}")
-                    written_relations.append(rel["id"])
+                if winner and loser:
+                    try:
+                        rel = cc.add_relation(type="validates", source_id=winner, target_id=loser,
+                                              evidence=f"ELO tournament: rank {k+1} > rank {k+2}")
+                        written_relations.append(rel.get("id", len(written_relations)))
+                    except Exception:
+                        pass
 
-        result["detail"] = f"CC 写入 (proposals): {len(written_atoms)} atoms, {len(written_relations)} relations"
+        result["detail"] = f"CC 写入 (proposals via CCGrounding): {report['atoms_added']} atoms, {report['relations_added']} relations"
         _record_deliverable(state_path, step.get("step", "write_cc"), current_phase,
                           "write_claim_chain",
-                          f"CC写入: {len(written_atoms)} atoms, {len(written_relations)} relations",
-                          {"atoms": len(written_atoms), "relations": len(written_relations)})
+                          f"CC写入: {report['atoms_added']} atoms, {report['relations_added']} relations",
+                          {"atoms": report['atoms_added'], "relations": report['relations_added']})
         _push_internal_event(session_id, "cc_written",
-                             {"phase": current_phase, "atoms": len(written_atoms),
-                              "relations": len(written_relations)})
+                             {"phase": current_phase, "atoms": report['atoms_added'],
+                              "relations": report['relations_added']})
         return result
 
     # ── 路径 B: 无数据 → 初始化空 CC 文件 (确保 session 结构可见) ──
@@ -3107,25 +3373,31 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
         result["detail"] = "CC 已初始化 (暂无数据, 待实验完成后写入)"
         return result
 
-    # ── 路径 C: 有实验数据 → 写入 experiment atoms + pairwise relations ──
+    # ── 路径 C: 有实验数据 → 写入 experiment atoms via CCGrounding + pairwise relations ──
+    from claim_chain.grounding import CCGrounding
+    grounding = CCGrounding(cc)
+    # Build results dict for enrich_from_experiments
+    results_dict = {}
     for algo in algorithms:
-        name = algo["algorithm"]
-        code_path = ""
-        for r in code_results:
-            if r.get("algorithm") == name:
-                code_path = r.get("code_path", "")
-                break
+        name = algo.get("algorithm", "unknown")
+        results_dict[name] = {
+            "score_mean": algo.get("mean", 0),
+            "score_std": algo.get("std", 0),
+            "n": algo.get("n", 0),
+            "status": "tested",
+        }
+    exp_report = grounding.enrich_from_experiments(results_dict)
+    written_atoms = list(range(exp_report.get("atoms_created", 0)))
 
-        content = json.dumps(algo, ensure_ascii=False)
-        atom = cc.add_atom(
-            type="fact",
-            title=f"{name}: score={algo['mean']} (n={algo['n']})",
-            content=content,
-            tags=["experiment", name.lower(), "w5-analyze"],
-            evidence_level="experiment",
-        )
-        written_atoms.append(atom["id"])
-        atom_id_map[name] = atom["id"]
+    # Rebuild atom_id_map from CC for pairwise relations
+    atoms = cc.get_atoms(limit=200)
+    for a in atoms:
+        a_title = str(a.get("title", ""))
+        a_id = str(a.get("id", ""))
+        for algo in algorithms:
+            name = algo.get("algorithm", "unknown")
+            if name.lower() in a_title.lower() and "experiment" in str(a.get("tags", [])):
+                atom_id_map[name] = a_id
 
     for i in range(len(algorithms)):
         for j in range(i + 1, len(algorithms)):
@@ -3166,14 +3438,14 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
                       f"CC写入: {len(written_atoms)} atoms, {len(written_relations)} relations",
                       {"atoms": len(written_atoms), "relations": len(written_relations)})
     _push_internal_event(session_id, "cc_written",
-                         {"phase": "W5 Analyze", "atoms": len(written_atoms),
+                         {"phase": "W6 结果分析", "atoms": len(written_atoms),
                           "relations": len(written_relations)})
     return result
 
 
 async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
                               state_path: Path, result: dict) -> dict:
-    """W5 Analyze Step 5: 代码归档到 island + Grid 分配。
+    """W6 结果分析 Step 5: 代码归档到 island + Grid 分配。
 
     使用真实 API: IslandManager.detect_and_assign() + CellGrid.record_result()
     + set_claim_atom_id() 建立 CC↔island 关联。
@@ -3278,7 +3550,7 @@ async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
                       f"Island分配: {assigned}/{len(algorithms)}算法",
                       {"assigned": assigned, "total": len(algorithms)})
     _push_internal_event(session_id, "island_assigned",
-                         {"phase": "W5 Analyze", "assigned": assigned})
+                         {"phase": "W6 结果分析", "assigned": assigned})
     return result
 
 
@@ -3514,7 +3786,7 @@ def _record_deliverable(state_path: Path, step_name: str, phase: str,
 
 async def _do_refine_atoms(step: dict, ws_path: Path, session_id: str,
                             state_path: Path, result: dict) -> dict:
-    """W4 Code refine_atoms: 读 CC atoms → 翻译为 RefinedAtom JSON → refined_proposals/。
+    """W5 代码实现 refine_atoms: 读 CC atoms → 翻译为 RefinedAtom JSON → refined_proposals/。
 
     每个 type="method" + tag="proposal" 的 CC atom:
     1. 提取 method_sketch → 构造 prompt (含 ProblemAnchor + literature manifest)
@@ -3532,20 +3804,18 @@ async def _do_refine_atoms(step: dict, ws_path: Path, session_id: str,
     iteration = state.get("iteration", 0)
     topic = state.get("research_topic", "")
 
-    # Read CC atoms
-    atoms_path = ws_path / "_index" / "atoms.jsonl"
-    if not atoms_path.exists():
-        result["detail"] = "no atoms.jsonl — skip refine_atoms"
+    # Read CC atoms from cc.db (canonical store)
+    from claim_chain.chain import ClaimChainV2
+    cc_db = ws_path / "_index" / "cc.db"
+    if not cc_db.exists():
+        result["detail"] = "no cc.db — skip refine_atoms"
         return result
 
+    cc = ClaimChainV2(cc_db)
+    all_atoms = cc.get_atoms()
+    cc.close()
     proposal_atoms = []
-    for line in atoms_path.read_text(encoding="utf-8").strip().split("\n"):
-        if not line.strip():
-            continue
-        try:
-            atom = _json.loads(line)
-        except _json.JSONDecodeError:
-            continue
+    for atom in all_atoms:
         if atom.get("type") != "method":
             continue
         tags = atom.get("tags", [])
@@ -3841,7 +4111,7 @@ def _record_refine_failure(ws_path: Path, atom_id: str, attempt: int,
 
 async def _do_web_research(step: dict, ws_path: Path, session_id: str,
                            state_path: Path, result: dict) -> dict:
-    """W3 Research invoke_skill_research: 将管线上下文写入 research_notes.md 文件。
+    """W3 方案方向 invoke_skill_research: 将管线上下文写入 research_notes.md 文件。
 
     从 last_pipeline_context 提取 proposals、SME mappings、evaluations，
     生成结构化研究笔记，写入 session 供后续阶段使用。
@@ -3860,7 +4130,7 @@ async def _do_web_research(step: dict, ws_path: Path, session_id: str,
         f"# Research Notes: {topic}",
         f"",
         f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Phase: W3 Research",
+        f"Phase: W3 方案方向",
         f"",
         f"## Summary",
         f"- Proposals generated: {len(proposals)}",
@@ -3899,11 +4169,11 @@ async def _do_web_research(step: dict, ws_path: Path, session_id: str,
             lines.append("")
     else:
         lines.append("## Research Directions")
-        lines.append("No proposals generated yet. Run W2.1 Problem Analysis first.")
+        lines.append("No proposals generated yet. Run W2 问题分析 first.")
         lines.append("")
 
     lines.append("---")
-    lines.append("*Auto-generated by EvoScientist W3 Research step*")
+    lines.append("*Auto-generated by EvoScientist W3 方案方向 step*")
 
     notes_path.write_text("\n".join(lines), encoding="utf-8")
     _record_deliverable(state_path, step.get("step", "research"),
@@ -3912,13 +4182,13 @@ async def _do_web_research(step: dict, ws_path: Path, session_id: str,
                         {"path": str(notes_path), "proposals": len(items), "mappings": len(sme_mappings)})
     result["detail"] = f"研究笔记已写入 session ({len(items)} 方案)"
     _push_internal_event(session_id, "research_completed",
-                         {"phase": "W3 Research", "file": str(notes_path)})
+                         {"phase": "W3 方案方向", "file": str(notes_path)})
     return result
 
 
 async def _do_write_paper(step: dict, ws_path: Path, session_id: str,
                           state_path: Path, result: dict) -> dict:
-    """W6 Write: 检查是否已有 paper/report，若无则生成占位。"""
+    """W7 论文写作: 检查是否已有 paper/report，若无则生成占位。"""
     state = atomic_read(state_path)
     topic = state.get("research_topic", "")
 
@@ -3929,7 +4199,7 @@ async def _do_write_paper(step: dict, ws_path: Path, session_id: str,
 
     if existing:
         result["detail"] = f"已有报告: {existing[0].name}"
-        _record_deliverable(state_path, "write_paper", step.get("phase", "W6 Write"),
+        _record_deliverable(state_path, "write_paper", step.get("phase", "W7 论文写作"),
                           "paper", f"论文报告已存在: {existing[0].name}",
                           {"path": str(existing[0])})
     else:
@@ -3952,7 +4222,7 @@ async def _do_write_paper(step: dict, ws_path: Path, session_id: str,
             f"(待写入)",
         ]
         report_path.write_text("\n".join(lines), encoding="utf-8")
-        _record_deliverable(state_path, "write_paper", step.get("phase", "W6 Write"),
+        _record_deliverable(state_path, "write_paper", step.get("phase", "W7 论文写作"),
                           "paper", f"论文骨架已生成: draft_report.md",
                           {"path": str(report_path)})
         result["detail"] = "论文骨架已生成 (draft_report.md)"
@@ -3961,11 +4231,11 @@ async def _do_write_paper(step: dict, ws_path: Path, session_id: str,
 
 async def _do_review_paper(step: dict, ws_path: Path, session_id: str,
                            state_path: Path, result: dict) -> dict:
-    """W7 Review: 记录审阅状态。"""
+    """W8 审阅: 记录审阅状态。"""
     state = atomic_read(state_path)
-    _record_deliverable(state_path, "review_paper", step.get("phase", "W7 Review"),
+    _record_deliverable(state_path, "review_paper", step.get("phase", "W8 审阅"),
                       "review", "审阅步骤已触发 — 请检查审阅结果",
-                      {"phase": "W7 Review"})
+                      {"phase": "W8 审阅"})
     result["detail"] = "审阅步骤已记录"
     return result
 
@@ -4043,6 +4313,7 @@ def create_dashboard_app() -> Starlette:
             Route("/sessions/{session_id}/graph", claim_chain_graph_page),
             Route("/sessions/{session_id}/grid", evolve_grid_page),
             Route("/sessions/{session_id}/pipeline", pes_pipeline_page),
+            Route("/sessions/{session_id}/replay", agent_replay_page),
             Route("/api/restart", restart_api, methods=["POST"]),
             Route("/api/internal/events", post_internal_event, methods=["POST"]),
             Route("/api/watchdog/alerts", watchdog_alerts_api),

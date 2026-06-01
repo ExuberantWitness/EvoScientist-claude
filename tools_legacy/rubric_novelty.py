@@ -15,38 +15,6 @@ from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Baseline descriptions (hardcoded per user decision — never change)
-# ---------------------------------------------------------------------------
-
-BASELINE_DESCRIPTIONS: dict[str, str] = {
-    "SAC": (
-        "Soft Actor-Critic: off-policy maximum entropy RL. "
-        "Twin Q-networks, stochastic policy, automatic temperature tuning. "
-        "Actor minimizes KL divergence between policy and Q-based distribution."
-    ),
-    "TD3": (
-        "Twin Delayed DDPG: addresses overestimation bias in DDPG. "
-        "Twin Q-networks (min for target), delayed policy updates, "
-        "target policy smoothing noise."
-    ),
-    "PPO": (
-        "Proximal Policy Optimization: on-policy, clipped surrogate objective. "
-        "Limits policy updates to trust region via clip ratio. "
-        "Actor-critic with advantage estimation (GAE)."
-    ),
-    "DDPG": (
-        "Deep Deterministic Policy Gradient: off-policy, deterministic actor. "
-        "Uses target networks with soft updates. "
-        "Exploration via action noise (Ornstein-Uhlenbeck)."
-    ),
-    "A2C": (
-        "Advantage Actor-Critic: on-policy, synchronous parallel workers. "
-        "Uses advantage function to reduce gradient variance. "
-        "Simple baseline for actor-critic methods."
-    ),
-}
-
 RUBRIC_DIMENSIONS = [
     "problem_novelty",
     "method_novelty",
@@ -84,16 +52,62 @@ class NoveltyReport:
 class RubricNoveltyEvaluator:
     """LLM-powered 5-dimension rubric novelty evaluation."""
 
-    def __init__(self, llm_call: Callable[[str], Awaitable[str]] | None = None):
+    def __init__(self, llm_call: Callable[[str], Awaitable[str]] | None = None,
+                 baselines: dict[str, str] | None = None):
         self._llm_call = llm_call
-        self._rubrics: dict[str, BaselineRubric] = {
-            name: BaselineRubric(name=name, short_desc=desc)
-            for name, desc in BASELINE_DESCRIPTIONS.items()
-        }
+        self._rubrics: dict[str, BaselineRubric] = {}
+        if baselines:
+            for name, desc in baselines.items():
+                self._rubrics[name] = BaselineRubric(name=name, short_desc=desc)
 
     # ------------------------------------------------------------------
     # Rubric management
     # ------------------------------------------------------------------
+
+    @classmethod
+    def load_baselines_from_cc(
+        cls, cc_atoms: list[dict],
+        confirmed_baselines: list[str] | None = None,
+    ) -> dict[str, str]:
+        """Dynamically build baseline descriptions from CC atoms and confirmed baselines.
+
+        Priority: (1) CC atoms with baseline tags, (2) confirmed_baselines from state.
+        Returns empty dict if no baselines found — evaluator falls back to BGE-M3 neighbors.
+        """
+        descriptions: dict[str, str] = {}
+        for a in (cc_atoms or []):
+            tags = a.get("tags", [])
+            if a.get("type") == "fact" and "baseline" in tags:
+                name = a.get("title", "")
+                content = a.get("content", "")
+                if name and name not in descriptions:
+                    try:
+                        c = json.loads(content) if isinstance(content, str) else content
+                        desc = c.get("description", c.get("method", content)) if isinstance(c, dict) else content
+                    except (json.JSONDecodeError, TypeError):
+                        desc = content
+                    descriptions[name] = str(desc)[:300] if desc else name
+        if not descriptions and confirmed_baselines:
+            if isinstance(confirmed_baselines, dict):
+                # Flatten dict-of-lists format from evo-pipeline SKILL.md Step 3
+                for cat, items in confirmed_baselines.items():
+                    if isinstance(items, list):
+                        for item in items:
+                            if isinstance(item, str):
+                                descriptions[item] = f"Baseline method: {item} ({cat})"
+                            elif isinstance(item, dict):
+                                descriptions[item.get("title", item.get("name", str(item)))] = (
+                                    item.get("content", item.get("description", str(item)))[:300]
+                                )
+            else:
+                for b in confirmed_baselines:
+                    if isinstance(b, str):
+                        descriptions[b] = f"Baseline method: {b}"
+                    elif isinstance(b, dict):
+                        descriptions[b.get("title", b.get("name", str(b)))] = (
+                            b.get("content", b.get("description", str(b)))[:300]
+                        )
+        return descriptions
 
     def update_rubric_cc_atoms(self, name: str, cc_summary: str) -> None:
         """Update rubric with CodeGraph CC atoms (W4 phase 2 upgrade)."""
@@ -158,12 +172,16 @@ For each dimension, assign a score 1-10 AND a weight (0.0-1.0) reflecting how im
 Be critical. A score of 8+ means truly exceptional novelty. A score of 3- means clearly non-novel.""")
 
         # Baseline rubrics
-        parts.append("\n## Baseline Methods (anchor points)")
-        for name, rubric in self._rubrics.items():
-            extra = ""
-            if rubric.cc_atoms_summary:
-                extra = f"\n  Code structure: {rubric.cc_atoms_summary[:300]}"
-            parts.append(f"- **{name}**: {rubric.short_desc}{extra}")
+        if self._rubrics:
+            parts.append("\n## Baseline Methods (anchor points)")
+            for name, rubric in self._rubrics.items():
+                extra = ""
+                if rubric.cc_atoms_summary:
+                    extra = f"\n  Code structure: {rubric.cc_atoms_summary[:300]}"
+                parts.append(f"- **{name}**: {rubric.short_desc}{extra}")
+        else:
+            parts.append("\n## Baseline Methods")
+            parts.append("(No static baselines configured. Use the BGE-M3 nearest neighbors below as the primary comparison reference.)")
 
         # Nearest neighbors from BGE-M3
         if rnd_result and rnd_result.get("nearest_neighbors"):

@@ -2571,6 +2571,16 @@ async def _execute_step(step: dict, ws_path: Path, session_id: str,
                 return await mgr._direct_llm_call(sess, prompt)
 
             rubric_eval = RubricNoveltyEvaluator(llm_call=_llm_for_rubric)
+            # Try loading dynamic baselines from CC atoms and state
+            try:
+                st = atomic_read(state_path)
+                cc_atoms = st.get("_cc_atoms_cache", [])
+                confirmed = st.get("confirmed_baselines", [])
+                baseline_descs = RubricNoveltyEvaluator.load_baselines_from_cc(cc_atoms, confirmed)
+                if baseline_descs:
+                    rubric_eval = RubricNoveltyEvaluator(llm_call=_llm_for_rubric, baselines=baseline_descs)
+            except Exception:
+                pass
             try:
                 reports = await rubric_eval.evaluate_batch(proposals, rnd_results)
             except Exception as e:
@@ -3037,7 +3047,7 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
     4. 代码路径 → CC.add_relation(type="implements")
     """
     from claim_chain import ClaimChain
-    cc = ClaimChain(str(ws_path / "_index"), base_dir=str(ws_path / "_index"))
+    cc = ClaimChain(str(ws_path / "_index" / "cc.db"))
 
     state = atomic_read(state_path)
     current_phase = state.get("phase", step.get("phase", ""))
@@ -3192,7 +3202,7 @@ async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
 
     grid = CellGrid(str(ws_path / "evolve_archive"))
     islands = IslandManager(ws_path / "evolve_archive")
-    cc = ClaimChain(str(ws_path / "_index"), base_dir=str(ws_path / "_index"))
+    cc = ClaimChain(str(ws_path / "_index" / "cc.db"))
     assigned = 0
 
     # 读 CC atoms 找匹配的 experiment atom_id

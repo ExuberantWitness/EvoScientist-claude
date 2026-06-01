@@ -126,27 +126,27 @@ class HookEmitter:
 
 @dataclass
 class AgentSession:
-    """Represents an active agent session."""
+    """Represents an active agent session (OpenRath-style with lineage)."""
     session_id: str
     agent: Any
     thread_id: str
     workspace_dir: str
     created_at: str
-    model: str = ""       # LLM model name (preserved across recovery)
-    provider: str = ""    # LLM provider (preserved across recovery)
-    status: str = "idle"  # idle / running / waiting_approval / error
+    model: str = ""
+    provider: str = ""
+    status: str = "idle"
     events: list[dict] = field(default_factory=list)
     last_response: str = ""
     sub_agents_used: list[str] = field(default_factory=list)
     pending_approvals: list[dict] = field(default_factory=list)
-    # Thread management for context overflow prevention
     thread_count: int = 0
     thread_summaries: list[str] = field(default_factory=list)
-    # Background task reference for async discuss/send_message
     _task: Any = field(default=None)
-    # Evolution memory (lazy init)
     evolution_memory: Any = field(default=None)
     fitness_history: list[dict] = field(default_factory=list)
+    # ── OpenRath-style lineage ──
+    parent_session_ids: list[str] = field(default_factory=list)
+    lineage_kind: str = "user"  # user | agent | fork | merge | compress
 
 
 class AgentManager:
@@ -275,10 +275,34 @@ class AgentManager:
         return Path(self.base_dir) / ".evo_session_registry.json"
 
     def _save_session_meta(self, session: AgentSession):
-        """Persist session metadata to disk (not the agent object)."""
+        """Persist session via JSONL WAL (OpenRath-style).
+
+        Writes header + all chunks to {session_id}.jsonl.__partial__.
+        The trailer + atomic rename → .jsonl happens on session completion.
+        Also maintains backward-compatible .json metadata file.
+        """
         try:
             sdir = self._sessions_dir(session.workspace_dir)
             sdir.mkdir(parents=True, exist_ok=True)
+
+            # OpenRath-style JSONL WAL
+            from session.persistence import SessionWriter
+            wal_path = sdir / f"{session.session_id}.jsonl"
+            writer = SessionWriter(wal_path)
+            writer.write_header(
+                session_id=session.session_id,
+                workspace_dir=session.workspace_dir,
+                parent_session_ids=session.parent_session_ids,
+                model=session.model,
+                provider=session.provider,
+                metadata={"lineage_kind": session.lineage_kind},
+            )
+            # Write thread summaries as initial chunks
+            for ts in session.thread_summaries:
+                writer.write_chunk(kind="thread_summary", response=ts)
+            writer.close(status=session.status)
+
+            # Backward-compatible .json metadata
             data = {
                 "session_id": session.session_id,
                 "workspace_dir": session.workspace_dir,
@@ -290,13 +314,14 @@ class AgentManager:
                 "sub_agents_used": session.sub_agents_used,
                 "thread_count": session.thread_count,
                 "thread_summaries": session.thread_summaries,
-                "last_response": session.last_response[:8000] if session.last_response else "",
+                "last_response": session.last_response[:1000000] if session.last_response else "",
                 "fitness_history": session.fitness_history[-50:],
             }
             (sdir / f"{session.session_id}.json").write_text(
                 json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
             )
-            # Update global registry: session_id → workspace_dir
+
+            # Update global registry
             registry = {}
             rpath = self._session_registry_path()
             if rpath.exists():
@@ -308,6 +333,63 @@ class AgentManager:
             rpath.write_text(json.dumps(registry, indent=2), encoding="utf-8")
         except Exception as e:
             logger.warning(f"Failed to save session meta: {e}")
+
+    def _save_agent_context(self, session, agent_name: str, prompt: str,
+                            response: str, parsed: dict) -> None:
+        """Save per-agent independent context: full prompt + response + parsed output.
+
+        Persistent, append-only storage in: {_index}/agents/{agent_name}/
+        - conversation.jsonl: full prompt+response history
+        - meta.json: agent metadata (call_count, last_title, last_call)
+        """
+        try:
+            agent_dir = Path(session.workspace_dir) / "_index" / "agents" / agent_name
+            agent_dir.mkdir(parents=True, exist_ok=True)
+
+            conv_entry = {
+                "timestamp": now_iso(),
+                "session_id": session.session_id,
+                "phase": self._current_phase(session.workspace_dir),
+                "agent_name": agent_name,
+                "prompt": prompt,
+                "response": response[:1000000],
+                "parsed": parsed,
+            }
+            conv_path = agent_dir / "conversation.jsonl"
+            with conv_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(conv_entry, ensure_ascii=False) + "\n")
+
+            existing_meta = {}
+            meta_path = agent_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            call_count = existing_meta.get("call_count", 0) + 1
+            existing_meta.update({
+                "agent_name": agent_name,
+                "last_call": now_iso(),
+                "last_title": parsed.get("title", ""),
+                "call_count": call_count,
+                "session_id": session.session_id,
+            })
+            meta_path.write_text(json.dumps(existing_meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            logger.info(f"Agent context saved: {agent_name} (call #{call_count})")
+        except Exception as e:
+            logger.warning(f"Failed to save agent context for {agent_name}: {e}")
+
+    def _current_phase(self, workspace_dir: str) -> str:
+        """Read current phase from PIPELINE_STATE.json."""
+        try:
+            sp = Path(workspace_dir) / "PIPELINE_STATE.json"
+            if sp.exists():
+                state = json.loads(sp.read_text(encoding="utf-8"))
+                return state.get("phase", "unknown")
+        except Exception:
+            pass
+        return "unknown"
 
     def _load_sessions_from_disk(self):
         """Scan workspace for saved sessions and rebuild AgentSession objects.
@@ -367,10 +449,50 @@ class AgentManager:
                     )
                     session.fitness_history = fitness
                     session.last_response = data.get("last_response", "")
+                    session.parent_session_ids = data.get("parent_session_ids", [])
+                    session.lineage_kind = data.get("lineage_kind", "user")
                     self.sessions[sid] = session
                     recovered += 1
                 except Exception as e:
                     logger.warning(f"Failed to load session {sf}: {e}")
+
+    async def fork_session(self, parent_session_id: str,
+                           lineage_kind: str = "fork") -> dict:
+        """Fork a parent session to create a child with lineage tracking.
+
+        The child inherits thread summaries and workspace from the parent
+        but gets a fresh thread_id and agent. Parent's session_id is recorded
+        in parent_session_ids for DAG traversal.
+        """
+        parent = self.sessions.get(parent_session_id)
+        if not parent:
+            self._load_sessions_from_disk()
+            parent = self.sessions.get(parent_session_id)
+        if not parent:
+            return {"error": f"Parent session {parent_session_id} not found"}
+
+        child_id = generate_session_id()
+        now = now_iso()
+
+        child = AgentSession(
+            session_id=child_id,
+            agent=None,
+            thread_id=f"{child_id}_t0",
+            workspace_dir=parent.workspace_dir,
+            created_at=now,
+            model=parent.model,
+            provider=parent.provider,
+            status="idle",
+            thread_summaries=list(parent.thread_summaries),
+            parent_session_ids=[parent_session_id],
+            lineage_kind=lineage_kind,
+        )
+        self.sessions[child_id] = child
+        self._save_session_meta(child)
+
+        logger.info(f"Session forked: {parent_session_id} → {child_id} ({lineage_kind})")
+        return {"session_id": child_id, "parent_session_id": parent_session_id,
+                "lineage_kind": lineage_kind, "status": "idle"}
 
         if recovered:
             logger.info(f"Recovered {recovered} session(s) from disk")
@@ -605,14 +727,14 @@ class AgentManager:
             from tavily import TavilyClient
             tc = TavilyClient()
             search_resp = tc.search(
-                query=f"actor critic algorithm Hopper-v4 reinforcement learning improvement",
+                query=prompt[:1000000],
                 max_results=3
             )
             results = search_resp.get("results", []) if isinstance(search_resp, dict) else []
             if results:
                 search_context = "## Web Search Results\n"
                 for i, r in enumerate(results[:3]):
-                    search_context += f"{i+1}. {r.get('title','')}\n   {r.get('content','')[:400]}\n\n"
+                    search_context += f"{i+1}. {r.get('title','')}\n   {r.get('content','')[:1000000]}\n\n"
                 self._event_bus.publish(session_id, {
                     "type": "tool_call",
                     "data": {"name": "tavily_search", "args_preview": f"{len(results)} results found"}
@@ -630,7 +752,7 @@ class AgentManager:
                     api = ClaimChainAPI(ws)
                     for r in results[:5]:
                         title = r.get('title', '')[:200]
-                        content = r.get('content', '')[:1000]
+                        content = r.get('content', '')[:1000000]
                         if title and content:
                             api.ingest_text(
                                 f"{title}\n{content}",
@@ -755,6 +877,9 @@ class AgentManager:
                 parsed.setdefault("title", agent_name)
                 parsed.setdefault("hypothesis", "")
                 parsed.setdefault("method_sketch", "")
+                parsed.setdefault("source_agent", agent_name)
+                # ── Save per-agent context ──
+                self._save_agent_context(session, agent_name, full_prompt, response, parsed)
                 return parsed
 
             # 3) Fallback: intelligent extraction from raw markdown text
@@ -792,23 +917,23 @@ class AgentManager:
 
             # ── Hypothesis extraction ──
             for pattern in [
-                r"(?:核心假设|hypothesis|core\s*(?:idea|thesis|contribution)|核心论点|主要创新)[:\s]*\n?([\s\S]{20,800}?)(?:\n##|\n\*\*\w|\Z)",
-                r"(?:we\s+propose|our\s+approach|本方案|我们提出|核心思想)[:\s]*\n?([\s\S]{20,800}?)(?:\n##|\n\*\*\w|\Z)",
-                r"(?:thesis|论点|主张|key\s+insight)[:\s]*\n?([\s\S]{20,800}?)(?:\n##|\n\*\*\w|\Z)",
+                r"(?:核心假设|hypothesis|core\s*(?:idea|thesis|contribution)|核心论点|主要创新)[:\s]*\n?([\s\S]{20,1000000}?)(?:\n##|\n\*\*\w|\Z)",
+                r"(?:we\s+propose|our\s+approach|本方案|我们提出|核心思想)[:\s]*\n?([\s\S]{20,1000000}?)(?:\n##|\n\*\*\w|\Z)",
+                r"(?:thesis|论点|主张|key\s+insight)[:\s]*\n?([\s\S]{20,1000000}?)(?:\n##|\n\*\*\w|\Z)",
             ]:
                 hm = _re.search(pattern, response, _re.IGNORECASE | _re.MULTILINE)
                 if hm:
-                    hypothesis = hm.group(1).strip()[:500]
+                    hypothesis = hm.group(1).strip()[:1000000]
                     break
 
             # ── Method sketch extraction: prefer proposal/method sections ──
             for pattern in [
-                r"(?:method[_\s]*sketch|具体方法|方案描述|proposed\s+method|our\s+method|approach)[:\s]*\n?([\s\S]{20,2000}?)(?:\n##\s|\Z)",
-                r"(?:architecture|架构|components|模块|implementation|实现)[:\s]*\n?([\s\S]{20,2000}?)(?:\n##\s|\Z)",
+                r"(?:method[_\s]*sketch|具体方法|方案描述|proposed\s+method|our\s+method|approach)[:\s]*\n?([\s\S]{20,1000000}?)(?:\n##\s|\Z)",
+                r"(?:architecture|架构|components|模块|implementation|实现)[:\s]*\n?([\s\S]{20,1000000}?)(?:\n##\s|\Z)",
             ]:
                 mm = _re.search(pattern, response, _re.IGNORECASE | _re.MULTILINE)
                 if mm:
-                    method_sketch = mm.group(1).strip()[:2000]
+                    method_sketch = mm.group(1).strip()[:1000000]
                     break
 
             # If no specific section found, use the latter half of the response
@@ -817,9 +942,9 @@ class AgentManager:
                 if len(response) > 500:
                     # Take from midpoint onwards (skip analysis/reasoning)
                     mid = len(response) // 2
-                    method_sketch = response[mid:mid+2000].strip()
+                    method_sketch = response[mid:mid+8000].strip()
                 else:
-                    method_sketch = response[:2000]
+                    method_sketch = response[:1000000]
 
             # If hypothesis still empty, use first substantive paragraph from method_sketch
             if not hypothesis and method_sketch:
@@ -828,15 +953,28 @@ class AgentManager:
                          and not _l.strip().startswith('#')
                          and not _l.strip().startswith('*')
                          and not _l.strip().startswith('-')]
-                hypothesis = paras[0][:500] if paras else method_sketch[:500]
+                hypothesis = paras[0][:1000000] if paras else method_sketch[:1000000]
 
-            return {
+            # Extract search_results_summary if present in response
+            search_summary = ""
+            for sp in [
+                r"(?:search[_\s]*results[_\s]*summary|检索结果|参考文献|references?|literature[_\s]*survey)[:\s]*\n?([\s\S]{20,1000000}?)(?:\n##\s|\Z)",
+            ]:
+                sm = _re.search(sp, response, _re.IGNORECASE | _re.MULTILINE)
+                if sm:
+                    search_summary = sm.group(1).strip()[:1000000]
+                    break
+
+            parsed = {
                 "title": title,
                 "hypothesis": hypothesis,
                 "method_sketch": method_sketch,
-                "search_results_summary": "",
+                "search_results_summary": search_summary,
+                "source_agent": agent_name,
                 "raw_response_length": len(response),
             }
+            self._save_agent_context(session, agent_name, full_prompt, response, parsed)
+            return parsed
         except Exception as e:
             session.status = "error"
             session.last_response = f"Error: {e}"
@@ -886,7 +1024,7 @@ class AgentManager:
             # Hook: 发射 task_error 事件
             self._hook.emit("task_error", session.session_id, {
                 "task_type": "discuss",
-                "error": str(e)[:500],
+                "error": str(e)[:1000000],
             })
 
             logger.error(f"Background discuss failed for {session.session_id}: {e}", exc_info=True)
@@ -964,7 +1102,7 @@ class AgentManager:
         memory_summary = ""
         memory_path = Path(session.workspace_dir) / "memory" / "MEMORY.md"
         if memory_path.exists():
-            memory_summary = memory_path.read_text(encoding="utf-8")[:500]
+            memory_summary = memory_path.read_text(encoding="utf-8")[:1000000]
 
         result = {
             "session_id": session_id,
@@ -1007,8 +1145,8 @@ class AgentManager:
         return {
             "session_id": session_id,
             "agent_status": session.status,
-            "thinking_text": getattr(state, "thinking_text", "")[:500],
-            "response_text": getattr(state, "response_text", "")[:2000],
+            "thinking_text": getattr(state, "thinking_text", "")[:1000000],
+            "response_text": getattr(state, "response_text", "")[:1000000],
             "is_thinking": getattr(state, "is_thinking", False),
             "is_responding": getattr(state, "is_responding", False),
             "tool_calls": [
@@ -1198,9 +1336,9 @@ class AgentManager:
             "ranked": [
                 {
                     "id": p.get("id", ""),
-                    "title": p.get("title", "")[:120],
-                    "hypothesis": p.get("hypothesis", "")[:500],
-                    "method_sketch": p.get("method_sketch", "")[:500],
+                    "title": p.get("title", "")[:200],
+                    "hypothesis": p.get("hypothesis", "")[:1000000],
+                    "method_sketch": p.get("method_sketch", "")[:1000000],
                     "elo_rating": p.get("elo_rating", 1500),
                     "product_satisfaction": p.get("product_satisfaction", 0),
                     "source_agent": p.get("source_agent", ""),
@@ -1208,6 +1346,8 @@ class AgentManager:
                     "rubric_novelty_scored": p.get("rubric_novelty_scored", 5.0),
                     "rnd_coarse": p.get("rnd_coarse", 0.5),
                     "rnd_fine": p.get("rnd_fine", 0.5),
+                    "verified_novelty": p.get("verified_novelty"),
+                    "rnd_details": p.get("rnd_details", {}),
                     # Phase-specific dimension scores
                     **{d: p.get(d, 0) for d in dim_names},
                 }
@@ -1464,7 +1604,7 @@ class AgentManager:
             model_name = session.model or cfg.model
             provider_name = session.provider or cfg.provider
 
-            llm = get_chat_model(model=model_name, provider=provider_name, max_tokens=8192)
+            llm = get_chat_model(model=model_name, provider=provider_name, max_tokens=16384)
 
             system_msg = SystemMessage(
                 content="You are a research proposal generator. Output ONLY valid JSON. "

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 ELO_DIMENSIONS: dict[str, dict] = {
-    "W2.1 Problem Analysis": {
+    "W2 问题分析": {
         "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
         "elo_novelty": "科学创新性——是否具备相对于先前工作的非显而易见性？是否有合理的科学实用性？是否开辟专家认为值得探索的研究方向？",
         "validity": "潜在有效性——问题-方法-执行-结论链条是否合理？方法是否适当？证据是否支撑主张？",
@@ -37,38 +37,20 @@ ELO_DIMENSIONS: dict[str, dict] = {
         "product_satisfaction": "产物规格满足度——方案是否完整覆盖了产物规格中所有必选项？每个必选项是否充分展开？",
         "scenario": "导师组会 — 问题讨论环节",
     },
-    "W2.2 Solution Directions": {
+    "W3 方案方向": {
         "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
         "elo_novelty": "科学创新性——方向是否具有非显而易见性？是否基于对难点的深入理解提出新路径？",
         "validity": "潜在有效性——方向的论证链条是否合理？技术路径是否有理论或实验依据？",
-        "impact": "潜在影响力——该方向如果成功，是否可能显著提升Hopper-v4控制能力？",
+        "impact": "潜在影响力——该方向如果成功，是否可能显著提升目标任务的控制能力或性能？",
         "reliability": "潜在可靠性——该方向是否足够稳健，不会因实现细节差异而完全失效？",
         "product_satisfaction": "产物规格满足度——方向描述是否完整覆盖了产物规格中的所有必选项？",
         "scenario": "导师组会 — 方向讨论环节",
     },
-    "W2.3 Search Keywords": {
-        "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
-        "elo_novelty": "科学创新性——检索策略是否覆盖了非显而易见的子主题和跨领域关联？",
-        "validity": "潜在有效性——检索词是否能命中相关文献而非噪声？覆盖是否全面？",
-        "impact": "潜在影响力——检索策略是否可能发现具有高影响力的关键文献？",
-        "reliability": "潜在可靠性——检索策略在不同数据库中是否一致有效？是否有鲁棒的同义词覆盖？",
-        "product_satisfaction": "产物规格满足度——是否完整提供了检索词列表、搜索目标、预期文献类型和子主题覆盖？",
-        "scenario": "导师组会 — 搜索策略讨论环节",
-    },
-    "W3 Research": {
-        "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
-        "elo_novelty": "科学创新性——方案是否具备相对于先前工作的非显而易见性？是否有合理的科学实用性？是否开辟专家认为值得探索的研究方向？",
-        "validity": "潜在有效性——方案是否有文献依据？方法是否适当？论证链条是否合理？",
-        "impact": "潜在影响力——方案如果成功，是否可能显著提升Hopper-v4控制能力？成果是否可复用？",
-        "reliability": "潜在可靠性——方案在算力/时间约束下是否可实现？对实现细节是否鲁棒？",
-        "product_satisfaction": "产物规格满足度——方案是否包含修改组件/文献依据/可行性估计/量化对比预期？",
-        "scenario": "学术论文答辩 — 专家评审团",
-    },
-    "W3.5 Ideate": {
+    "W4 具体方案生成": {
         "dimensions": ["elo_novelty", "validity", "impact", "reliability", "product_satisfaction"],
         "elo_novelty": "科学创新性——伪代码层面的实现是否体现了非显而易见的创新？",
         "validity": "潜在有效性——伪代码是否能直接翻译为可运行代码？架构改动是否合理？",
-        "impact": "潜在影响力——该实现如果完成，是否可能对Hopper-v4控制产生显著影响？",
+        "impact": "潜在影响力——该实现如果完成，是否可能对目标环境产生显著影响？",
         "reliability": "潜在可靠性——实现是否对超参数/环境变化鲁棒？计算开销是否可接受？",
         "product_satisfaction": "产物规格满足度——是否包含伪代码/架构改动列表/损失函数签名/计算开销估计？",
         "scenario": "软件开发 — 专家评审团",
@@ -162,7 +144,7 @@ class RegenerationVerdict(Enum):
 
 def _build_judge_prompt(phase: str) -> str:
     """Build the judge system prompt for a specific phase."""
-    dims = ELO_DIMENSIONS.get(phase, ELO_DIMENSIONS.get("W3 Research", {}))
+    dims = ELO_DIMENSIONS.get(phase, {})
     dim_names = dims.get("dimensions", ["novelty", "feasibility", "relevance", "clarity"])
     scenario = dims.get("scenario", "学术评审")
 
@@ -245,7 +227,7 @@ class EloTournament:
         k_factor: float = 32.0,
         initial_rating: float = 1500.0,
         max_rounds: int | None = None,
-        phase: str = "W3 Research",
+        phase: str = "W2 问题分析",
     ):
         self.judge_model = judge_model
         self.k_factor = k_factor
@@ -398,8 +380,8 @@ class EloTournament:
         for i, p in enumerate(proposals):
             proposals_text.append(
                 f"Proposal {i+1}: {p.get('title', 'Untitled')}\n"
-                f"Hypothesis: {p.get('hypothesis', '')[:500]}\n"
-                f"Method: {p.get('method_sketch', '')[:500]}\n"
+                f"Hypothesis: {p.get('hypothesis', '')[:1000000]}\n"
+                f"Method: {p.get('method_sketch', '')[:1000000]}\n"
                 f"Scores: { {d: p.get(d, 0) for d in self._dim_names} }"
             )
 
@@ -474,17 +456,28 @@ If proposals have the info but it's not deep enough, verdict is "insufficient"."
 
     async def _compare(self, a: dict, b: dict) -> tuple[str | None, dict | None]:
         """LLM judge pairwise comparison using phase-specific prompt."""
-        prompt = f"""Proposal A: {a.get('title', 'Untitled')}
-{a.get('hypothesis', '')[:800]}
+        # Include RND-verified novelty as reference for the judge
+        novelty_ref = ""
+        a_vn = a.get("verified_novelty")
+        b_vn = b.get("verified_novelty")
+        if a_vn is not None and b_vn is not None:
+            novelty_ref = (
+                f"\n[RND+Rubric 验证新颖性 (1-10, 仅作参考): "
+                f"A={a_vn:.1f}, B={b_vn:.1f}]"
+            )
 
-{a.get('method_sketch', '')[:800]}
+        prompt = f"""Proposal A: {a.get('title', 'Untitled')}
+{a.get('hypothesis', '')[:1000000]}
+
+{a.get('method_sketch', '')[:1000000]}
+{novelty_ref}
 
 ---
 
 Proposal B: {b.get('title', 'Untitled')}
-{b.get('hypothesis', '')[:800]}
+{b.get('hypothesis', '')[:1000000]}
 
-{b.get('method_sketch', '')[:800]}"""
+{b.get('method_sketch', '')[:1000000]}"""
 
         try:
             response = await self._call_judge(prompt, use_phase_prompt=True)

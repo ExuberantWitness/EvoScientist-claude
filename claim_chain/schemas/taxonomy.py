@@ -1,4 +1,4 @@
-"""Intern-Atlas (2604.28158) Taxonomy: 7 edge types + 14 bottleneck categories.
+"""Intern-Atlas (2604.28158) Taxonomy: 11 edge types + 14 bottleneck categories.
 
 This is the SINGLE SOURCE OF TRUTH for edge types and bottleneck categories.
 All other modules (claim_chain_v2, vault_manager, validation) import from here.
@@ -10,7 +10,7 @@ from enum import Enum
 # ── §3.2: Seven Core Edge Types ──
 
 class EdgeType(str, Enum):
-    """Seven core edge types per Intern-Atlas §3.2."""
+    """Eleven edge types: 7 Intern-Atlas §3.2 core + 4 EvoScientist extensions."""
     EXTENDS       = "extends"        # Strong causal: method B builds on method A
     IMPROVES      = "improves"       # Strong causal: addresses a bottleneck
     REPLACES      = "replaces"       # Strong causal: supersedes an older method
@@ -18,6 +18,10 @@ class EdgeType(str, Enum):
     USES_COMPONENT = "uses_component"  # Weak: uses a sub-component
     COMPARES      = "compares"       # Weak: empirical comparison
     BACKGROUND    = "background"     # None: contextual reference
+    IMPLEMENTS    = "implements"     # EvoScientist: code atom → proposal atom link
+    VALIDATES     = "validates"      # Empirical: experiment/result validates a proposal
+    BOUNDARY_OF   = "boundary_of"    # Meta: defines scope/boundary of another concept
+    RELATED_TO    = "related_to"     # Weak: general relatedness between atoms
 
 
 # §3.2: Strong causal subset — used for evolution chain BFS
@@ -68,11 +72,11 @@ class Confidence(str, Enum):
 OLD_TO_NEW_EDGE = {
     "motivates":     "DROP",           # No paper equivalent — discard or log
     "derives":       EdgeType.EXTENDS,  # "A derives from B" ≈ "A extends B"
-    "validates":     "DROP",           # Empirical result → store in ρ(e).confidence
-    "contradicts":   "DROP",           # Negative result → store as ρ(e).tradeoff note
-    "implements":    EdgeType.USES_COMPONENT,  # "A implements B" ≈ uses B's component
+    "validates":     EdgeType.VALIDATES,     # Empirical: experiment/result validates a proposal
+    "contradicts":   "DROP",                # Negative result → store as ρ(e).tradeoff note
+    "implements":    EdgeType.IMPLEMENTS,   # Code atom → proposal atom link
     "compares_to":   EdgeType.COMPARES,
-    "causes":        EdgeType.IMPROVES,  # "A causes improvement" ≈ improves
-    "boundary_of":   "DROP",           # Meta-relation → store in node.summary
+    "causes":        EdgeType.IMPROVES,     # "A causes improvement" ≈ improves
+    "boundary_of":   EdgeType.BOUNDARY_OF,  # Meta: defines scope/boundary of concept
     "specializes":   EdgeType.EXTENDS,  # "A specializes B" ≈ extends
 }

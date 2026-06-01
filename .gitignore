@@ -38,3 +38,5 @@ sessions/
 agent-manager/.evo_sessions/
 agent-manager/.evo_checkpoints.db*
 agent-manager/.evo_checkpoints.db-*
+agent-manager_legacy/.evo_checkpoints.db
+agent-manager_legacy/.evo_checkpoints.db-*

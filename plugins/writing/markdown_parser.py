@@ -12,11 +12,14 @@ Phase B 核心模块. 功能:
 """
 
 import json
+import logging
 import re
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # ── 边权重 (GoS 模式) ──
 
@@ -242,9 +245,8 @@ class IndexSyncer:
                 relations.append(edge)
                 node_links[node_id].append(edge)
 
-        # Write JSONL
-        self._write_jsonl("atoms.jsonl", atoms)
-        self._write_jsonl("relations.jsonl", relations)
+        # Write to cc.db (canonical store) and clean up JSONL
+        self._sync_to_cc(atoms, relations)
 
         # Write search index
         search_index = {}
@@ -266,11 +268,50 @@ class IndexSyncer:
             "by_edge_type": _count_by_key(relations, "type"),
         }
 
+    def _sync_to_cc(self, atoms: list[dict], relations: list[dict]):
+        """Write atoms and relations to cc.db (canonical store), then delete JSONL files."""
+        from claim_chain.chain import ClaimChainV2
+
+        cc = ClaimChainV2(self.index_dir / "cc.db")
+
+        # Write atoms
+        for atom in atoms:
+            try:
+                cc.add_atom(
+                    type=atom.get("type", "method"),
+                    title=atom.get("title", ""),
+                    content=atom.get("content", ""),
+                    tags=atom.get("tags", []),
+                    evidence_level=atom.get("evidence_level", "experiment"),
+                    metadata=atom.get("metadata", {}),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to add atom '{atom.get('title', '?')}': {e}")
+
+        # Write relations
+        for rel in relations:
+            try:
+                cc.add_relation(
+                    source_id=str(rel.get("source_id", "")),
+                    target_id=str(rel.get("target_id", "")),
+                    type=rel.get("type", "background"),
+                    evidence=rel.get("evidence", ""),
+                    metadata=rel.get("metadata", {}),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to add relation: {e}")
+
+        cc.close()
+
+        # Delete stale JSONL files (cc.db is the canonical store)
+        for name in ("atoms.jsonl", "relations.jsonl"):
+            p = self.index_dir / name
+            if p.exists():
+                p.unlink()
+                logger.info(f"Deleted stale {name} (data now in cc.db)")
+
     def _write_jsonl(self, filename: str, entries: list[dict]):
         path = self.index_dir / filename
-        # IMPORTANT: sync_all() regenerates atoms/relations from Markdown files.
-        # This DESTROYS any atoms/relations written by the pipeline CC (add_atom/add_relation).
-        # Only call sync_all() when you want to fully rebuild from Markdown.
         with open(path, "w", encoding="utf-8") as f:
             for entry in entries:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -300,8 +341,11 @@ class GraphQuery:
 
     def _load(self):
         if self._atoms is None:
-            self._atoms = _read_jsonl(self.index_dir / "atoms.jsonl")
-            self._relations = _read_jsonl(self.index_dir / "relations.jsonl")
+            from claim_chain.chain import ClaimChainV2
+            cc = ClaimChainV2(self.index_dir / "cc.db")
+            self._atoms = cc.get_atoms()
+            self._relations = cc.get_relations()
+            cc.close()
             self._adj = self._build_adjacency()
 
     def _build_adjacency(self) -> dict:

@@ -98,14 +98,19 @@ class Edge:
 
 @dataclass
 class Node:
-    """A node in the claim graph: method, bottleneck, or paper."""
+    """A node in the claim graph: method, bottleneck, paper, or code artifact."""
     id: str
     title: str
-    type: str = "method"         # "method" | "bottleneck" | "paper"
+    type: str = "method"         # "method" | "bottleneck" | "paper" | "fact" | "component" | "hypothesis" | "experiment" | "verification"
     paper_id: Optional[str] = None
     summary: str = ""
     addresses: list[str] = field(default_factory=list)  # bottleneck IDs
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # EvoScientist extensions — align with SQL nodes table columns
+    content: str = ""                                      # JSON string (atoms.jsonl content field)
+    tags: list[str] = field(default_factory=list)          # e.g. ["baseline", "algorithms"]
+    status: str = "active"                                 # active / superseded / deprecated
+    metadata: dict = field(default_factory=dict)           # extra metadata dict
 
     def to_dict(self) -> dict:
         return {
@@ -116,4 +121,8 @@ class Node:
             "summary": self.summary,
             "addresses": self.addresses,
             "created_at": self.created_at.isoformat(),
+            "content": self.content,
+            "tags": self.tags,
+            "status": self.status,
+            "metadata": self.metadata,
         }

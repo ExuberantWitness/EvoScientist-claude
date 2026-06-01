@@ -251,9 +251,10 @@ pes_controller/
     ├── w4_07_verify_products.py
     ├── w4_08_evolution_memory.py
     ├── w4_09_write_claim_chain.py
-    ├── w5_01_run_step_pipeline.py      # W5 代码实现
-    ├── w5_02_generate_code_plan.py
-    ├── w5_03_wait_user_code.py
+    ├── w5_01_generate_code_spec.py      # W5 代码实现 (spec-first)
+    ├── w5_02_run_step_pipeline.py
+    ├── w5_03_generate_code_plan.py
+    ├── w5_04_wait_user_code.py
     ├── w6_01_run_step_pipeline.py      # W6 结果分析
     ├── w6_02_scan_islands_rubrics.py
     ├── w6_03_multi_agent_discuss.py
@@ -435,23 +436,41 @@ Persona调用拆分为4个独立step: 确定风格->自主上网查阅文献->�
 
 ---
 
-### W5 代码实现 (3个step)
+### W5 代码实现 (4个step)
 
-CODE阶段只读不写CC。refine_atoms移到W6。
+Spec-first: 先生成BuildSpec → 管线分析 → 写入CC → 精炼atoms → 生成实现计划 → 等待用户代码。
 
-#### w5_01_run_step_pipeline.py
+#### w5_01_generate_code_spec.py
+- **职责**: 从CC winner proposal + baseline机制对比提取结构化BuildSpec (ComponentChange/LossSpec/Hyperparams)。保存为build_spec.json。用户审批后进入代码实现。
+- **输入**: PIPELINE_STATE + CC状态
+- **输出**: build_spec.json
+- **交互**: 继承base_phase。调用pes_controller/build_spec.py。
+
+#### w5_02_run_step_pipeline.py
 - **职责**: STEP管线分析。5阶段: CLI->Indexing->Decomposer(概念基元+结构映射+反事实嫁接)->Recomposer(重组方案)->Evaluator(三公理过滤伪创新)。
 - **输入**: PIPELINE_STATE (含CC状态)
 - **输出**: context_bundle {proposals, primitives, mappings, evaluation}
 - **交互**: 继承base_phase(override run逻辑)。读取L1 CC(只读)。
 
-#### w5_02_generate_code_plan.py
-- **职责**: 生成implementation_plan.md。从CC/plan提取交付物清单->Jinja2渲染->写入iterations/N/。
-- **输入**: PIPELINE_STATE + CC状态 + plan.md
-- **输出**: implementation_plan.md路径
-- **交互**: 继承base_phase。调用L1 api.py(只读)和L6 plugins/ideation/plan_templates.py。
+#### w5_03_write_claim_chain.py
+- **职责**: W5代码阶段写入CC (复用W2实现)。非实验数据写入，代码结构同步。
+- **输入**: PIPELINE_STATE
+- **输出**: atoms写入确认
+- **交互**: 继承W2WriteClaimChain。
 
-#### w5_03_wait_user_code.py
+#### w5_04_refine_atoms.py
+- **职责**: CC atoms翻译为具体算法规格。对每个method+proposal atom生成refined_proposal JSON。
+- **输入**: CC atoms列表
+- **输出**: refined_proposals/*.json
+- **交互**: 继承base_phase。调用L1 api.py读写。
+
+#### w5_05_generate_code_plan.py
+- **职责**: 生成implementation_plan.md。从CC/plan提取交付物清单->渲染->写入iterations/N/。
+- **输入**: PIPELINE_STATE + CC状态 + build_spec.json
+- **输出**: implementation_plan.md路径
+- **交互**: 继承base_phase。调用L6 plugins/ideation/plan_templates.py。
+
+#### w5_06_wait_user_code.py
 - **职责**: 等待用户在Claude Code中完成代码实现。轮询code_phase_status=="completed"。
 - **输入**: PIPELINE_STATE
 - **输出**: 等待中/完成信号
@@ -461,9 +480,9 @@ CODE阶段只读不写CC。refine_atoms移到W6。
 
 ### W6 结果分析 (7个step)
 
-island_assign在write_claim_chain前面(先分配Island再写入CC)。
+管线分析 → Island/Rubric扫描 → 多Agent讨论 → 进化记忆 → Island分配 → 精炼atoms → 写入CC。
 
-#### w5_01_run_step_pipeline.py
+#### w6_01_run_step_pipeline.py
 - **职责**: STEP管线分析(W5版本)。侧重实验结果分析: 读取实验数据->性能对比->统计检验。
 - **输入**: PIPELINE_STATE (含code_results)
 - **输出**: 分析结果context_bundle
@@ -476,7 +495,7 @@ island_assign在write_claim_chain前面(先分配Island再写入CC)。
 - **交互**: 继承base_phase。调用L1 cell_island.py和L3 rubric/scheduler.py。
 
 #### w6_03_multi_agent_discuss.py
-- **职责**: 多Agent汇总讨论。analyst+planner+researcher各自独立推理->汇总共识。注入CC迭代上下文(上次实验结论+validates/contradicts)。
+- **职责**: 多Agent汇总讨论。analyst+planner+researcher各自独立推理->汇总共识。注入CC迭代上下文。
 - **输入**: PIPELINE_STATE + 分析结果 + CC迭代上下文
 - **输出**: 讨论结论
 - **交互**: 继承base_phase。调用L5 application通过MCP discuss。
@@ -488,19 +507,19 @@ island_assign在write_claim_chain前面(先分配Island再写入CC)。
 - **交互**: 继承base_phase。调用L2 sdk/memory/memory.py。
 
 #### w6_05_island_assign.py
-- **职责**: 变体入岛分配+检测Island合并候选。在写入CC前完成Island分配，确保写入的atom已带Island归属。
+- **职责**: 变体入岛分配+检测Island合并候选。
 - **输入**: CC状态 + 新实验结果
 - **输出**: Island分配 [{algo_id, island_id}] / 合并建议
 - **交互**: 继承base_phase。调用L1 cell_island.py。
 
 #### w6_06_refine_atoms.py
-- **职责**: CC atoms翻译为具体算法规格(从W5移入)。对每个method+proposal atom生成refined_proposal JSON(含core_method_body/architecture_changes/loss_function_signature等)。在实验结果验证后进行精炼，确保规格反映实验反馈。
-- **输入**: CC atoms列表(从L1获取) + 实验结果
+- **职责**: CC atoms翻译为具体算法规格。对每个method+proposal atom生成refined_proposal JSON(含core_method_body/architecture_changes/loss_function_signature等)。实验反馈后精炼。
+- **输入**: CC atoms列表 + 实验结果
 - **输出**: refined_proposals/*.json
-- **交互**: 继承base_phase。调用L1 api.py读写。写入session/iterations/N/refined_proposals/。
+- **交互**: 继承base_phase。调用L1 api.py读写。
 
 #### w6_07_write_claim_chain.py
-- **职责**: 将W6实验结果+Island分配+分析结论写入CC。创建experiment atom+validates/contradicts relation。此时atom已含Island归属和refined规格。
+- **职责**: 将W6实验结果+Island分配+refined规格写入CC。创建experiment atom+validates/contradicts relation。
 - **输入**: W6分析结果 + Island分配 + refined atoms
 - **输出**: CC写入确认
 - **交互**: 继承base_phase。调用L1 claim_chain/api.py。
@@ -509,7 +528,7 @@ island_assign在write_claim_chain前面(先分配Island再写入CC)。
 
 ### W7 论文写作
 
-#### w8_01_invoke_skill_write.py
+#### w7_01_invoke_skill_write.py
 - **职责**: 调用/evo-write skill。基于全部CC状态+实验结果->生成论文markdown。不编造结果，包含负结果和局限性。
 - **输入**: PIPELINE_STATE + CC状态
 - **输出**: final_report.md路径

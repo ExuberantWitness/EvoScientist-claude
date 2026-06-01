@@ -23,15 +23,13 @@ logger = logging.getLogger(__name__)
 
 # How long a phase may run before flagged
 PHASE_MAX_DURATION: dict[str, int] = {
-    "W2.1 Problem Analysis":  999999,
-    "W2.2 Solution Directions": 999999,
-    "W2.3 Search Keywords":   999999,
-    "W3 Research":  999999,
-    "W3.5 Ideate":  999999,
-    "W4 Code":      999999,
-    "W5 Analyze":   999999,
-    "W6 Write":     999999,
-    "W7 Review":    999999,
+    "W2 问题分析": 999999,
+    "W3 方案方向": 999999,
+    "W4 具体方案生成": 999999,
+    "W5 代码实现": 999999,
+    "W6 结果分析": 999999,
+    "W7 论文写作": 999999,
+    "W8 审阅": 999999,
 }
 
 # How long a step type may run before flagged
@@ -51,7 +49,7 @@ STEP_MAX_DURATION: dict[str, int] = {
 }
 
 # Agent SDK phases — these should have agent_heartbeat
-AGENT_SDK_PHASES = frozenset({"W4 Code", "W6 Write", "W7 Review"})
+AGENT_SDK_PHASES = frozenset({"W5 代码实现", "W7 论文写作", "W8 审阅"})
 
 # Timeout alerts disabled
 NO_EVENTS_STALL_SEC = 999999

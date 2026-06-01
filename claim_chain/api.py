@@ -54,7 +54,7 @@ class ClaimChainAPI:
         return {"atoms_added": 0, "relations_added": 0, "atom_ids": []}
 
     def ingest_text(self, text: str, source: str, tags: list[str] | None = None) -> dict:
-        """自由文本 -> CC fact atom (with ontology validation + dedup)"""
+        """自由文本 -> CC fact atom (with ontology validation + BGE-M3 dedup)"""
         from claim_chain.ontology.alignment import OntologyGatekeeper
         tags = tags or ["literature"]
         gatekeeper = OntologyGatekeeper()
@@ -62,6 +62,16 @@ class ClaimChainAPI:
         result = gatekeeper.validate_atom(atom_dict)
         if not result.valid:
             return {"atoms_added": 0, "relations_added": 0, "errors": result.errors}
+
+        # BGE-M3 dedup: check against existing CC atoms before writing
+        existing = self.chain.all_nodes()
+        existing_dicts = [n.to_dict() if hasattr(n, 'to_dict') else n for n in existing]
+        dupes = gatekeeper.find_duplicates(atom_dict, existing_dicts, threshold=0.85)
+        if dupes:
+            return {"atoms_added": 0, "relations_added": 0,
+                    "duplicates_found": len(dupes),
+                    "detail": f"Dedup: matched existing atom (sim={dupes[0].get('similarity', 0):.3f})"}
+
         atom = self.chain.add_atom(type="fact", title=atom_dict["title"],
                                     content=atom_dict["content"], tags=atom_dict["tags"])
         return {"atoms_added": 1, "relations_added": 0, "atom_ids": [getattr(atom, 'id', 0)]}

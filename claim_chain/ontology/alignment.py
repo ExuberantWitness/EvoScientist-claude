@@ -310,25 +310,22 @@ class OntologyGatekeeper:
                     json.dumps(a, ensure_ascii=False) for a in existing_atoms
                 ]
                 embs = rnd._encode(texts)
-                embeddings = {str(new_atom.get("title", "")): embs[0]}
-                for i, a in enumerate(existing_atoms):
-                    embeddings[str(a.get("title", ""))] = embs[i + 1]
+                # Key by position index (0 = new atom, 1..N = existing atoms)
+                embeddings = {0: embs[0]}
+                for i in range(len(existing_atoms)):
+                    embeddings[i + 1] = embs[i + 1]
             except Exception:
                 return []  # BGE-M3 not available, skip dedup
 
-        new_id = str(new_atom.get("id", new_atom.get("title", "")))
-        new_emb = embeddings.get(new_id)
+        new_emb = embeddings.get(0)
         if new_emb is None:
             return []
 
         duplicates = []
         new_norm = new_emb / (np.linalg.norm(new_emb) + 1e-8)
 
-        for existing in existing_atoms:
-            existing_id = str(existing.get("id", ""))
-            if existing_id == new_id:
-                continue
-            existing_emb = embeddings.get(existing_id)
+        for i, existing in enumerate(existing_atoms):
+            existing_emb = embeddings.get(i + 1)
             if existing_emb is None:
                 continue
 

@@ -52,8 +52,9 @@ def bootstrap(research_topic: str, project_dir: str) -> dict:
         # Simple keyword-based domain detection
         if any(kw.replace("-", " ") in topic_normalized for kw in [
             "reinforcement learning", "rl", "actor-critic", "actor critic",
-            "hopper", "gym", "policy gradient", "q-learning", "deep rl",
-            "continuous control", "mujoco", "ant", "halfcheetah", "walker",
+            "policy gradient", "q-learning", "deep rl", "continuous control",
+            "model-free", "model-based rl", "exploration", "reward function",
+            "markov decision", "mdp",
         ]):
             domain_name = "reinforcement_learning"
         elif any(kw.replace("-", " ") in topic_normalized for kw in [

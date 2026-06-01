@@ -49,7 +49,7 @@ def _checksum(data: Any) -> str:
 def _default_state() -> dict:
     return {
         "protocol_version": PROTOCOL_VERSION,
-        "phase": "W2.1 Problem Analysis",
+        "phase": "W2 问题分析",
         "iteration": 0,
         "sub_loop_step": 0,
         "status": "not_initialized",

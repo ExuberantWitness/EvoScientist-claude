@@ -33,12 +33,17 @@ CREATE TABLE IF NOT EXISTS nodes (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
     type        TEXT NOT NULL DEFAULT 'method'
-                CHECK (type IN ('method', 'bottleneck', 'paper')),
+                CHECK (type IN ('method', 'bottleneck', 'paper', 'fact', 'component', 'hypothesis', 'experiment', 'verification')),
     paper_id    TEXT,
     summary     TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
-    -- SGT-MCTS pre-allocated fields
-    embedding   BLOB
+    -- EvoScientist extensions (v2 schema)
+    content     TEXT NOT NULL DEFAULT '',
+    tags        TEXT NOT NULL DEFAULT '[]',
+    status      TEXT NOT NULL DEFAULT 'active',
+    metadata    TEXT NOT NULL DEFAULT '{{}}',
+    -- BGE-M3 embedding (1024-dim float array as JSON string)
+    embedding   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS bottlenecks (
@@ -82,6 +87,154 @@ CREATE INDEX IF NOT EXISTS idx_edges_superseded ON edges(superseded_by);
     edge_placeholders=", ".join(f"'{e.value}'" for e in EdgeType),
 )
 
+# Schema version stored in PRAGMA user_version
+CURRENT_SCHEMA_VERSION = 2
+
+
+def migrate_schema(db_path: str | Path) -> bool:
+    """Migrate existing cc.db from v1 (BLOB embedding, no content/tags/status/metadata) to v2.
+
+    Uses table-rename strategy since SQLite doesn't support ALTER COLUMN or CHECK modification.
+    Handles both Schema A (8 node types) and Schema B (3 node types).
+    Returns True if migration was performed, False if already at current version.
+    """
+    db_path = Path(db_path)
+    if not db_path.exists():
+        return False
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute("PRAGMA user_version")
+        version = cur.fetchone()[0]
+        if version >= CURRENT_SCHEMA_VERSION:
+            return False
+
+        # Check if migration is needed
+        cur = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='nodes'")
+        row = cur.fetchone()
+        if row is None:
+            return False
+        old_ddl = row[0]
+        needs_migration = "BLOB" in old_ddl or "content" not in old_ddl
+
+        if not needs_migration:
+            conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+            conn.commit()
+            return False
+
+        # Detect old column names
+        col_check = conn.execute("SELECT * FROM nodes LIMIT 0")
+        old_cols = [d[0] for d in col_check.description]
+        has_content = "content" in old_cols
+
+        # 1. Disable FKs, rename old tables
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("ALTER TABLE nodes RENAME TO nodes_old")
+        conn.execute("ALTER TABLE edges RENAME TO edges_old")
+
+        # 2. Create new nodes and edges tables with v2 schema
+        bottleneck_placeholders = ", ".join(f"'{b}'" for b in sorted(BOTTLENECK_CATEGORIES))
+        edge_placeholders = ", ".join(f"'{e.value}'" for e in EdgeType)
+        conn.execute(f"""
+            CREATE TABLE nodes (
+                id          TEXT PRIMARY KEY,
+                title       TEXT NOT NULL,
+                type        TEXT NOT NULL DEFAULT 'method'
+                            CHECK (type IN ('method','bottleneck','paper','fact','component','hypothesis','experiment','verification')),
+                paper_id    TEXT,
+                summary     TEXT NOT NULL DEFAULT '',
+                created_at  TEXT NOT NULL,
+                content     TEXT NOT NULL DEFAULT '',
+                tags        TEXT NOT NULL DEFAULT '[]',
+                status      TEXT NOT NULL DEFAULT 'active',
+                metadata    TEXT NOT NULL DEFAULT '{{}}',
+                embedding   TEXT
+            )
+        """)
+        conn.execute(f"""
+            CREATE TABLE edges (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                src             TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                dst             TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                type            TEXT NOT NULL CHECK (type IN ({edge_placeholders})),
+                rho_bottleneck  TEXT REFERENCES bottlenecks(id),
+                rho_mechanism   TEXT,
+                rho_tradeoff    TEXT,
+                rho_confidence  REAL CHECK (rho_confidence BETWEEN 0 AND 1),
+                created_at      TEXT NOT NULL,
+                superseded_by   INTEGER REFERENCES edges(id),
+                visit_count     INTEGER NOT NULL DEFAULT 0,
+                value_sum       REAL NOT NULL DEFAULT 0.0,
+                UNIQUE(src, dst, type)
+            )
+        """)
+
+        # 3. Copy nodes: map old columns → new columns
+        if has_content:
+            conn.execute("""
+                INSERT INTO nodes (id, title, type, paper_id, summary, created_at,
+                                   content, tags, status, metadata, embedding)
+                SELECT id, title, type, paper_id, summary, created_at,
+                       COALESCE(content, ''), COALESCE(tags, '[]'),
+                       COALESCE(status, 'active'), COALESCE(metadata, '{}'),
+                       NULL
+                FROM nodes_old
+            """)
+        else:
+            conn.execute("""
+                INSERT INTO nodes (id, title, type, paper_id, summary, created_at)
+                SELECT id, title, type, paper_id, summary, created_at
+                FROM nodes_old
+            """)
+        conn.execute("DROP TABLE nodes_old")
+
+        # 4. Copy edges
+        conn.execute("""
+            INSERT INTO edges (id, src, dst, type, rho_bottleneck, rho_mechanism,
+                               rho_tradeoff, rho_confidence, created_at,
+                               superseded_by, visit_count, value_sum)
+            SELECT id, src, dst, type, rho_bottleneck, rho_mechanism,
+                   rho_tradeoff, rho_confidence, created_at,
+                   superseded_by, visit_count, value_sum
+            FROM edges_old
+        """)
+        conn.execute("DROP TABLE edges_old")
+
+        # 5. Recreate indexes
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_superseded ON edges(superseded_by)")
+
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        conn.commit()
+
+        import logging
+        logging.getLogger("claim_chain").info(
+            f"Schema migrated to v{CURRENT_SCHEMA_VERSION}: {db_path}"
+        )
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _row_to_node(row, addresses: list[str]) -> Node:
+    """Convert a SQL row (10 columns) to a Node dataclass."""
+    return Node(
+        id=row[0], title=row[1], type=row[2], paper_id=row[3],
+        summary=row[4],
+        created_at=datetime.fromisoformat(row[5]),
+        content=row[6] if len(row) > 6 else "",
+        tags=json.loads(row[7]) if len(row) > 7 and row[7] else [],
+        status=row[8] if len(row) > 8 else "active",
+        metadata=json.loads(row[9]) if len(row) > 9 and row[9] else {},
+        addresses=addresses,
+    )
+
 
 class ClaimChainV2:
     """SQLite-backed Intern-Atlas compliant Claim Chain."""
@@ -90,6 +243,8 @@ class ClaimChainV2:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: Optional[sqlite3.Connection] = None
+        # Auto-migrate schema before first use (no-op if already current)
+        migrate_schema(self.db_path)
 
     # ── Connection Management ──
 
@@ -99,6 +254,7 @@ class ClaimChainV2:
             self._conn = sqlite3.connect(str(self.db_path))
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
+            self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(SCHEMA)
         return self._conn
 
@@ -110,12 +266,16 @@ class ClaimChainV2:
     # ── CRUD: Nodes ──
 
     def add_node(self, node: Node) -> Node:
-        """Insert a node. Returns the node (unchanged)."""
+        """Insert a node. Returns the node (unchanged). embedding is set NULL for later batch fill."""
+        tags_json = json.dumps(node.tags) if node.tags else "[]"
+        metadata_json = json.dumps(node.metadata, ensure_ascii=False) if node.metadata else "{}"
         self.conn.execute(
-            "INSERT OR IGNORE INTO nodes (id, title, type, paper_id, summary, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO nodes (id, title, type, paper_id, summary, created_at, "
+            "content, tags, status, metadata, embedding) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
             (node.id, node.title, node.type, node.paper_id,
-             node.summary, node.created_at.isoformat()),
+             node.summary, node.created_at.isoformat(),
+             node.content, tags_json, node.status, metadata_json),
         )
         # Insert bottleneck addresses
         for bid in node.addresses:
@@ -127,37 +287,28 @@ class ClaimChainV2:
 
     def get_node(self, node_id: str) -> Optional[Node]:
         row = self.conn.execute(
-            "SELECT id, title, type, paper_id, summary, created_at FROM nodes WHERE id = ?",
+            "SELECT id, title, type, paper_id, summary, created_at, "
+            "content, tags, status, metadata FROM nodes WHERE id = ?",
             (node_id,),
         ).fetchone()
         if row is None:
             return None
-        # Load addresses
         addrs = self.conn.execute(
             "SELECT bottleneck_id FROM node_addresses WHERE node_id = ?", (node_id,)
         ).fetchall()
-        return Node(
-            id=row[0], title=row[1], type=row[2], paper_id=row[3],
-            summary=row[4],
-            addresses=[a[0] for a in addrs],
-            created_at=datetime.fromisoformat(row[5]),
-        )
+        return _row_to_node(row, [a[0] for a in addrs])
 
     def all_nodes(self) -> list[Node]:
         rows = self.conn.execute(
-            "SELECT id, title, type, paper_id, summary, created_at FROM nodes ORDER BY created_at"
+            "SELECT id, title, type, paper_id, summary, created_at, "
+            "content, tags, status, metadata FROM nodes ORDER BY created_at"
         ).fetchall()
         nodes = []
         for r in rows:
             addrs = self.conn.execute(
                 "SELECT bottleneck_id FROM node_addresses WHERE node_id = ?", (r[0],)
             ).fetchall()
-            nodes.append(Node(
-                id=r[0], title=r[1], type=r[2], paper_id=r[3],
-                summary=r[4],
-                addresses=[a[0] for a in addrs],
-                created_at=datetime.fromisoformat(r[5]),
-            ))
+            nodes.append(_row_to_node(r, [a[0] for a in addrs]))
         return nodes
 
     # ── CRUD: Bottlenecks ──
@@ -337,20 +488,24 @@ class ClaimChainV2:
                  metadata: dict | None = None) -> dict:
         """Backward-compatible API mirroring claim_chain.py add_atom().
 
-        Converts v1-style atom dict to v2 Node + optional bottleneck addresses.
+        Converts v1-style atom dict to v2 Node. Persists content, tags, metadata to SQL.
+        embedding is set NULL for later batch fill via bge_socket_server.
         """
-        import time
-        from datetime import datetime, timezone
+        import time, uuid
 
         node_id = metadata.get("id") if metadata else None
         if not node_id:
-            node_id = f"node_{int(time.time() * 1000)}"
+            node_id = f"node_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
 
         node = Node(
             id=str(node_id),
             title=title,
             type=type if type in ("method", "fact", "component", "hypothesis", "experiment", "bottleneck", "paper") else "method",
             summary=content[:500] if content else "",
+            content=content,
+            tags=tags or [],
+            status="active",
+            metadata=metadata or {},
             addresses=metadata.get("addresses", []) if metadata else [],
             created_at=datetime.now(timezone.utc),
         )
@@ -386,12 +541,15 @@ class ClaimChainV2:
             if bottleneck_id:
                 # Auto-register bottleneck to satisfy FK constraint
                 self.add_bottleneck(bottleneck_id, metadata.get("bottleneck_desc", ""))
-            rho = Rho(
-                bottleneck=bottleneck_id,
-                mechanism=metadata.get("mechanism", evidence or ""),
-                tradeoff=metadata.get("tradeoff", ""),
-                confidence=min(1.0, max(0.0, metadata.get("confidence", 0.5))),
-            )
+                tradeoff = metadata.get("tradeoff", "")
+                if not tradeoff:
+                    tradeoff = f"Relation from {source_id} to {target_id}"
+                rho = Rho(
+                    bottleneck=bottleneck_id,
+                    mechanism=metadata.get("mechanism", evidence or ""),
+                    tradeoff=tradeoff,
+                    confidence=min(1.0, max(0.0, metadata.get("confidence", 0.5))),
+                )
 
         from datetime import datetime, timezone
         edge = Edge(
@@ -415,47 +573,114 @@ class ClaimChainV2:
 
 
 
+    # ── Embedding methods ──
+
+    def get_atoms_with_embeddings(self) -> list[dict]:
+        """Return all atoms with embedding and text suitable for BGE-M3 encoding.
+
+        Returns list of {id, title, type, content, tags, status, metadata, embedding, embed_text}.
+        embed_text is formatted as '{title}: {summary} [tags: ...]' for embedding computation.
+        """
+        rows = self.conn.execute(
+            "SELECT id, title, type, content, tags, status, metadata, summary, embedding "
+            "FROM nodes ORDER BY created_at"
+        ).fetchall()
+
+        result = []
+        for r in rows:
+            tags_list = json.loads(r[4]) if r[4] else []
+            embedding = json.loads(r[8]) if r[8] else None
+            embed_text = f"{r[1]}: {r[7][:500]} [tags: {', '.join(tags_list)}]"
+            result.append({
+                "id": r[0], "title": r[1], "type": r[2],
+                "content": r[3] or r[7] or "{}",
+                "tags": tags_list,
+                "status": r[5] or "active",
+                "metadata": json.loads(r[6]) if r[6] else {},
+                "embedding": embedding,
+                "embed_text": embed_text,
+            })
+        return result
+
+    def update_embedding(self, atom_id: str, embedding: list[float]) -> None:
+        """Update the embedding for a single atom."""
+        emb_json = json.dumps(embedding, ensure_ascii=False)
+        self.conn.execute(
+            "UPDATE nodes SET embedding = ? WHERE id = ?",
+            (emb_json, atom_id),
+        )
+
+    def get_null_embedding_atoms(self) -> list[tuple[str, str]]:
+        """Return (id, embed_text) for atoms with NULL embedding."""
+        rows = self.conn.execute(
+            "SELECT id, title, summary, tags FROM nodes WHERE embedding IS NULL"
+        ).fetchall()
+        result = []
+        for r in rows:
+            tags_list = json.loads(r[3]) if r[3] else []
+            text = f"{r[1]}: {r[2][:500]} [tags: {', '.join(tags_list)}]"
+            result.append((r[0], text))
+        return result
+
     # ── Compatibility with old ClaimChain API ──
-    
+
     @property
     def atoms_path(self):
-        """Compatibility: old code expects this path attribute"""
+        """Deprecated: use get_atoms() instead. Returns path for backward compat only."""
         return self.db_path.parent / "atoms.jsonl"
-    
+
     @property
     def relations_path(self):
-        """Compatibility: old code expects this path attribute"""
+        """Deprecated: use get_relations() instead. Returns path for backward compat only."""
         return self.db_path.parent / "relations.jsonl"
-    
+
     def get_atoms(self, limit: int = 0, type: str | None = None, tags: list[str] | None = None):
-        """Compatibility wrapper for all_nodes()"""
+        """Compatibility wrapper for all_nodes(). Reads from cc.db nodes table."""
         nodes = self.all_nodes()
         result = []
         for n in nodes:
-            d = {"id": n.id, "type": n.type.value if hasattr(n.type, 'value') else str(n.type),
-                 "title": n.name, "content": n.content or "{}", "tags": n.tags or []}
+            if type and n.type != type:
+                continue
+            if tags and not any(t in (n.tags or []) for t in tags):
+                continue
+            d = {"id": n.id, "type": n.type if isinstance(n.type, str) else str(n.type),
+                 "title": n.title,
+                 "content": n.content or n.summary or "{}",
+                 "tags": n.tags or [],
+                 "status": n.status or "active",
+                 "metadata": n.metadata or {}}
             result.append(d)
         return result[:limit] if limit > 0 else result
-    
-    def get_relations(self, limit: int = 0, source_id: str | None = None, 
+
+    def get_relations(self, limit: int = 0, source_id: str | None = None,
                       target_id: str | None = None, type: str | None = None):
-        """Compatibility wrapper for all_edges()"""
+        """Compatibility wrapper for all_edges(). Now supports filtering."""
         edges = self.all_edges()
         result = []
         for e in edges:
-            d = {"source_id": e.source_id, "target_id": e.target_id, 
+            if source_id and e.src != source_id:
+                continue
+            if target_id and e.dst != target_id:
+                continue
+            if type and e.type.value != type:
+                continue
+            d = {"source_id": e.src, "target_id": e.dst,
                  "type": e.type.value if hasattr(e.type, 'value') else str(e.type),
-                 "evidence": e.evidence or "{}", "id": e.id}
+                 "evidence": json.dumps({"rho_mechanism": e.rho.mechanism if e.rho else ""}),
+                 "id": str(hash((e.src, e.dst, e.type)))}
             result.append(d)
         return result[:limit] if limit > 0 else result
-    
+
     def get_atom(self, atom_id):
-        """Compatibility: lookup atom by id"""
+        """Compatibility: lookup atom by id from cc.db."""
         nodes = self.all_nodes()
         for n in nodes:
             if str(n.id) == str(atom_id):
-                return {"id": n.id, "type": str(n.type), "title": n.name, 
-                        "content": n.content or "{}", "tags": n.tags or []}
+                return {"id": n.id, "type": str(n.type), "title": n.title,
+                        "content": n.content or n.summary or "{}",
+                        "tags": n.tags or [],
+                        "status": n.status or "active",
+                        "metadata": n.metadata or {}}
         return None
 
 class ValidationError(Exception):

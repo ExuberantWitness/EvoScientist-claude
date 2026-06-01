@@ -59,6 +59,22 @@ def _load_jsonl(path: Path):
     return entries
 
 
+def _load_cc_data(claim_chain_path: Path) -> tuple[list[dict], list[dict]]:
+    """Load atoms and relations from cc.db.
+
+    Tries both canonical locations: claim_chain_path/cc.db and ../_index/cc.db.
+    """
+    from claim_chain.chain import ClaimChainV2
+    for cc_db in (claim_chain_path / "cc.db", claim_chain_path.parent / "_index" / "cc.db"):
+        if cc_db.exists():
+            cc = ClaimChainV2(cc_db)
+            atoms = cc.get_atoms()
+            relations = cc.get_relations()
+            cc.close()
+            return atoms, relations
+    return [], []
+
+
 def _append_jsonl(path: Path, entry: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
@@ -222,7 +238,7 @@ class IslandManager:
     def propose_merges(self, claim_chain_path: Path) -> list[dict]:
         """Check Claim Chain for specializes/derives relations between islands.
         Returns list of merge proposals."""
-        relations = _load_jsonl(claim_chain_path / "relations.jsonl")
+        relations = _load_cc_data(claim_chain_path)[1]
         proposals = []
         merge_types = {"specializes", "derives"}
         for r in relations:
@@ -546,8 +562,7 @@ class AutoEvolveEngine:
               "total_validates": N, "total_contradicts": N,
             }
         """
-        atoms = _load_jsonl(self.claim_dir / "atoms.jsonl")
-        relations = _load_jsonl(self.claim_dir / "relations.jsonl")
+        atoms, relations = _load_cc_data(self.claim_dir)
         atom_map = {a["id"]: a for a in atoms}
 
         knowledge = {
@@ -1030,7 +1045,7 @@ class AutoEvolveEngine:
                             classification: str, parent_id: str | None, parent_score: float | None) -> int:
         """Write atoms and relations to Claim Chain. Returns method atom ID."""
         from claim_chain.chain import ClaimChain
-        cc = ClaimChain(self.workspace)
+        cc = ClaimChain(self.workspace / "_index" / "cc.db")
 
         existing_atoms = cc.get_atoms(limit=500, status=None)
 
@@ -1203,7 +1218,7 @@ class AutoEvolveEngine:
     def _write_rubric_to_cc(self, variant_a: dict, variant_b: dict, evaluation: dict):
         """Write rubric comparison results to Claim Chain as fact atom + compares_to relation."""
         from claim_chain.chain import ClaimChain
-        cc = ClaimChain(self.workspace)
+        cc = ClaimChain(self.workspace / "_index" / "cc.db")
         existing = cc.get_atoms(limit=500, status=None)
 
         dim_summary = ", ".join(
@@ -1280,8 +1295,7 @@ class AutoEvolveEngine:
 
             # Check 1: Claim Chain — do target island's atoms contradict our params?
             our_params = current_entry.get("params", {})
-            cc_atoms = _load_jsonl(self.claim_dir / "atoms.jsonl")
-            cc_relations = _load_jsonl(self.claim_dir / "relations.jsonl")
+            cc_atoms, cc_relations = _load_cc_data(self.claim_dir)
 
             target_variants = target_island.get("variants", [])
             target_atom_ids = set()
@@ -1329,7 +1343,7 @@ class AutoEvolveEngine:
 
             # Write migration to Claim Chain
             from claim_chain.chain import ClaimChain
-            cc = ClaimChain(self.workspace)
+            cc = ClaimChain(self.workspace / "_index" / "cc.db")
             cc.add_atom(
                 type="fact",
                 title=f"Migration: {variant_id} → {target_island['id']}",

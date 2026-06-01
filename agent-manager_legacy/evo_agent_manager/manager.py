@@ -1190,6 +1190,7 @@ class AgentManager:
                     "rubric_novelty_scored": p.get("rubric_novelty_scored", 5.0),
                     "rnd_coarse": p.get("rnd_coarse", 0.5),
                     "rnd_fine": p.get("rnd_fine", 0.5),
+                    "verified_novelty": p.get("verified_novelty", None),
                     # Phase-specific dimension scores
                     **{d: p.get(d, 0) for d in dim_names},
                 }

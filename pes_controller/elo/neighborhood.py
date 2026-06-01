@@ -83,7 +83,7 @@ class RNDEvaluator:
         emb = self._encode([text])[0]
         entry = {
             "id": f"kb_{int(time.time()*1000)}_{len(self._entries)}",
-            "text": text[:2000],
+            "text": text[:1000000],
             "embedding": emb.tolist(),
             "source_type": source_type,
             "metadata": metadata or {},
@@ -105,7 +105,7 @@ class RNDEvaluator:
                 continue
             self._entries.append({
                 "id": f"kb_{int(time.time()*1000)}_{len(self._entries)}",
-                "text": it["text"][:2000],
+                "text": it["text"][:1000000],
                 "embedding": embs[i].tolist(),
                 "source_type": it.get("source_type", ""),
                 "metadata": it.get("metadata", {}),
@@ -175,7 +175,7 @@ class RNDEvaluator:
 
     def compute_rnd_batch(self, proposals: list[dict]) -> list[dict]:
         """Compute RND for multiple proposals. Each dict needs 'method_sketch' or 'text'."""
-        texts = [p.get("method_sketch", p.get("text", ""))[:2000] for p in proposals]
+        texts = [p.get("method_sketch", p.get("text", ""))[:1000000] for p in proposals]
         embs = self._encode(texts)
         results = []
         for i, p in enumerate(proposals):

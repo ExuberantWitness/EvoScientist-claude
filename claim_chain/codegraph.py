@@ -192,6 +192,20 @@ def structure_to_cc_atoms(
         # Pre-extract all source snippets for this directory
         all_snippets = extract_all_snippets(code_dir, {fname: data})
 
+        # Create algorithm node first (so implements relations have a valid FK target)
+        algo_node_id = stem
+        if cc is not None:
+            try:
+                cc.add_atom(
+                    type="method",
+                    title=stem.upper(),
+                    content=json.dumps({"algorithm": stem, "file": fname}),
+                    tags=["baseline", "codegraph", stem],
+                    metadata={"id": stem},
+                )
+            except Exception:
+                pass  # May already exist
+
         # Create component atoms (always, even without cc)
         for node in data.get("nodes", []):
             name = node.get("name", "?")
@@ -222,7 +236,7 @@ def structure_to_cc_atoms(
             }
             atoms.append(atom_dict)
 
-            # If CC instance provided, also add to CC
+            # If CC instance provided, also add to CC with inline dedup
             if cc is not None:
                 atom = cc.add_atom(
                     type=atom_dict["type"],
@@ -232,16 +246,41 @@ def structure_to_cc_atoms(
                 )
                 atoms[-1] = atom  # Replace dict with actual atom object
 
+                # ── Inline dedup: find same-named component from other algorithms ──
+                func_name = name
+                for existing in cc.all_nodes():
+                    existing_title = existing.title if hasattr(existing, 'title') else existing.get('title', '')
+                    if not existing_title or existing_title == atom_dict["title"]:
+                        continue
+                    # Same function name, different algorithm prefix
+                    if "." in existing_title and "." in atom_dict["title"]:
+                        existing_func = existing_title.split(".", 1)[1]
+                        if existing_func == func_name:
+                            existing_id = existing.id if hasattr(existing, 'id') else existing.get('id', '')
+                            new_id = atom.get("id", "")
+                            if existing_id and new_id and existing_id != new_id:
+                                try:
+                                    cc.add_relation(
+                                        source_id=str(new_id),
+                                        target_id=str(existing_id),
+                                        type="uses_component",
+                                        evidence=f"Same function '{func_name}' across algorithms",
+                                    )
+                                    logger.debug(f"dedup linked: {atom_dict['title']} ↔ {existing_title}")
+                                except Exception:
+                                    pass
+                                break  # One relation per atom is enough
+
             # Create relation: algo → implements → each component
         if cc is not None:
             for atom in atoms:
+                atom_id = atom.get("id", "") if isinstance(atom, dict) else getattr(atom, "id", "")
                 try:
-                    cc.add_relation(stem, atom["id"], "implements")
+                    cc.add_relation(stem, str(atom_id), "uses_component")
                 except Exception:
                     pass
 
             # Create dependency edges as CC relations
-        if cc is not None:
             for edge in data.get("edges", []):
                 try:
                     cc.add_relation(
@@ -533,3 +572,132 @@ def algo_mechanism_summary(code_dir: Path, algo: str) -> dict:
         "algo": algo,
         "mechanisms": sorted(all_mechs),
     }
+
+
+# ---------------------------------------------------------------------------
+# BGE-M3 + MiMo LLM dedup for codegraph atoms
+# ---------------------------------------------------------------------------
+
+async def dedup_codegraph_atoms(cc, code_dir: Path, threshold: float = 0.82, max_mimo_calls: int = 20):
+    """BGE-M3 + MiMo LLM semantic dedup for codegraph component atoms.
+
+    Two-tier pipeline (efficient batch encoding):
+      1. BGE-M3: single batch encode ALL component snippets → cosine similarity matrix
+         Only compare cross-algorithm pairs (ignoring same-name pairs already linked inline)
+      2. MiMo LLM: top-k pairs above threshold → fine-grained structural diff judge
+         MiMo API: api.xiaomimimo.com/v1, model=mimo-v2.5-pro
+
+    Creates 'uses_component' relations for mergeable pairs.
+    """
+    import numpy as np
+    from pes_controller.elo.neighborhood import RNDEvaluator
+
+    component_atoms = [a for a in cc.all_nodes() if a.type == "component"]
+    if len(component_atoms) < 10:
+        logger.info(f"dedup: {len(component_atoms)} components, skipping BGE-M3")
+        return {"bgem3_pairs": 0, "mimo_calls": 0, "relations_created": 0, "skipped": True}
+
+    # Extract snippets + algo prefix
+    snippets = []
+    atom_info = []  # (atom, algo_prefix, func_name)
+    for a in component_atoms:
+        title = a.title
+        algo = title.split(".")[0] if "." in title else "?"
+        func = title.split(".", 1)[1] if "." in title else title
+        try:
+            content = json.loads(a.summary) if a.summary else {}
+            snippet = content.get("source_snippet", a.summary)[:800]
+        except (json.JSONDecodeError, TypeError):
+            snippet = a.summary[:800]
+        snippets.append(snippet)
+        atom_info.append((a, algo, func))
+
+    # Step 1: Single batch BGE-M3 encode
+    logger.info(f"dedup: BGE-M3 encoding {len(snippets)} snippets...")
+    rnd = RNDEvaluator()
+    try:
+        embs = np.array(rnd._encode(snippets))
+        norms = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-8)
+        sim_matrix = np.dot(norms, norms.T)
+    except Exception as e:
+        logger.warning(f"BGE-M3 batch encode failed: {e}")
+        return {"bgem3_pairs": 0, "mimo_calls": 0, "relations_created": 0, "error": str(e)}
+
+    # Step 2: Find high-similarity cross-algo pairs (not same-name)
+    candidates = []
+    for i in range(len(component_atoms)):
+        for j in range(i + 1, len(component_atoms)):
+            ai, algo_i, func_i = atom_info[i]
+            aj, algo_j, func_j = atom_info[j]
+            if algo_i == algo_j:
+                continue  # Same algorithm, skip
+            if func_i == func_j:
+                continue  # Already linked by inline name-based dedup
+            sim = float(sim_matrix[i, j])
+            if sim >= threshold:
+                candidates.append((sim, i, j))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    logger.info(f"dedup: {len(candidates)} BGE-M3 pairs above threshold ({threshold})")
+
+    # Step 3: MiMo LLM fine-grained diff on top-k pairs
+    relations_created = 0
+    mimo_calls = 0
+    for sim, i, j in candidates[:max_mimo_calls]:
+        ai, algo_i, _ = atom_info[i]
+        aj, algo_j, _ = atom_info[j]
+        try:
+            diff = await llm_judge_component_diff(
+                comp_a_name=ai.title, comp_a_code=snippets[i],
+                comp_b_name=aj.title, comp_b_code=snippets[j],
+                algo_a_mechs=tag_mechanisms(snippets[i]),
+                algo_b_mechs=tag_mechanisms(snippets[j]),
+            )
+            mimo_calls += 1
+        except Exception as e:
+            logger.warning(f"MiMo failed for '{ai.title}' vs '{aj.title}': {e}")
+            if sim >= 0.92:
+                diff = {"similarity": 8, "is_mergeable": True}
+            else:
+                continue
+
+        if diff.get("is_mergeable") or diff.get("similarity", 0) >= 7:
+            try:
+                cc.add_relation(
+                    source_id=ai.id, target_id=aj.id,
+                    type="uses_component",
+                    evidence=json.dumps({
+                        "bgem3_sim": round(sim, 3),
+                        "mimo_sim": diff.get("similarity", 0),
+                        "key_diffs": diff.get("key_diffs", [])[:3],
+                        "shared": diff.get("shared_patterns", [])[:3],
+                    }),
+                )
+                relations_created += 1
+                logger.info(f"MiMo dedup: {ai.title} ↔ {aj.title} (BGE-M3={sim:.3f}, MiMo={diff.get('similarity',0)})")
+            except Exception as e:
+                logger.warning(f"add_relation failed: {e}")
+
+    # Also add BGE-M3-only links for remaining candidates (no MiMo)
+    for sim, i, j in candidates[max_mimo_calls:]:
+        if sim >= 0.90:  # Higher threshold for BGE-M3-only
+            ai, _, _ = atom_info[i]
+            aj, _, _ = atom_info[j]
+            try:
+                cc.add_relation(
+                    source_id=ai.id, target_id=aj.id,
+                    type="uses_component",
+                    evidence=json.dumps({"bgem3_sim": round(sim, 3), "method": "BGE-M3 only"}),
+                )
+                relations_created += 1
+            except Exception:
+                pass
+
+    cc.commit()
+    result = {
+        "bgem3_pairs": len(candidates),
+        "mimo_calls": mimo_calls,
+        "relations_created": relations_created,
+    }
+    logger.info(f"dedup done: {result}")
+    return result

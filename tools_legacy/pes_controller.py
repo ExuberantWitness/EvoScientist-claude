@@ -609,7 +609,7 @@ class PESController:
 
     def _phase_description(self, phase: str) -> str:
         descriptions = {
-            PHASE_PLAN_1: "4-Persona独立分析Hopper-v4 Actor-Critic核心难点 → ELO排序 → EM",
+            PHASE_PLAN_1: "4-Persona独立分析目标环境核心难点 → ELO排序 → EM",
             PHASE_PLAN_2: "4-Persona独立提出解决方向 → ELO排序 → EM",
             PHASE_PLAN_3: "4-Persona独立生成文献检索词 → ELO排序 → EM",
             PHASE_RESEARCH: "4-Persona独立文献调研+生成具体方案 → ELO排序 → EM",
@@ -712,7 +712,7 @@ class PESController:
         em_suffix = "\n  EM: " + "\n  EM: ".join(em_parts) if em_parts else ""
 
         prompts = {
-            PHASE_PLAN_1: f"第{iteration+1}轮·W2.1 Problem Analysis。分析Hopper-v4 Actor-Critic的核心难点。{em_suffix}",
+            PHASE_PLAN_1: f"第{iteration+1}轮·W2.1 Problem Analysis。分析研究领域核心难点。{em_suffix}",
             PHASE_PLAN_2: f"第{iteration+1}轮·W2.2 Solution Directions。针对识别的难点提出解决方向。{em_suffix}",
             PHASE_PLAN_3: f"第{iteration+1}轮·W2.3 Search Keywords。生成文献检索词。{em_suffix}",
             PHASE_RESEARCH: f"第{iteration+1}轮·W3 Research。文献调研+生成具体方案。{em_suffix}",
@@ -768,7 +768,7 @@ class PESController:
             # Each persona independently runs: Progressive Discovery+SME →
             # academic_search → proposal. 4 independent calls, then ELO ranks.
             search_focus = {
-                PHASE_PLAN_1: "方向搜索 — 搜索Hopper-v4控制的理论难点、Actor-Critic方法的已知局限",
+                PHASE_PLAN_1: "方向搜索 — 搜索研究领域内的理论难点和已有方法的已知局限",
                 PHASE_PLAN_2: "方向搜索 — 搜索针对已识别难点的可能解决方向、跨领域灵感",
                 PHASE_PLAN_3: "方向搜索 — 搜索各方向的子主题检索词、相关综述论文",
                 PHASE_RESEARCH: "具体idea搜索 — 搜索具体算法方案、模块设计思路、已发表方法的实现细节",
@@ -883,6 +883,13 @@ class PESController:
 
             # W2.3-specific: inject few-shot example to prevent W3-format proposals
             if phase == PHASE_PLAN_3:
+                # Dynamically gather known literature references from CC
+                lit_atoms = [a for a in (self.cc.get_atoms(limit=50) if self.cc else [])
+                             if any(t in a.get("tags", []) for t in ["literature", "SOTA_2026", "SOTA"])]
+                known_lit_refs = "; ".join(
+                    a.get("title", "")[:60] for a in lit_atoms[:5]
+                ) if lit_atoms else "(待搜索确认 — 请通过文献搜索工具获取)"
+
                 persona_topic += (
                     f"\n## W2.3 正确输出示例 (Few-Shot)\n"
                     f"以下是W2.3阶段正确格式的示例。注意：这个阶段输出的是**检索策略**，不是算法方案！\n"
@@ -890,7 +897,7 @@ class PESController:
                     f'{{"title": "Actor-Critic梯度方差与熵正则化方向文献检索策略",\n'
                     f' "hypothesis": "从策略梯度方差降低和自适应熵正则化两个子主题切入，覆盖理论分析、方法改进和实验验证三类文献，可系统覆盖Actor-Critic改进的关键文献",\n'
                     f' "method_sketch": "(1)检索词列表: [\\\\"actor critic policy gradient variance reduction\\\\", \\\\"adaptive entropy regularization reinforcement learning\\\\", \\\\"twin Q overestimation bias Hopper\\\\", \\\\"gradient clipping advantage estimation PPO\\\\", \\\\"state-dependent temperature SAC\\\\", \\\\"double Q target noise smooth\\\\"]; (2)每个检索词的搜索目标: actor critic policy gradient variance → 搜索降低策略梯度方差的理论和方法论文(如GAE、PPO-clip、Stein control variate); adaptive entropy regularization → 搜索自适应熵正则化的最新方法(如SAC with learned alpha、state-dependent entropy); twin Q overestimation → 搜索双Q网络和过估计偏差问题的论文(如Clipped Double Q、REDQ); gradient clipping advantage → 搜索PPO和advantage估计改进的论文; state-dependent temperature → 搜索状态依赖温度参数的SAC变体; double Q target noise → 搜索TD3目标平滑和目标噪声技术; (3)预期命中文献类型: ICML/NeurIPS/ICLR会议论文(理论和方法), JMLR/arXiv综述(系统性覆盖), GitHub开源实现(代码参考); (4)覆盖的子主题列表: [策略梯度估计, 优势函数设计, 熵自适应, 值函数正则化, 探索-利用平衡, 目标网络更新策略]",\n'
-                    f' "search_results_summary": "已知关键文献: SAC(Haarnoja 2018), TD3(Fujimoto 2018), PPO(Schulman 2017), GAE(Schulman 2016), REDQ(Chen 2021)"}}\n'
+                    f' "search_results_summary": "已知关键文献: {known_lit_refs}"}}\n'
                 )
 
             return {
@@ -911,6 +918,8 @@ class PESController:
 
         elif step_name == "evaluate_novelty":
             # RND coarse + LLM rubric fine evaluation
+            # Runs BEFORE elo_tournament. Reads from persona proposals.
+            # Verified novelty feeds into tournament judge as reference.
             proposals = state.get("last_persona_proposals", [])
             return {
                 "done": False,
@@ -920,8 +929,10 @@ class PESController:
                 "action": "evaluate_novelty",
                 "proposals": proposals,
                 "rnd_kb_path": str(self.session_dir / "_index" / "rnd_kb.jsonl"),
+                "source": "personas",
                 "instruction": (
-                    f"[{phase}] RND 创新评价: BGE-M3 粗筛 → LLM 5维 rubric 精筛."
+                    f"[{phase}] RND 创新验证: BGE-M3 粗筛 → LLM 5维 rubric 精筛 → "
+                    f"产出 verified_novelty 供 ELO 锦标赛参考."
                 ),
             }
 
@@ -942,6 +953,9 @@ class PESController:
                             d: rp.get(d, 0)
                             for d in self._get_phase_dims(phase)
                         },
+                        "verified_novelty": rp.get("verified_novelty"),
+                        "rubric_novelty": rp.get("rubric_novelty", 0.5),
+                        "rnd_coarse": rp.get("rnd_coarse", 0.5),
                     }
                     for i, rp in enumerate(ranked)
                 ],
