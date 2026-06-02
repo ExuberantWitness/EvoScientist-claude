@@ -55,7 +55,7 @@ class SessionStore:
             "Bottlenecks",
             "Islands",
             "Literature",
-            "Iterations",
+            "iterations",
             "_index",
             "_pipeline",
             "_memory",
@@ -151,7 +151,7 @@ class SessionStore:
     def create_iteration(self, iteration_num: int, new_algos: list[str],
                          results: dict | None = None) -> Path:
         """创建迭代记录文件."""
-        iter_dir = self.session_dir / "Iterations"
+        iter_dir = self.session_dir / "iterations"
         iter_dir.mkdir(parents=True, exist_ok=True)
         filepath = iter_dir / f"Iteration_{iteration_num}.md"
 

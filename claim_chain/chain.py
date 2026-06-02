@@ -485,15 +485,25 @@ class ClaimChainV2:
 
     def add_atom(self, type: str, title: str, content: str = "",
                  tags: list[str] | None = None, evidence_level: str = "experiment",
-                 metadata: dict | None = None) -> dict:
+                 metadata: dict | None = None,
+                 iteration: int | None = None, phase: str | None = None) -> dict:
         """Backward-compatible API mirroring claim_chain.py add_atom().
 
         Converts v1-style atom dict to v2 Node. Persists content, tags, metadata to SQL.
         embedding is set NULL for later batch fill via bge_socket_server.
+
+        iteration/phase are injected into metadata for temporal tracking (Bug 3 fix).
         """
         import time, uuid
 
-        node_id = metadata.get("id") if metadata else None
+        meta = dict(metadata or {})
+        meta.setdefault("created_at_iso", datetime.now(timezone.utc).isoformat())
+        if iteration is not None:
+            meta["iter"] = iteration
+        if phase is not None:
+            meta["phase"] = phase
+
+        node_id = meta.get("id")
         if not node_id:
             node_id = f"node_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
 
@@ -505,8 +515,8 @@ class ClaimChainV2:
             content=content,
             tags=tags or [],
             status="active",
-            metadata=metadata or {},
-            addresses=metadata.get("addresses", []) if metadata else [],
+            metadata=meta,
+            addresses=meta.get("addresses", []),
             created_at=datetime.now(timezone.utc),
         )
         self.add_node(node)
@@ -519,7 +529,7 @@ class ClaimChainV2:
             "tags": tags or [],
             "evidence_level": evidence_level,
             "status": "active",
-            "metadata": metadata or {},
+            "metadata": meta,
         }
 
     def add_relation(self, source_id: str, target_id: str, type: str,
@@ -682,6 +692,57 @@ class ClaimChainV2:
                         "status": n.status or "active",
                         "metadata": n.metadata or {}}
         return None
+
+    def update_atom_metadata(self, atom_id: str, updates: dict) -> bool:
+        """Update metadata for a single atom. Merges updates into existing metadata JSON.
+
+        Returns True if atom was found and updated.
+        """
+        row = self.conn.execute(
+            "SELECT metadata FROM nodes WHERE id = ?", (str(atom_id),)
+        ).fetchone()
+        if row is None:
+            return False
+        meta = json.loads(row[0]) if row[0] else {}
+        meta.update(updates)
+        meta.setdefault("updated_at_iso", datetime.now(timezone.utc).isoformat())
+        self.conn.execute(
+            "UPDATE nodes SET metadata = ?, embedding = NULL WHERE id = ?",
+            (json.dumps(meta, ensure_ascii=False), str(atom_id)),
+        )
+        return True
+
+    def tag_atoms_by_phase(self, iteration: int, phase: str, updates: dict) -> int:
+        """Bulk-update metadata on all atoms matching iteration and phase.
+
+        Returns count of updated atoms.
+        """
+        atoms = self.get_atoms()
+        count = 0
+        for a in atoms:
+            meta = a.get("metadata", {})
+            if meta.get("iter") == iteration and meta.get("phase") == phase:
+                if self.update_atom_metadata(a["id"], updates):
+                    count += 1
+        if count > 0:
+            self.commit()
+        return count
+
+    def tag_atoms_by_iteration(self, iteration: int, updates: dict) -> int:
+        """Bulk-update metadata on ALL atoms matching iteration (all phases).
+
+        Used by jump_to_plan to mark an entire iteration as complete or rolled back.
+        """
+        atoms = self.get_atoms()
+        count = 0
+        for a in atoms:
+            meta = a.get("metadata", {})
+            if meta.get("iter") == iteration:
+                if self.update_atom_metadata(a["id"], updates):
+                    count += 1
+        if count > 0:
+            self.commit()
+        return count
 
 class ValidationError(Exception):
     """Raised when post-validation fails at commit time."""

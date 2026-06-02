@@ -435,7 +435,7 @@ def _infer_node_type(rel_path: str) -> str:
         return "Bottleneck"
     if "Islands" in rel_path:
         return "Island"
-    if "Iterations" in rel_path:
+    if "iterations" in rel_path:
         return "Iteration"
     if "Literature" in rel_path:
         return "Paper"

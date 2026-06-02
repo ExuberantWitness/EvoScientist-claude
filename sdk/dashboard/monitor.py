@@ -779,6 +779,8 @@ a:hover{color:var(--text)}
 .btn-terminate:hover:not(:disabled){background:#5a1a1a}
 .btn-back-plan{background:#1a3a3a;color:var(--cyan);border-color:var(--cyan) !important}
 .btn-back-plan:hover:not(:disabled){background:#2a5a5a}
+.btn-undo-plan{background:#3a2a1a;color:#ff9966;border-color:#ff9966 !important;font-size:11px}
+.btn-undo-plan:hover:not(:disabled){background:#5a3a2a}
 
 .log-section{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
 .log-section h2{font-size:14px;color:var(--accent);margin-bottom:8px}
@@ -988,6 +990,7 @@ a:hover{color:var(--text)}
     <button class="btn-satisfied" id="btn-satisfied" onclick="doTransition('satisfied')">满意 → 下一阶段</button>
     <button class="btn-unsatisfied" id="btn-unsatisfied" onclick="doTransition('unsatisfied')">不满意 → 重做</button>
     <button class="btn-back-plan" id="btn-back-plan" onclick="doTransition('jump_to_plan')">回到 Plan → 重新规划</button>
+    <button class="btn-undo-plan" id="btn-undo-plan" onclick="doTransition('undo_jump_to_plan')" disabled>↩ 撤销回到Plan</button>
     <button class="btn-write" id="btn-write" onclick="doTransition('jump_to_write')">跳到写作</button>
     <button class="btn-terminate" id="btn-terminate" onclick="doTransition('terminate')">终止管线</button>
   </div>
@@ -1421,7 +1424,7 @@ function renderProgressSummary(state, phase, stepIdx) {
   container.innerHTML = html;
 }
 
-function updateControls(status, phase, cmd, taskRunning, activeTask) {
+function updateControls(status, phase, cmd, taskRunning, activeTask, iter) {
   const awaiting = status === 'awaiting_decision';
   const terminated = status === 'terminated' || phase === '已终止';
   const cmdBusy = cmd && (cmd.status === 'pending' || cmd.status === 'executing');
@@ -1435,6 +1438,13 @@ function updateControls(status, phase, cmd, taskRunning, activeTask) {
   document.getElementById('btn-write').disabled = !awaiting || terminated;
   document.getElementById('btn-terminate').disabled = terminated;
   document.getElementById('btn-back-plan').disabled = terminated;
+  // iteration 0 保护：W6 之前不允许跳回 Plan（原始基准必须完整走完第一次）
+  if (iter === 0 && phase !== 'W6 结果分析') {
+    document.getElementById('btn-back-plan').disabled = true;
+    document.getElementById('btn-back-plan').title = 'iteration 0 必须完整走完 W2→W6，W6 之后才可重新规划';
+  } else {
+    document.getElementById('btn-back-plan').title = '';
+  }
 
   // 命令/任务状态指示器
   var statusEl = document.getElementById('cmd-status');
@@ -1592,6 +1602,10 @@ async function refreshState() {
     statusEl.className = 'value' + (status === 'awaiting_decision' ? ' awaiting' : '') + (status === 'terminated' ? ' terminated' : '') + (status === 'in_progress' ? ' in-progress' : '');
     document.getElementById('iter-val').textContent = iter;
 
+    // 管理 "撤销回到Plan" 按钮状态（栈深度）
+    var stack = state._jump_undo_stack || [];
+    updateUndoButton(stack.length);
+
     // 非 W5 代码实现 阶段时隐藏旧的用户操作指引
     if (phase !== 'W5 代码实现' || status !== 'awaiting_user_code') {
       document.getElementById('code-instruction').style.display = 'none';
@@ -1629,7 +1643,7 @@ async function refreshState() {
     renderTournament(state.last_tournament_result, state.last_pipeline_context);
     renderProgressSummary(state, phase, stepIdx);
     renderDecisionLedger(state);
-    updateControls(status, phase, state.command, taskRunning, activeTask);
+    updateControls(status, phase, state.command, taskRunning, activeTask, iter);
     refreshWatchdog();
   } catch (e) {
     addLog('Refresh error: ' + e.message, 'error');
@@ -1686,8 +1700,8 @@ function renderWatchdog(alerts) {
 
 async function doTransition(action) {
   if (!workspaceDir) { addLog('workspace 未加载', 'error'); return; }
-  const labels = {satisfied:'满意-下一步', unsatisfied:'不满意-重做', jump_to_write:'强制进入写作', terminate:'终止管线', jump_to_plan:'回到 Plan'};
-  addLog('备用控制: ' + labels[action], 'info');
+  const labels = {satisfied:'满意-下一步', unsatisfied:'不满意-重做', jump_to_write:'强制进入写作', terminate:'终止管线', jump_to_plan:'回到 Plan', undo_jump_to_plan:'撤销回到Plan'};
+  addLog('备用控制: ' + (labels[action] || action), 'info');
   try {
     const resp = await fetch('/api/pipeline/transition', {
       method: 'POST',
@@ -1711,10 +1725,28 @@ async function doTransition(action) {
       if (result.validation && result.validation.warnings && result.validation.warnings.length > 0) {
         addLog('验证通过但有警告: ' + result.validation.warnings.join('; '), 'info');
       }
+      // 管理 undo 按钮状态（栈深度）
+      if (action === 'jump_to_plan' || action === 'undo_jump_to_plan') {
+        updateUndoButton(result.undo_count || 0);
+      }
     }
     await refreshState();
   } catch (e) {
     addLog('Transition error: ' + e.message, 'error');
+  }
+}
+
+function updateUndoButton(count) {
+  var btn = document.getElementById('btn-undo-plan');
+  if (!btn) return;
+  if (count > 0) {
+    btn.disabled = false;
+    btn.textContent = '↩ 撤销回到Plan (' + count + ')';
+    btn.title = '撤销最近一次回到Plan操作，还可撤销 ' + count + ' 次';
+  } else {
+    btn.disabled = true;
+    btn.textContent = '↩ 撤销回到Plan';
+    btn.title = '暂无操作可撤销';
   }
 }
 
@@ -1822,8 +1854,6 @@ async def pes_pipeline_transition_api(request):
         state["sub_loop_step"] = 0
         state["status"] = "in_progress"
         state.pop("command", None)
-        if phase == "W6 结果分析":
-            state["iteration"] = state.get("iteration", 0) + 1
         # 记录账本
         ledger_entry["to_phase"] = next_phase
         ledger_entry["validation_passed"] = validation.get("valid", True)
@@ -1850,6 +1880,23 @@ async def pes_pipeline_transition_api(request):
                             "message": f"重做阶段 '{state['phase']}'"})
 
     elif action == "jump_to_plan":
+        # iteration 0 保护：W6 之前不允许跳回 Plan（原始基准必须完整走完第一次）
+        current_iter = state.get("iteration", 0)
+        if current_iter == 0 and phase != "W6 结果分析":
+            return JSONResponse({
+                "error": "iteration 0 是原始基准，必须完整走完 W2→W6 后才可重新规划"
+            }, status_code=400)
+
+        # 完整快照（git stash 级别）：保存当前全部状态（瞬态字段除外）
+        _TRANSIENT_KEYS = {
+            "_jump_undo_stack", "decision_ledger", "command", "active_task",
+            "timestamp", "agent_heartbeat", "agent_report",
+            "approval_request", "approval_response",
+        }
+        snapshot = {k: v for k, v in state.items() if k not in _TRANSIENT_KEYS}
+        snapshot["_v"] = 2  # 标记完整快照格式
+        stack = state.setdefault("_jump_undo_stack", [])
+        stack.append(snapshot)
         state["phase"] = "W2 问题分析"
         state["sub_loop_step"] = 0
         state["status"] = "in_progress"
@@ -1857,7 +1904,70 @@ async def pes_pipeline_transition_api(request):
         ledger_entry["to_phase"] = "W2 问题分析"
         state["decision_ledger"].append(ledger_entry)
         atomic_write(state_path, state)
-        return JSONResponse({"transitioned": True, "to": "W2 问题分析", "iteration": state["iteration"]})
+
+        # Bug 2: Tag or rollback CC atoms from the phase we're jumping FROM.
+        # "回到Plan" defaults to 满意 (implicit accept). Only rollback if user explicitly
+        # marked "unsatisfied" on this phase in this iteration.
+        _handle_cc_on_jump_to_plan(workspace, current_iter, phase, state)
+
+        # 立即创建 iterations/{N}/ 目录
+        new_iter_dir = Path(workspace) / "iterations" / str(state["iteration"])
+        new_iter_dir.mkdir(parents=True, exist_ok=True)
+
+        return JSONResponse({
+            "transitioned": True, "to": "W2 问题分析",
+            "iteration": state["iteration"],
+            "undo_count": len(stack),
+        })
+
+    elif action == "undo_jump_to_plan":
+        stack = state.get("_jump_undo_stack", [])
+        if not stack:
+            return JSONResponse({"error": "没有可撤销的 jump_to_plan 操作"}, status_code=400)
+        snapshot = stack.pop()
+
+        # 保留当前部分字段（跨快照持久）
+        preserved_ledger = state.get("decision_ledger", [])
+        preserved_session = {}
+        for k in ["session_id", "agent_session_id", "session_dir", "research_topic"]:
+            if k in state:
+                preserved_session[k] = state[k]
+
+        # 恢复快照：v2=完整替换，legacy=合并（不删现有数据）
+        if snapshot.pop("_v", None) == 2:
+            state.clear()
+        state.update(snapshot)
+
+        # 回写保留字段
+        state["decision_ledger"] = preserved_ledger
+        # 移除被撤销的 jump_to_plan 账本条
+        for i in range(len(state["decision_ledger"]) - 1, -1, -1):
+            if state["decision_ledger"][i].get("action") == "jump_to_plan":
+                state["decision_ledger"].pop(i)
+                break
+        for k, v in preserved_session.items():
+            state.setdefault(k, v)
+        if stack:
+            state["_jump_undo_stack"] = stack
+        else:
+            state.pop("_jump_undo_stack", None)
+        # 清理可能创建的空目录（iteration 0 永久保护，绝不删除）
+        try:
+            undone_iter = snapshot["iteration"] + 1
+            if undone_iter > 0:
+                undone_dir = Path(workspace) / "iterations" / str(undone_iter)
+                if undone_dir.exists() and not any(undone_dir.iterdir()):
+                    undone_dir.rmdir()
+        except Exception:
+            pass
+        atomic_write(state_path, state)
+        return JSONResponse({
+            "transitioned": False,
+            "phase": snapshot["phase"],
+            "iteration": snapshot["iteration"],
+            "undo_count": len(stack),
+            "message": f"已撤销 jump_to_plan，回到 {snapshot['phase']} (iteration {snapshot['iteration']})" + (f"，还可撤销 {len(stack)} 次" if stack else "，已回到最初状态"),
+        })
 
     elif action == "jump_to_write":
         gap = state.get("last_gap_analysis")
@@ -2049,6 +2159,69 @@ def _clear_stale_agent_state(state: dict) -> None:
         state.pop(key, None)
 
 
+def _handle_cc_on_jump_to_plan(workspace: str, iteration: int, from_phase: str, state: dict):
+    """Tag or rollback CC atoms when jumping to plan.
+
+    "回到Plan" defaults to satisfied (implicit accept). If the user explicitly
+    marked "unsatisfied" on the phase being left, W6 atoms are rolled back.
+    """
+    # Determine last decision on this phase+iter from decision ledger
+    last_decision = None
+    for entry in reversed(state.get("decision_ledger", [])):
+        if entry.get("from_phase") == from_phase and entry.get("iteration") == iteration:
+            last_decision = entry["action"]
+            break
+
+    if last_decision == "unsatisfied":
+        # Rollback: mark atoms from this phase as rolled_back
+        _cc_rollback_phase(workspace, iteration, from_phase)
+    else:
+        # Satisfied (default): tag atoms from this phase as iter_complete
+        _cc_tag_iter_complete(workspace, iteration, from_phase)
+
+
+def _cc_tag_iter_complete(workspace: str, iteration: int, phase: str):
+    """Tag ALL CC atoms from this iteration as iter_complete."""
+    try:
+        from claim_chain.chain import ClaimChainV2
+    except Exception:
+        return
+    cc_db = Path(workspace) / "_index" / "cc.db"
+    if not cc_db.exists():
+        return
+    try:
+        cc = ClaimChainV2(cc_db)
+        n = cc.tag_atoms_by_iteration(iteration, {"iter_complete": True})
+        cc.close()
+        if n > 0:
+            logger.info(f"CC: tagged {n} atoms from iter={iteration} as iter_complete")
+    except Exception as e:
+        logger.warning(f"CC iter_complete tag failed: {e}")
+
+
+def _cc_rollback_phase(workspace: str, iteration: int, phase: str):
+    """Rollback ALL CC atoms from this iteration — mark as rolled_back."""
+    try:
+        from claim_chain.chain import ClaimChainV2
+    except Exception:
+        return
+    cc_db = Path(workspace) / "_index" / "cc.db"
+    if not cc_db.exists():
+        return
+    try:
+        cc = ClaimChainV2(cc_db)
+        from datetime import datetime, timezone
+        n = cc.tag_atoms_by_iteration(iteration, {
+            "iter_rollback": True,
+            "rolled_back_at": datetime.now(timezone.utc).isoformat(),
+        })
+        cc.close()
+        if n > 0:
+            logger.info(f"CC: rolled back {n} atoms from iter={iteration}")
+    except Exception as e:
+        logger.warning(f"CC rollback failed: {e}")
+
+
 def _auto_next_phase(phase: str, state: dict) -> str:
     """内联流转逻辑，不依赖 PESController 类导入。"""
     order = ["W2 问题分析", "W3 方案方向", "W4 具体方案生成",
@@ -2166,7 +2339,7 @@ async def pes_pipeline_init_api(request):
     # 创建 session 完整目录树
     data_dir = ws_path  # no vault/ layer
     for d in ["evolve_archive", "artifacts",
-              "Algorithms", "Bottlenecks", "Islands", "Iterations",
+              "Algorithms", "Bottlenecks", "Islands", "iterations",
               "_index", "_pipeline", "_memory"]:
         (data_dir / d).mkdir(parents=True, exist_ok=True)
 

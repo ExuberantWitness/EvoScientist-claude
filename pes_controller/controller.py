@@ -449,7 +449,7 @@ class PESController:
     def init(self, research_topic: str, part2_dimensions: list[dict] | None = None) -> dict:
         """初始化工作空间。创建 session 目录树。"""
         for d in ["evolve_archive", "artifacts",
-                  "Algorithms", "Bottlenecks", "Islands", "Iterations",
+                  "Algorithms", "Bottlenecks", "Islands", "iterations",
                   "_index", "_pipeline", "_memory"]:
             (self.session_dir / d).mkdir(parents=True, exist_ok=True)
 
@@ -837,6 +837,12 @@ class PESController:
             cc_ctx = _build_cc_ideation_context(state, self.session_dir, phase)
             if cc_ctx:
                 persona_topic += f"## Claim Chain 引导 (Structure-Guided Ideation)\n{cc_ctx}\n\n"
+
+            # W2: Read ALL existing CC atoms as structured knowledge baseline
+            if phase == PHASE_PLAN_1:
+                cc_full = _build_cc_full_context(self.session_dir)
+                if cc_full:
+                    persona_topic += f"{cc_full}\n\n"
 
             # Inject regeneration feedback: tell personas to REVISE, not regenerate
             if state.get("needs_regeneration"):
@@ -3530,6 +3536,111 @@ def _start_http_server(port: int = 8421):
 # ---------------------------------------------------------------------------
 # Experiment feedback builder (for persona prompts in subsequent iterations)
 # ---------------------------------------------------------------------------
+
+def _build_cc_full_context(session_dir: Path) -> str:
+    """Read ALL CC atoms grouped by iteration/phase/status for W2 persona context.
+
+    Gives each persona a complete survey of: what baselines exist, what proposals
+    were made, what experiments ran, what was validated/refuted — grouped by iteration.
+    """
+    try:
+        from claim_chain.chain import ClaimChainV2
+    except ImportError:
+        return ""
+
+    cc_db = session_dir / "_index" / "cc.db"
+    if not cc_db.exists():
+        return ""
+
+    try:
+        cc = ClaimChainV2(cc_db)
+        atoms = cc.get_atoms()
+        cc.close()
+    except Exception:
+        return ""
+
+    if not atoms:
+        return ""
+
+    # Group by iteration
+    by_iter: dict[int, list[dict]] = {}
+    for a in atoms:
+        meta = a.get("metadata", {})
+        it = meta.get("iter", 0)
+        by_iter.setdefault(it, []).append(a)
+
+    total = len(atoms)
+    validated_count = sum(1 for a in atoms if a.get("status") == "validated")
+    refuted_count = sum(1 for a in atoms if a.get("status") == "refuted")
+
+    lines = [
+        f"## Claim Chain 全量知识 ({total} atoms, {validated_count} ✓ validated, {refuted_count} ✗ refuted)",
+        "",
+        "> 以下是你已积累的所有知识。请基于这些已知结论规划新方案，",
+        "> 避免重复已验证失败的方向，优先拓展已验证成功的方向。",
+        "",
+    ]
+
+    for it in sorted(by_iter.keys()):
+        iter_atoms = by_iter[it]
+        lines.append(f"### 第 {it + 1} 轮迭代 ({len(iter_atoms)} atoms)")
+
+        # Group by phase
+        by_phase: dict[str, list[dict]] = {}
+        for a in iter_atoms:
+            meta = a.get("metadata", {})
+            ph = meta.get("phase", "unknown")
+            by_phase.setdefault(ph, []).append(a)
+
+        for ph in sorted(by_phase.keys()):
+            ph_atoms = by_phase[ph]
+
+            baselines = [a for a in ph_atoms if "baseline" in a.get("tags", [])]
+            experiments = [a for a in ph_atoms if "Experiment:" in a.get("title", "")]
+            proposals = [a for a in ph_atoms
+                        if "proposal" in a.get("tags", []) and a not in experiments]
+            others = [a for a in ph_atoms
+                     if a not in baselines + proposals + experiments]
+
+            lines.append(f"#### {ph}")
+
+            if baselines:
+                names = ", ".join(a["title"][:35] for a in baselines)
+                lines.append(f"- **Baselines**: {names}")
+
+            if proposals:
+                lines.append(f"- **提案** ({len(proposals)}):")
+                for a in proposals:
+                    status = a.get("status", "?")
+                    icon = "✓" if status == "validated" else ("✗" if status == "refuted" else "○")
+                    meta = a.get("metadata", {})
+                    complete = " ✅completed" if meta.get("iter_complete") else ""
+                    rolled = " ⚠rolled_back" if meta.get("iter_rollback") else ""
+                    lines.append(f"  - {icon} [{status}]{complete}{rolled} {a['title'][:80]}")
+
+            if experiments:
+                lines.append(f"- **实验结果** ({len(experiments)}):")
+                for a in experiments:
+                    try:
+                        content = json.loads(a.get("content", "{}"))
+                        score = content.get("score_mean", "?")
+                        success = content.get("success", True)
+                        icon = "✓" if success else "✗"
+                    except Exception:
+                        score = "?"
+                        icon = "?"
+                    algo = a["title"].replace("Experiment: ", "")
+                    lines.append(f"  - {icon} {algo}: score={score}")
+
+            if others:
+                for a in others:
+                    meta = a.get("metadata", {})
+                    complete = " ✅" if meta.get("iter_complete") else ""
+                    rolled = " ⚠" if meta.get("iter_rollback") else ""
+                    lines.append(f"- [{a.get('type', '?')}]{complete}{rolled} {a['title'][:80]}")
+
+    return "\n".join(lines)
+
 
 def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> str:
     """Build Claim Chain context for structure-guided ideation.

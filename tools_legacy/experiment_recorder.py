@@ -142,12 +142,142 @@ def record_experiment_result(
             "success": success, "extra_notes": extra_notes,
         })
 
+    # 6. 同步到 Claim Chain (cc.db)
+    cc_result = _sync_experiment_to_cc(session_path, algo_id, env, score_mean, score_std,
+                                        seeds, code_path, success, extra_notes)
+
     return {
         "experiment_id": expt_id,
         "algo_id": algo_id,
         "new_status": new_status,
         "score": f"{score_mean:.1f}±{score_std:.1f}",
+        "cc_synced": cc_result,
     }
+
+
+def _sync_experiment_to_cc(session_path: Path, algo_id: str, env: str,
+                            score_mean: float, score_std: float, seeds: int,
+                            code_path: str, success: bool, extra_notes: str) -> dict:
+    """Write experiment result to Claim Chain (cc.db)."""
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from claim_chain.chain import ClaimChainV2
+    except Exception:
+        return {"synced": False, "error": "Cannot import ClaimChainV2"}
+
+    # Read iteration/phase from PIPELINE_STATE for temporal metadata
+    iter_num = 0
+    current_phase = "W5 代码实现"
+    ps_path = session_path / "PIPELINE_STATE.json"
+    if ps_path.exists():
+        try:
+            ps = json.loads(ps_path.read_text(encoding="utf-8"))
+            iter_num = ps.get("iteration", 0)
+            current_phase = ps.get("phase", current_phase)
+        except Exception:
+            pass
+
+    idx_dir = session_path / "_index"
+    vault_idx = session_path / "vault" / "_index"
+    db_path = None
+    for d in [idx_dir, vault_idx]:
+        candidate = d / "cc.db"
+        if candidate.exists():
+            db_path = candidate
+            break
+
+    if not db_path:
+        idx_dir.mkdir(parents=True, exist_ok=True)
+        db_path = idx_dir / "cc.db"
+
+    try:
+        cc = ClaimChainV2(db_path)
+    except Exception as e:
+        return {"synced": False, "error": f"Cannot open CC: {e}"}
+
+    try:
+        existing = cc.get_atoms()
+        status = "validated" if success else "refuted"
+        tags = ["experiment", algo_id, status]
+        content = json.dumps({
+            "score_mean": score_mean, "score_std": score_std,
+            "seeds": seeds, "env": env, "status": status, "success": success,
+        }, ensure_ascii=False)
+        title = f"Experiment: {algo_id}"
+        exp_meta = {"iter": iter_num, "phase": current_phase,
+                    "created_at_iso": datetime.now().isoformat(),
+                    "algo_id": algo_id, "env": env}
+
+        matched_atom = None
+        for a in existing:
+            if a.get("title") == title or a.get("title", "").startswith(f"Experiment: {algo_id}"):
+                matched_atom = a
+                break
+
+        exp_atom_id = None
+        if matched_atom:
+            exp_atom_id = matched_atom["id"]
+            existing_meta = matched_atom.get("metadata", {})
+            existing_meta.update(exp_meta)
+            existing_meta["updated_at_iso"] = datetime.now().isoformat()
+            cc.conn.execute(
+                "UPDATE nodes SET content=?, tags=?, status=?, summary=?, metadata=?, embedding=NULL WHERE id=?",
+                (content, json.dumps(tags), status, f"{title}: {score_mean:.1f}±{score_std:.1f}",
+                 json.dumps(existing_meta, ensure_ascii=False), exp_atom_id),
+            )
+        else:
+            import uuid, time as _time
+            exp_atom_id = f"node_{int(_time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+            from datetime import timezone
+            now = datetime.now(timezone.utc).isoformat()
+            cc.conn.execute(
+                "INSERT INTO nodes (id, title, type, summary, created_at, content, tags, status, metadata, embedding) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                (exp_atom_id, title, "method", f"{title}: {score_mean:.1f}±{score_std:.1f}",
+                 now, content, json.dumps(tags), status,
+                 json.dumps(exp_meta, ensure_ascii=False)),
+            )
+
+        cc.commit()
+
+        # 查找匹配的 proposal/baseline atom 并建立 validates 边
+        edges_created = 0
+        for a in existing:
+            a_title = a.get("title", "").lower()
+            a_tags = a.get("tags", [])
+            # 精确匹配 algo_id
+            if algo_id.lower() == a_title or algo_id.lower() in a_title:
+                if a["id"] != exp_atom_id:
+                    try:
+                        cc.add_relation(exp_atom_id, a["id"], "validates",
+                                        evidence=f"score={score_mean:.1f}±{score_std:.1f}, seeds={seeds}",
+                                        metadata={"algo_id": algo_id, "status": status})
+                        edges_created += 1
+                    except Exception:
+                        pass
+            # 模糊匹配：algo_id 片段在 proposal 标题中
+            elif "proposal" in a_tags and len(algo_id) >= 4:
+                for kw in [algo_id.lower(), algo_id.replace("_", "").lower()]:
+                    if kw in a_title.replace(" ", "").replace("-", ""):
+                        try:
+                            cc.add_relation(exp_atom_id, a["id"], "validates",
+                                            evidence=f"score={score_mean:.1f}±{score_std:.1f}, seeds={seeds}",
+                                            metadata={"algo_id": algo_id, "status": status})
+                            edges_created += 1
+                            break
+                        except Exception:
+                            pass
+
+        cc.commit()
+        cc.close()
+        return {"synced": True, "atom_id": exp_atom_id, "edges_created": edges_created}
+    except Exception as e:
+        try:
+            cc.close()
+        except Exception:
+            pass
+        return {"synced": False, "error": str(e)}
 
 
 def append_experiment_to_markdown(md_path: Path, result: dict):
