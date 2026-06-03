@@ -608,6 +608,18 @@ class PESController:
         rels_path = self.index_dir / "relations.jsonl"
         result = {"atoms_synced": 0, "relations_synced": 0}
 
+        # Read current iteration/phase from PIPELINE_STATE for temporal metadata
+        ps_path = self.index_dir.parent / "PIPELINE_STATE.json"
+        iter_num = 0
+        current_phase = "unknown"
+        if ps_path.exists():
+            try:
+                ps = json.loads(ps_path.read_text(encoding="utf-8"))
+                iter_num = ps.get("iteration", 0)
+                current_phase = ps.get("phase", "unknown")
+            except Exception:
+                pass
+
         if atoms_path.exists():
             try:
                 for line in atoms_path.read_text(encoding="utf-8").strip().split("\n"):
@@ -622,6 +634,8 @@ class PESController:
                             tags=atom.get("tags", []),
                             evidence_level=atom.get("evidence_level", "experiment"),
                             metadata=atom.get("metadata", {}),
+                            iteration=iter_num,
+                            phase=current_phase,
                         )
                         result["atoms_synced"] += 1
                     except Exception as e:

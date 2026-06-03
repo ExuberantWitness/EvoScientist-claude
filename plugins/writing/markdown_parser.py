@@ -272,6 +272,19 @@ class IndexSyncer:
         """Write atoms and relations to cc.db (canonical store), then delete JSONL files."""
         from claim_chain.chain import ClaimChainV2
 
+        # Read PIPELINE_STATE for temporal metadata
+        import json as _json
+        iter_num = 0
+        current_phase = "unknown"
+        ps_path = self.index_dir.parent / "PIPELINE_STATE.json"
+        if ps_path.exists():
+            try:
+                ps = _json.loads(ps_path.read_text(encoding="utf-8"))
+                iter_num = ps.get("iteration", 0)
+                current_phase = ps.get("phase", "unknown")
+            except Exception:
+                pass
+
         cc = ClaimChainV2(self.index_dir / "cc.db")
 
         # Write atoms
@@ -284,6 +297,8 @@ class IndexSyncer:
                     tags=atom.get("tags", []),
                     evidence_level=atom.get("evidence_level", "experiment"),
                     metadata=atom.get("metadata", {}),
+                    iteration=iter_num,
+                    phase=current_phase,
                 )
             except Exception as e:
                 logger.warning(f"Failed to add atom '{atom.get('title', '?')}': {e}")
