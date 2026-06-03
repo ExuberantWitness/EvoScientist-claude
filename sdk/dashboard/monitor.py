@@ -3583,11 +3583,11 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
             if a["mean"] > b["mean"] * 1.10:
                 rel = cc.add_relation(type="validates", source_id=a_id, target_id=b_id,
                                       evidence=f"{a['algorithm']}({a['mean']}) > {b['algorithm']}({b['mean']})")
-                written_relations.append(rel["id"])
+                written_relations.append(f"{rel.get('src','')}→{rel.get('dst','')}")
             elif b["mean"] > a["mean"] * 1.10:
                 rel = cc.add_relation(type="validates", source_id=b_id, target_id=a_id,
                                       evidence=f"{b['algorithm']}({b['mean']}) > {a['algorithm']}({a['mean']})")
-                written_relations.append(rel["id"])
+                written_relations.append(f"{rel.get('src','')}→{rel.get('dst','')}")
 
     ceiling_effects = analysis.get("ceiling_effects", [])
     if ceiling_effects:
@@ -3623,8 +3623,8 @@ async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
     使用真实 API: IslandManager.detect_and_assign() + CellGrid.record_result()
     + set_claim_atom_id() 建立 CC↔island 关联。
     """
-    from cell_grid import CellGrid
-    from island_manager import IslandManager
+    from claim_chain.cell_grid import CellGrid
+    from claim_chain.island_manager import IslandManager
     from claim_chain.chain import ClaimChain
 
     state = atomic_read(state_path)
