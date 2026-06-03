@@ -693,6 +693,59 @@ class ClaimChainV2:
                         "metadata": n.metadata or {}}
         return None
 
+    def get_atoms_index(self) -> dict:
+        """Return structure index of the CC graph (shape summary, no full data).
+
+        Used for progressive discovery — agents see what types exist, what's
+        missing, orphan counts, and tag vocabulary without reading all atoms.
+        """
+        atoms = self.get_atoms()
+        relations = self.get_relations()
+
+        type_counts: dict[str, int] = {}
+        for a in atoms:
+            t = a.get("type", "unknown")
+            type_counts[t] = type_counts.get(t, 0) + 1
+
+        related_ids: set[str] = set()
+        for r in relations:
+            related_ids.add(str(r.get("source_id", "")))
+            related_ids.add(str(r.get("target_id", "")))
+
+        all_ids: set[str] = {str(a.get("id", "")) for a in atoms}
+        orphan_count = len(all_ids - related_ids)
+
+        rel_type_counts: dict[str, int] = {}
+        for r in relations:
+            t = r.get("type", "unknown")
+            rel_type_counts[t] = rel_type_counts.get(t, 0) + 1
+
+        all_tags: set[str] = set()
+        for a in atoms:
+            for tag in a.get("tags", []):
+                all_tags.add(str(tag))
+
+        all_known_types = {"fact", "method", "theorem", "verification",
+                           "hypothesis", "observation", "component", "experiment"}
+        missing_types = sorted(all_known_types - set(type_counts.keys()))
+
+        all_known_rels = {"validates", "contradicts", "derives", "boundary_of",
+                          "motivates", "specializes", "compares_to", "causes",
+                          "implements"}
+        missing_rels = sorted(all_known_rels - set(rel_type_counts.keys()))
+
+        return {
+            "total_atoms": len(atoms),
+            "type_counts": type_counts,
+            "missing_atom_types": missing_types,
+            "total_relations": len(relations),
+            "relation_type_counts": rel_type_counts,
+            "missing_relation_types": missing_rels,
+            "orphan_atom_count": orphan_count,
+            "tag_vocabulary": sorted(all_tags),
+            "empty": len(atoms) == 0,
+        }
+
     def update_atom_metadata(self, atom_id: str, updates: dict) -> bool:
         """Update metadata for a single atom. Merges updates into existing metadata JSON.
 
