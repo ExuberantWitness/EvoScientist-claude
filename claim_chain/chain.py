@@ -243,6 +243,8 @@ class ClaimChainV2:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: Optional[sqlite3.Connection] = None
+        self._session_iter: Optional[int] = None
+        self._session_phase: Optional[str] = None
         # Auto-migrate schema before first use (no-op if already current)
         migrate_schema(self.db_path)
 
@@ -262,6 +264,15 @@ class ClaimChainV2:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+    def set_session_context(self, iteration: int | None = None, phase: str | None = None):
+        """Set session-level metadata for automatic injection into all subsequent add_atom() calls.
+
+        Callers that create ClaimChainV2 can call this once after construction;
+        all add_atom() calls will inherit iteration/phase unless explicitly overridden.
+        """
+        self._session_iter = iteration
+        self._session_phase = phase
 
     # ── CRUD: Nodes ──
 
@@ -498,10 +509,15 @@ class ClaimChainV2:
 
         meta = dict(metadata or {})
         meta.setdefault("created_at_iso", datetime.now(timezone.utc).isoformat())
+        # Auto-fill from session context when not explicitly passed
         if iteration is not None:
             meta["iter"] = iteration
+        elif self._session_iter is not None:
+            meta["iter"] = self._session_iter
         if phase is not None:
             meta["phase"] = phase
+        elif self._session_phase is not None:
+            meta["phase"] = self._session_phase
 
         node_id = meta.get("id")
         if not node_id:

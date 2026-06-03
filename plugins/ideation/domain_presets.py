@@ -4,7 +4,7 @@ Provides ready-to-use DomainConfig dicts for common research domains.
 Used by evo-intake SKILL to auto-detect domain parameters.
 
 Usage:
-  from tools.domain_presets import get_domain_preset
+  from plugins.ideation.domain_presets import get_domain_preset
   cfg = get_domain_preset("reinforcement_learning")
 """
 

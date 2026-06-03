@@ -97,7 +97,7 @@ class IslandManager:
 
     def propose_merges(self, claim_chain) -> list[dict]:
         """扫描 CC 中 specializes/derives 关系，发现应合并的 Island。
-        ClaimChain 实例作为参数传入 (from tools.claim_chain)。
+        ClaimChain 实例作为参数传入 (from claim_chain.chain)。
         """
         relations = claim_chain.get_relations()
         proposals = []

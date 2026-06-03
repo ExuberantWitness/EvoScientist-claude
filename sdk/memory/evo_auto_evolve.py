@@ -1046,52 +1046,60 @@ class AutoEvolveEngine:
         """Write atoms and relations to Claim Chain. Returns method atom ID."""
         from claim_chain.chain import ClaimChain
         cc = ClaimChain(self.workspace / "_index" / "cc.db")
+        try:
+            # Set session context from PIPELINE_STATE for temporal metadata
+            ps_path = self.workspace / "PIPELINE_STATE.json"
+            if ps_path.exists():
+                ps = json.loads(ps_path.read_text(encoding="utf-8"))
+                cc.set_session_context(ps.get("iteration", 0), ps.get("phase", "unknown"))
 
-        existing_atoms = cc.get_atoms(limit=500, status=None)
+            existing_atoms = cc.get_atoms(limit=500)
 
-        # Create method atom
-        params_safe = {k: v for k, v in params.items() if k != "seed"}
-        method_atom = cc.add_atom(
-            type="method",
-            title=f"{variant_id} - {self.task_name} variant",
-            content=f"{self.task_name} variant with {json.dumps(params_safe)}",
-            tags=["variant", self.task_name, f"round_{self.round}"],
-            evidence_level="experiment",
-            metadata={"variant_id": variant_id, "round": self.round},
-        )
+            # Create method atom
+            params_safe = {k: v for k, v in params.items() if k != "seed"}
+            method_atom = cc.add_atom(
+                type="method",
+                title=f"{variant_id} - {self.task_name} variant",
+                content=f"{self.task_name} variant with {json.dumps(params_safe)}",
+                tags=["variant", self.task_name, f"round_{self.round}"],
+                evidence_level="experiment",
+                metadata={"variant_id": variant_id, "round": self.round},
+            )
 
-        # Create verification atom
-        verif_atom = cc.add_atom(
-            type="verification",
-            title=f"{variant_id} score: {score:.1f}",
-            content=f"{variant_id} achieved score={score:.1f} on {self.env_name}. "
-                     f"Parameters: {json.dumps(params_safe)}",
-            tags=["score", self.task_name, f"round_{self.round}"],
-            evidence_level="experiment",
-            metadata={"score": score, "variant_id": variant_id, "params": params},
-        )
+            # Create verification atom
+            verif_atom = cc.add_atom(
+                type="verification",
+                title=f"{variant_id} score: {score:.1f}",
+                content=f"{variant_id} achieved score={score:.1f} on {self.env_name}. "
+                         f"Parameters: {json.dumps(params_safe)}",
+                tags=["score", self.task_name, f"round_{self.round}"],
+                evidence_level="experiment",
+                metadata={"score": score, "variant_id": variant_id, "params": params},
+            )
 
-        # Create relation using actual atom IDs from return values
-        if classification == "IMPROVEMENT":
-            cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="validates",
-                           evidence=f"score={score}, improvement over parent ({parent_id} score={parent_score})")
-        elif classification == "REGRESSION":
-            cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="contradicts",
-                           evidence=f"score={score}, worse than parent ({parent_id} score={parent_score})")
-        elif classification == "BASELINE":
-            cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="validates",
-                           evidence=f"baseline score={score}")
+            # Create relation using actual atom IDs from return values
+            if classification == "IMPROVEMENT":
+                cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="validates",
+                               evidence=f"score={score}, improvement over parent ({parent_id} score={parent_score})")
+            elif classification == "REGRESSION":
+                cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="contradicts",
+                               evidence=f"score={score}, worse than parent ({parent_id} score={parent_score})")
+            elif classification == "BASELINE":
+                cc.add_relation(source_id=method_atom["id"], target_id=verif_atom["id"], type="validates",
+                               evidence=f"baseline score={score}")
 
-        # If parent exists, link to parent
-        if parent_id:
-            parent_atoms = [a for a in existing_atoms if a.get("metadata", {}).get("variant_id") == parent_id]
-            if parent_atoms:
-                parent_method = [a for a in parent_atoms if a["type"] == "method"]
-                if parent_method:
-                    cc.add_relation(source_id=parent_method[0]["id"], target_id=method_atom["id"],
-                                   type="derives", evidence=f"Mutation: {variant_id} derived from {parent_id}")
+            # If parent exists, link to parent
+            if parent_id:
+                parent_atoms = [a for a in existing_atoms if a.get("metadata", {}).get("variant_id") == parent_id]
+                if parent_atoms:
+                    parent_method = [a for a in parent_atoms if a["type"] == "method"]
+                    if parent_method:
+                        cc.add_relation(source_id=parent_method[0]["id"], target_id=method_atom["id"],
+                                       type="derives", evidence=f"Mutation: {variant_id} derived from {parent_id}")
 
-        return method_atom["id"]
+            return method_atom["id"]
+        finally:
+            cc.close()
 
     def _apply_meta_strategy(self):
         """Apply meta-strategy when stagnation is detected.
@@ -1219,39 +1227,47 @@ class AutoEvolveEngine:
         """Write rubric comparison results to Claim Chain as fact atom + compares_to relation."""
         from claim_chain.chain import ClaimChain
         cc = ClaimChain(self.workspace / "_index" / "cc.db")
-        existing = cc.get_atoms(limit=500, status=None)
+        try:
+            ps_path = self.workspace / "PIPELINE_STATE.json"
+            if ps_path.exists():
+                ps = json.loads(ps_path.read_text(encoding="utf-8"))
+                cc.set_session_context(ps.get("iteration", 0), ps.get("phase", "unknown"))
 
-        dim_summary = ", ".join(
-            f"{dim}: A={s['a']:.1f} B={s['b']:.1f}"
-            for dim, s in evaluation["dimension_scores"].items()
-        )
+            existing = cc.get_atoms(limit=500)
 
-        # Find method atoms for both variants
-        atoms_a = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_a["id"]]
-        atoms_b = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_b["id"]]
-        method_a = next((a for a in atoms_a if a["type"] == "method"), None)
-        method_b = next((a for a in atoms_b if a["type"] == "method"), None)
+            dim_summary = ", ".join(
+                f"{dim}: A={s['a']:.1f} B={s['b']:.1f}"
+                for dim, s in evaluation["dimension_scores"].items()
+            )
 
-        # Create comparison fact atom — capture return value for correct ID
-        fact_atom = cc.add_atom(
-            type="fact",
-            title=f"Rubric: {variant_a['id']} vs {variant_b['id']}",
-            content=f"Multi-dimensional comparison: similarity={evaluation['similarity']:.1%}. "
-                     f"Scores: {dim_summary}",
-            tags=["comparison", "rubric", "l2"],
-            evidence_level="experiment",
-            metadata={"variant_a": variant_a["id"], "variant_b": variant_b["id"],
-                      "evaluation": evaluation},
-        )
+            # Find method atoms for both variants
+            atoms_a = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_a["id"]]
+            atoms_b = [a for a in existing if a.get("metadata", {}).get("variant_id") == variant_b["id"]]
+            method_a = next((a for a in atoms_a if a["type"] == "method"), None)
+            method_b = next((a for a in atoms_b if a["type"] == "method"), None)
 
-        # Create compares_to relations using actual atom IDs
-        if method_a and method_b:
-            cc.add_relation(source_id=method_a["id"], target_id=method_b["id"],
-                           type="compares_to",
-                           evidence=f"similarity={evaluation['similarity']:.1%}: {dim_summary}")
-            cc.add_relation(source_id=method_b["id"], target_id=method_a["id"],
-                           type="compares_to",
-                           evidence=f"similarity={evaluation['similarity']:.1%}: {dim_summary}")
+            # Create comparison fact atom — capture return value for correct ID
+            fact_atom = cc.add_atom(
+                type="fact",
+                title=f"Rubric: {variant_a['id']} vs {variant_b['id']}",
+                content=f"Multi-dimensional comparison: similarity={evaluation['similarity']:.1%}. "
+                         f"Scores: {dim_summary}",
+                tags=["comparison", "rubric", "l2"],
+                evidence_level="experiment",
+                metadata={"variant_a": variant_a["id"], "variant_b": variant_b["id"],
+                          "evaluation": evaluation},
+            )
+
+            # Create compares_to relations using actual atom IDs
+            if method_a and method_b:
+                cc.add_relation(source_id=method_a["id"], target_id=method_b["id"],
+                               type="compares_to",
+                               evidence=f"similarity={evaluation['similarity']:.1%}: {dim_summary}")
+                cc.add_relation(source_id=method_b["id"], target_id=method_a["id"],
+                               type="compares_to",
+                               evidence=f"similarity={evaluation['similarity']:.1%}: {dim_summary}")
+        finally:
+            cc.close()
 
     def _check_island_migration(self, variant_id: str, plan: dict):
         """L3 Island Migration: triple-check before moving variant between islands.
@@ -1344,17 +1360,24 @@ class AutoEvolveEngine:
             # Write migration to Claim Chain
             from claim_chain.chain import ClaimChain
             cc = ClaimChain(self.workspace / "_index" / "cc.db")
-            cc.add_atom(
-                type="fact",
-                title=f"Migration: {variant_id} → {target_island['id']}",
-                content=f"Variant {variant_id} (score={current_score}) migrated from "
-                        f"{current_island_id} to {target_island['id']}. "
-                        f"Triple check passed: no contradicts, score above floor, significant improvement.",
-                tags=["migration", "island", "l3"],
-                evidence_level="experiment",
-                metadata={"variant_id": variant_id, "from_island": current_island_id,
-                          "to_island": target_island["id"]},
-            )
+            try:
+                ps_path = self.workspace / "PIPELINE_STATE.json"
+                if ps_path.exists():
+                    ps = json.loads(ps_path.read_text(encoding="utf-8"))
+                    cc.set_session_context(ps.get("iteration", 0), ps.get("phase", "unknown"))
+                cc.add_atom(
+                    type="fact",
+                    title=f"Migration: {variant_id} → {target_island['id']}",
+                    content=f"Variant {variant_id} (score={current_score}) migrated from "
+                            f"{current_island_id} to {target_island['id']}. "
+                            f"Triple check passed: no contradicts, score above floor, significant improvement.",
+                    tags=["migration", "island", "l3"],
+                    evidence_level="experiment",
+                    metadata={"variant_id": variant_id, "from_island": current_island_id,
+                              "to_island": target_island["id"]},
+                )
+            finally:
+                cc.close()
             break
 
     def _finalize(self):

@@ -20,7 +20,7 @@ class RubricScheduler:
 
     def __init__(self, claim_chain, max_score: float = 1000, solve_threshold: float | None = None):
         """
-        claim_chain: ClaimChain 实例 (from tools.claim_chain)
+        claim_chain: ClaimChain 实例 (from claim_chain.chain)
         """
         self.cc = claim_chain
         self.max_score = max_score

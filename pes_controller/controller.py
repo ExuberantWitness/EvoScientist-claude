@@ -3661,6 +3661,7 @@ def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> st
 
     Returns a CC subgraph summary for persona agents to anchor proposals.
     """
+    cc = None
     try:
         # Import here to avoid circular deps
         from claim_chain.chain import ClaimChain
@@ -3668,6 +3669,12 @@ def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> st
         from pes_controller.elo.neighborhood import RNDEvaluator
 
         cc = ClaimChain(session_dir / "_index" / "cc.db")
+        ps_path = session_dir / "PIPELINE_STATE.json"
+        if ps_path.exists():
+            import json
+            ps = json.loads(ps_path.read_text(encoding="utf-8"))
+            cc.set_session_context(ps.get("iteration", 0), ps.get("phase", "unknown"))
+
         kb_path = session_dir / "_index" / "rnd_kb.jsonl"
         rnd_eval = RNDEvaluator(kb_path=kb_path) if kb_path.exists() else None
         if rnd_eval:
@@ -3719,6 +3726,9 @@ def _build_cc_ideation_context(state: dict, session_dir: Path, phase: str) -> st
     except Exception as e:
         import logging; logging.warning(f"_build_cc_ideation_context failed: {e}")
         return ""
+    finally:
+        if cc is not None:
+            cc.close()
 
 
 def _build_experiment_feedback(state: dict, session_dir: Path) -> str:

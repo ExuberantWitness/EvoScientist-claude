@@ -439,7 +439,7 @@ class TestW5AnalyzeClaimChain:
 
     @pytest.fixture
     def cc(self):
-        from tools.claim_chain_v2 import ClaimChainV2
+        from claim_chain.chain import ClaimChainV2
         db = tempfile.mktemp(suffix=".db")
         cc = ClaimChainV2(db)
         yield cc
@@ -495,20 +495,20 @@ class TestW2PlanConfig:
     """W2 Plan — DomainConfig loading + plan template rendering."""
 
     def test_rl_preset_loads(self):
-        from tools.domain_presets import get_domain_preset
+        from plugins.ideation.domain_presets import get_domain_preset
         rl = get_domain_preset("reinforcement_learning")
         assert rl["domain_name"] == "reinforcement_learning"
         assert len(rl["seed_keywords"]) > 0
         assert "sme_domains" in rl  # domain config has cross-domain mapping config
 
     def test_invalid_preset_falls_back(self):
-        from tools.domain_presets import get_domain_preset
+        from plugins.ideation.domain_presets import get_domain_preset
         unknown = get_domain_preset("nonexistent_domain_xyz")
         assert unknown["domain_name"] == "general"
 
     def test_plan_template_renders(self):
         import tempfile
-        from tools.plan_templates import render_algo_section, render_plan_header
+        from plugins.ideation.plan_templates import render_algo_section, render_plan_header
         hdr = render_plan_header("test_session", 0, "reinforcement_learning")
         assert "test_session" in hdr
         assert "reinforcement_learning" in hdr
@@ -527,7 +527,7 @@ class TestW2PlanConfig:
             os.unlink(tmp_path)
 
     def test_plan_sanitize_banned(self):
-        from tools.plan_templates import sanitize_plan_text
+        from plugins.ideation.plan_templates import sanitize_plan_text
         dirty = "Implementation: 与 trainer.py 接口兼容"
         clean = sanitize_plan_text(dirty)
         assert "与 trainer.py 接口兼容" not in clean
@@ -542,7 +542,7 @@ class TestNegativeArchive:
     @pytest.fixture
     def na(self):
         d = tempfile.mkdtemp()
-        from tools.negative_archive import NegativeArchive
+        from claim_chain.negative_archive import NegativeArchive
         na = NegativeArchive(Path(d))
         yield na
         import shutil
@@ -572,7 +572,7 @@ class TestNegativeArchive:
     def test_gate_rejects_bad_atom(self, na):
         bad_atom = na.session_dir / "bad.json"
         bad_atom.write_text(json.dumps(make_test_atom("bad", "not python code at all")))
-        from tools.negative_archive import atom_verify_gate
+        from claim_chain.negative_archive import atom_verify_gate
         ok, reason = atom_verify_gate(bad_atom)
         assert not ok
         assert "FAIL" in reason or "FAIL" in reason
@@ -584,7 +584,7 @@ class TestBaseAlgorithm:
     """Phase 0 — BaseAlgorithm inheritance verification."""
 
     def test_concrete_subclass_passes(self):
-        from tools.trainer_contract import BaseAlgorithm
+        from plugins.experimentation.trainer_contract import BaseAlgorithm
         import numpy as np
 
         class TestAgent(BaseAlgorithm):
@@ -604,7 +604,7 @@ class TestBaseAlgorithm:
         assert issubclass(TestAgent, BaseAlgorithm)
 
     def test_missing_method_errors(self):
-        from tools.trainer_contract import BaseAlgorithm
+        from plugins.experimentation.trainer_contract import BaseAlgorithm
         with pytest.raises(TypeError):
             class BrokenAgent(BaseAlgorithm):
                 def select_action(self, obs, deterministic=False):
@@ -619,14 +619,14 @@ class TestConcretenessGate:
     """Phase 6 — ConcretenessGate soft fallback."""
 
     def test_default_config(self):
-        from tools.pipeline_protocol import ConcretenessGate
+        from pes_controller.protocol import ConcretenessGate
         gate = ConcretenessGate()
         assert gate.enabled is True
         assert gate.min_score == 0.3
         assert gate.block_on_failure is False
 
     def test_strict_mode(self):
-        from tools.pipeline_protocol import ConcretenessGate
+        from pes_controller.protocol import ConcretenessGate
         gate = ConcretenessGate(block_on_failure=True, min_score=0.7)
         assert gate.min_score == 0.7
         assert gate.block_on_failure is True

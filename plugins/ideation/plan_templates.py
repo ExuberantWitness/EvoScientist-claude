@@ -5,7 +5,7 @@ Reads refined_proposals/<atom_id>.json and renders concrete plan sections.
 Zero LLM involvement — pure template rendering.
 
 Usage:
-  from tools.plan_templates import render_plan_section
+  from plugins.ideation.plan_templates import render_plan_section
   section = render_plan_section(atom_json_path)
 """
 

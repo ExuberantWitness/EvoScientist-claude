@@ -203,7 +203,7 @@ def structure_to_cc_atoms(
                     tags=["baseline", "codegraph", stem],
                     metadata={"id": stem},
                 )
-            except Exception:
+            except (sqlite3.IntegrityError, sqlite3.OperationalError):
                 pass  # May already exist
 
         # Create component atoms (always, even without cc)

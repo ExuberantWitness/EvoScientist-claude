@@ -325,11 +325,6 @@ class IndexSyncer:
                 p.unlink()
                 logger.info(f"Deleted stale {name} (data now in cc.db)")
 
-    def _write_jsonl(self, filename: str, entries: list[dict]):
-        path = self.index_dir / filename
-        with open(path, "w", encoding="utf-8") as f:
-            for entry in entries:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def rebuild(self) -> dict:
         """完全重建索引 (删除现有 JSONL 后重建). 幂等.
@@ -500,18 +495,3 @@ def _count_by_key(items: list[dict], key: str) -> dict:
         counts[val] += 1
     return dict(counts)
 
-
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    entries = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return entries

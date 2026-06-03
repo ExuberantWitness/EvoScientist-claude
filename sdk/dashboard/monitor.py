@@ -94,24 +94,6 @@ def _bridge():
     return _bridge_ref
 
 
-# ── Claim Chain helpers ──
-
-def _read_jsonl(path: Path, limit: int = 200):
-    """Read last N entries from a JSONL file."""
-    if not path.exists():
-        return []
-    entries = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return entries[-limit:]
-
 
 # ── Routes ──
 
@@ -3442,42 +3424,47 @@ async def _do_sync_to_cc(step: dict, ws_path: Path, session_id: str,
     from claim_chain.grounding import CCGrounding
 
     cc = ClaimChain(ws_path / "_index" / "cc.db")
-    grounding = CCGrounding(cc)
+    try:
+        state = atomic_read(state_path)
+        current_phase = state.get("phase", step.get("phase", ""))
+        cc.set_session_context(state.get("iteration", 0), current_phase)
 
-    state = atomic_read(state_path)
-    current_phase = state.get("phase", step.get("phase", ""))
-    proposals = step.get("proposals", state.get("last_persona_proposals", []))
+        grounding = CCGrounding(cc)
 
-    atom_count = 0
-    rel_count = 0
+        proposals = step.get("proposals", state.get("last_persona_proposals", []))
 
-    if proposals:
-        # Extract search results from proposals for literature enrichment
-        search_items = []
-        for prop in proposals:
-            if not isinstance(prop, dict):
-                continue
-            summary = prop.get("search_results_summary", "")
-            if summary:
-                search_items.append({
-                    "title": prop.get("title", "")[:200],
-                    "abstract": summary[:1000],
-                    "source": "persona_search",
-                })
+        atom_count = 0
+        rel_count = 0
 
-        # Sync search results as literature → CC (gatekeeper-validated)
-        # Then sync proposals as method atoms
-        report = grounding.enrich_from_proposals(proposals, phase=current_phase)
-        atom_count = report.get("atoms_added", 0)
-        rel_count = report.get("relations_added", 0)
+        if proposals:
+            # Extract search results from proposals for literature enrichment
+            search_items = []
+            for prop in proposals:
+                if not isinstance(prop, dict):
+                    continue
+                summary = prop.get("search_results_summary", "")
+                if summary:
+                    search_items.append({
+                        "title": prop.get("title", "")[:200],
+                        "abstract": summary[:1000],
+                        "source": "persona_search",
+                    })
 
-    result["detail"] = (
-        f"sync_to_cc: {atom_count} proposal atoms + {rel_count} relations "
-        f"synced to CC via CCGrounding gatekeeper (phase={current_phase})"
-    )
-    _push_internal_event(session_id, "cc_synced",
-                         {"phase": current_phase, "atoms": atom_count,
-                          "relations": rel_count})
+            # Sync search results as literature → CC (gatekeeper-validated)
+            # Then sync proposals as method atoms
+            report = grounding.enrich_from_proposals(proposals, phase=current_phase)
+            atom_count = report.get("atoms_added", 0)
+            rel_count = report.get("relations_added", 0)
+
+        result["detail"] = (
+            f"sync_to_cc: {atom_count} proposal atoms + {rel_count} relations "
+            f"synced to CC via CCGrounding gatekeeper (phase={current_phase})"
+        )
+        _push_internal_event(session_id, "cc_synced",
+                             {"phase": current_phase, "atoms": atom_count,
+                              "relations": rel_count})
+    finally:
+        cc.close()
     return result
 
 
@@ -3493,126 +3480,129 @@ async def _do_write_claim_chain(step: dict, ws_path: Path, session_id: str,
     """
     from claim_chain.chain import ClaimChain
     cc = ClaimChain(ws_path / "_index" / "cc.db")
+    try:
+        state = atomic_read(state_path)
+        current_phase = state.get("phase", step.get("phase", ""))
+        cc.set_session_context(state.get("iteration", 0), current_phase)
+        analysis = state.get("analysis_summary", {})
+        code_results = state.get("code_results", [])
+        algorithms = analysis.get("algorithms", [])
+        pipeline_ctx = state.get("last_pipeline_context", {})
+        proposals = pipeline_ctx.get("proposals", [])
 
-    state = atomic_read(state_path)
-    current_phase = state.get("phase", step.get("phase", ""))
-    analysis = state.get("analysis_summary", {})
-    code_results = state.get("code_results", [])
-    algorithms = analysis.get("algorithms", [])
-    pipeline_ctx = state.get("last_pipeline_context", {})
-    proposals = pipeline_ctx.get("proposals", [])
+        written_atoms = []
+        written_relations = []
+        atom_id_map = {}  # name → atom_id
 
-    written_atoms = []
-    written_relations = []
-    atom_id_map = {}  # name → atom_id
+        # ── 路径 A: 无实验数据 → 从 pipeline proposals 写入 CC atoms (via CCGrounding gatekeeper) ──
+        if not algorithms and proposals:
+            from claim_chain.grounding import CCGrounding
+            grounding = CCGrounding(cc)
+            report = grounding.enrich_from_proposals(proposals, phase=current_phase)
+            written_atoms = list(range(report.get("atoms_added", 0)))  # placeholder IDs for tracking
+            written_relations = list(range(report.get("relations_added", 0)))
 
-    # ── 路径 A: 无实验数据 → 从 pipeline proposals 写入 CC atoms (via CCGrounding gatekeeper) ──
-    if not algorithms and proposals:
+            # 如果 tournament 已排序, 创建 validates relations (rank N → rank N+1)
+            tourney = state.get("last_tournament_result", {})
+            ranked = tourney.get("ranked") or tourney.get("proposals") or []
+            if ranked and len(ranked) >= 2:
+                for k in range(len(ranked) - 1):
+                    winner = ranked[k].get("title", "")
+                    loser = ranked[k + 1].get("title", "")
+                    if winner and loser:
+                        try:
+                            rel = cc.add_relation(type="validates", source_id=winner, target_id=loser,
+                                                  evidence=f"ELO tournament: rank {k+1} > rank {k+2}")
+                            written_relations.append(rel.get("id", len(written_relations)))
+                        except Exception:
+                            pass
+
+            result["detail"] = f"CC 写入 (proposals via CCGrounding): {report['atoms_added']} atoms, {report['relations_added']} relations"
+            _record_deliverable(state_path, step.get("step", "write_cc"), current_phase,
+                              "write_claim_chain",
+                              f"CC写入: {report['atoms_added']} atoms, {report['relations_added']} relations",
+                              {"atoms": report['atoms_added'], "relations": report['relations_added']})
+            _push_internal_event(session_id, "cc_written",
+                                 {"phase": current_phase, "atoms": report['atoms_added'],
+                                  "relations": report['relations_added']})
+            return result
+
+        # ── 路径 B: 无数据 → 初始化空 CC 文件 (确保 session 结构可见) ──
+        if not algorithms:
+            # touch empty files so vault structure is visible
+            cc.get_graph_summary()
+            result["detail"] = "CC 已初始化 (暂无数据, 待实验完成后写入)"
+            return result
+
+        # ── 路径 C: 有实验数据 → 写入 experiment atoms via CCGrounding + pairwise relations ──
         from claim_chain.grounding import CCGrounding
         grounding = CCGrounding(cc)
-        report = grounding.enrich_from_proposals(proposals, phase=current_phase)
-        written_atoms = list(range(report.get("atoms_added", 0)))  # placeholder IDs for tracking
-        written_relations = list(range(report.get("relations_added", 0)))
+        # Build results dict for enrich_from_experiments
+        results_dict = {}
+        for algo in algorithms:
+            name = algo.get("algorithm", "unknown")
+            results_dict[name] = {
+                "score_mean": algo.get("mean", 0),
+                "score_std": algo.get("std", 0),
+                "n": algo.get("n", 0),
+                "status": "tested",
+            }
+        exp_report = grounding.enrich_from_experiments(results_dict)
+        written_atoms = list(range(exp_report.get("atoms_created", 0)))
 
-        # 如果 tournament 已排序, 创建 validates relations (rank N → rank N+1)
-        tourney = state.get("last_tournament_result", {})
-        ranked = tourney.get("ranked") or tourney.get("proposals") or []
-        if ranked and len(ranked) >= 2:
-            for k in range(len(ranked) - 1):
-                winner = ranked[k].get("title", "")
-                loser = ranked[k + 1].get("title", "")
-                if winner and loser:
+        # Rebuild atom_id_map from CC for pairwise relations
+        atoms = cc.get_atoms(limit=200)
+        for a in atoms:
+            a_title = str(a.get("title", ""))
+            a_id = str(a.get("id", ""))
+            for algo in algorithms:
+                name = algo.get("algorithm", "unknown")
+                if name.lower() in a_title.lower() and "experiment" in str(a.get("tags", [])):
+                    atom_id_map[name] = a_id
+
+        for i in range(len(algorithms)):
+            for j in range(i + 1, len(algorithms)):
+                a = algorithms[i]
+                b = algorithms[j]
+                a_id = atom_id_map.get(a["algorithm"])
+                b_id = atom_id_map.get(b["algorithm"])
+                if not a_id or not b_id:
+                    continue
+                if a["mean"] > b["mean"] * 1.10:
+                    rel = cc.add_relation(type="validates", source_id=a_id, target_id=b_id,
+                                          evidence=f"{a['algorithm']}({a['mean']}) > {b['algorithm']}({b['mean']})")
+                    written_relations.append(f"{rel.get('src','')}→{rel.get('dst','')}")
+                elif b["mean"] > a["mean"] * 1.10:
+                    rel = cc.add_relation(type="validates", source_id=b_id, target_id=a_id,
+                                          evidence=f"{b['algorithm']}({b['mean']}) > {a['algorithm']}({a['mean']})")
+                    written_relations.append(f"{rel.get('src','')}→{rel.get('dst','')}")
+
+        ceiling_effects = analysis.get("ceiling_effects", [])
+        if ceiling_effects:
+            for algo in algorithms:
+                atom_id = atom_id_map.get(algo["algorithm"])
+                if atom_id:
                     try:
-                        rel = cc.add_relation(type="validates", source_id=winner, target_id=loser,
-                                              evidence=f"ELO tournament: rank {k+1} > rank {k+2}")
-                        written_relations.append(rel.get("id", len(written_relations)))
+                        cc.add_relation(
+                            type="boundary_of",
+                            source_id=atom_id,
+                            target_id=atom_id,
+                            evidence=f"ceiling_effect: {algo['algorithm']}({algo['mean']})"
+                        )
+                        written_relations.append(-1)
                     except Exception:
                         pass
 
-        result["detail"] = f"CC 写入 (proposals via CCGrounding): {report['atoms_added']} atoms, {report['relations_added']} relations"
+        result["detail"] = f"CC 写入: {len(written_atoms)} atoms, {len(written_relations)} relations"
         _record_deliverable(state_path, step.get("step", "write_cc"), current_phase,
                           "write_claim_chain",
-                          f"CC写入: {report['atoms_added']} atoms, {report['relations_added']} relations",
-                          {"atoms": report['atoms_added'], "relations": report['relations_added']})
+                          f"CC写入: {len(written_atoms)} atoms, {len(written_relations)} relations",
+                          {"atoms": len(written_atoms), "relations": len(written_relations)})
         _push_internal_event(session_id, "cc_written",
-                             {"phase": current_phase, "atoms": report['atoms_added'],
-                              "relations": report['relations_added']})
-        return result
-
-    # ── 路径 B: 无数据 → 初始化空 CC 文件 (确保 session 结构可见) ──
-    if not algorithms:
-        # touch empty files so vault structure is visible
-        cc.get_graph_summary()
-        result["detail"] = "CC 已初始化 (暂无数据, 待实验完成后写入)"
-        return result
-
-    # ── 路径 C: 有实验数据 → 写入 experiment atoms via CCGrounding + pairwise relations ──
-    from claim_chain.grounding import CCGrounding
-    grounding = CCGrounding(cc)
-    # Build results dict for enrich_from_experiments
-    results_dict = {}
-    for algo in algorithms:
-        name = algo.get("algorithm", "unknown")
-        results_dict[name] = {
-            "score_mean": algo.get("mean", 0),
-            "score_std": algo.get("std", 0),
-            "n": algo.get("n", 0),
-            "status": "tested",
-        }
-    exp_report = grounding.enrich_from_experiments(results_dict)
-    written_atoms = list(range(exp_report.get("atoms_created", 0)))
-
-    # Rebuild atom_id_map from CC for pairwise relations
-    atoms = cc.get_atoms(limit=200)
-    for a in atoms:
-        a_title = str(a.get("title", ""))
-        a_id = str(a.get("id", ""))
-        for algo in algorithms:
-            name = algo.get("algorithm", "unknown")
-            if name.lower() in a_title.lower() and "experiment" in str(a.get("tags", [])):
-                atom_id_map[name] = a_id
-
-    for i in range(len(algorithms)):
-        for j in range(i + 1, len(algorithms)):
-            a = algorithms[i]
-            b = algorithms[j]
-            a_id = atom_id_map.get(a["algorithm"])
-            b_id = atom_id_map.get(b["algorithm"])
-            if not a_id or not b_id:
-                continue
-            if a["mean"] > b["mean"] * 1.10:
-                rel = cc.add_relation(type="validates", source_id=a_id, target_id=b_id,
-                                      evidence=f"{a['algorithm']}({a['mean']}) > {b['algorithm']}({b['mean']})")
-                written_relations.append(f"{rel.get('src','')}→{rel.get('dst','')}")
-            elif b["mean"] > a["mean"] * 1.10:
-                rel = cc.add_relation(type="validates", source_id=b_id, target_id=a_id,
-                                      evidence=f"{b['algorithm']}({b['mean']}) > {a['algorithm']}({a['mean']})")
-                written_relations.append(f"{rel.get('src','')}→{rel.get('dst','')}")
-
-    ceiling_effects = analysis.get("ceiling_effects", [])
-    if ceiling_effects:
-        for algo in algorithms:
-            atom_id = atom_id_map.get(algo["algorithm"])
-            if atom_id:
-                try:
-                    cc.add_relation(
-                        type="boundary_of",
-                        source_id=atom_id,
-                        target_id=atom_id,
-                        evidence=f"ceiling_effect: {algo['algorithm']}({algo['mean']})"
-                    )
-                    written_relations.append(-1)
-                except Exception:
-                    pass
-
-    result["detail"] = f"CC 写入: {len(written_atoms)} atoms, {len(written_relations)} relations"
-    _record_deliverable(state_path, step.get("step", "write_cc"), current_phase,
-                      "write_claim_chain",
-                      f"CC写入: {len(written_atoms)} atoms, {len(written_relations)} relations",
-                      {"atoms": len(written_atoms), "relations": len(written_relations)})
-    _push_internal_event(session_id, "cc_written",
-                         {"phase": "W6 结果分析", "atoms": len(written_atoms),
-                          "relations": len(written_relations)})
+                             {"phase": "W6 结果分析", "atoms": len(written_atoms),
+                              "relations": len(written_relations)})
+    finally:
+        cc.close()
     return result
 
 
@@ -3639,91 +3629,95 @@ async def _do_island_assign(step: dict, ws_path: Path, session_id: str,
     grid = CellGrid(str(ws_path / "evolve_archive"))
     islands = IslandManager(ws_path / "evolve_archive")
     cc = ClaimChain(ws_path / "_index" / "cc.db")
-    assigned = 0
+    cc.set_session_context(state.get("iteration", 0), state.get("phase", ""))
+    try:
+        assigned = 0
 
-    # 读 CC atoms 找匹配的 experiment atom_id
-    cc_atoms = cc.get_atoms(limit=200)
-    _meta_tags = {"experiment", "w5-analyze", "benchmark", "literature", "method", "survey"}
-    algo_atom_map = {}  # algorithm_name → atom_id
-    for a in cc_atoms:
-        if "experiment" in a.get("tags", []):
-            for tag in a.get("tags", []):
-                if tag.lower() not in _meta_tags:
-                    algo_atom_map[tag.upper()] = a["id"]
+        # 读 CC atoms 找匹配的 experiment atom_id
+        cc_atoms = cc.get_atoms(limit=200)
+        _meta_tags = {"experiment", "w5-analyze", "benchmark", "literature", "method", "survey"}
+        algo_atom_map = {}  # algorithm_name → atom_id
+        for a in cc_atoms:
+            if "experiment" in a.get("tags", []):
+                for tag in a.get("tags", []):
+                    if tag.lower() not in _meta_tags:
+                        algo_atom_map[tag.upper()] = a["id"]
 
-    for algo in algorithms:
-        name = algo["algorithm"]
-        score = algo["mean"]
+        for algo in algorithms:
+            name = algo["algorithm"]
+            score = algo["mean"]
 
-        # 找代码路径和 CC atom
-        code_path = ""
-        for r in code_results:
-            if r.get("algorithm") == name:
-                code_path = r.get("code_path", "")
-                break
-        atom_id = algo_atom_map.get(name.upper())
+            # 找代码路径和 CC atom
+            code_path = ""
+            for r in code_results:
+                if r.get("algorithm") == name:
+                    code_path = r.get("code_path", "")
+                    break
+            atom_id = algo_atom_map.get(name.upper())
 
-        variant_id = f"v_{name.lower()}_{int(time.time())}"
+            variant_id = f"v_{name.lower()}_{int(time.time())}"
 
-        # Island 分配
-        try:
-            # 尝试基于 method_family 匹配 cell key
-            cell_key = f"*+*+*+{name.lower()}"  # fallback cell key
-            island_id = islands.detect_and_assign(
-                variant_id=variant_id,
-                cell_key=cell_key,
-                score=score,
-                dims={},
-                method_family=name,
-            )
-            # 建立 CC atom ↔ island 关联
-            if atom_id and island_id:
+            # Island 分配
+            try:
+                # 尝试基于 method_family 匹配 cell key
+                cell_key = f"*+*+*+{name.lower()}"  # fallback cell key
+                island_id = islands.detect_and_assign(
+                    variant_id=variant_id,
+                    cell_key=cell_key,
+                    score=score,
+                    dims={},
+                    method_family=name,
+                )
+                # 建立 CC atom ↔ island 关联
+                if atom_id and island_id:
+                    try:
+                        islands.set_claim_atom_id(island_id, variant_id, atom_id)
+                    except Exception:
+                        pass
+                assigned += 1
+            except Exception as e:
+                logger.warning(f"Island assign failed for {name}: {e}")
+                continue
+
+            # Grid 分配
+            try:
+                grid.record_result(
+                    variant_id=variant_id,
+                    score=score,
+                    descriptor={"algorithm": name, "source": "w5-analyze"},
+                    claim_conditions={"code_path": code_path},
+                )
+            except Exception as e:
+                logger.warning(f"Grid record failed for {name}: {e}")
+
+            # CC implements relation: atom → island
+            if atom_id:
                 try:
-                    islands.set_claim_atom_id(island_id, variant_id, atom_id)
+                    cc.add_relation(
+                        type="implements",
+                        source_id=atom_id,
+                        target_id=atom_id,  # target 是 island_id, 但 CC relations 只支持 atom_id
+                        evidence=f"island={island_id}, variant={variant_id}, code={code_path}",
+                    )
                 except Exception:
                     pass
-            assigned += 1
-        except Exception as e:
-            logger.warning(f"Island assign failed for {name}: {e}")
-            continue
 
-        # Grid 分配
+        # 检测 milestones 和 anomalies
         try:
-            grid.record_result(
-                variant_id=variant_id,
-                score=score,
-                descriptor={"algorithm": name, "source": "w5-analyze"},
-                claim_conditions={"code_path": code_path},
-            )
-        except Exception as e:
-            logger.warning(f"Grid record failed for {name}: {e}")
+            grid.detect_milestones()
+        except Exception:
+            pass
 
-        # CC implements relation: atom → island
-        if atom_id:
-            try:
-                cc.add_relation(
-                    type="implements",
-                    source_id=atom_id,
-                    target_id=atom_id,  # target 是 island_id, 但 CC relations 只支持 atom_id
-                    evidence=f"island={island_id}, variant={variant_id}, code={code_path}",
-                )
-            except Exception:
-                pass
-
-    # 检测 milestones 和 anomalies
-    try:
-        grid.detect_milestones()
-    except Exception:
-        pass
-
-    result["detail"] = f"Island 分配: {assigned}/{len(algorithms)} 个算法"
-    current_phase = state.get("phase", step.get("phase", ""))
-    _record_deliverable(state_path, step.get("step", "island_assign"), current_phase,
-                      "island_assign",
-                      f"Island分配: {assigned}/{len(algorithms)}算法",
-                      {"assigned": assigned, "total": len(algorithms)})
-    _push_internal_event(session_id, "island_assigned",
-                         {"phase": "W6 结果分析", "assigned": assigned})
+        result["detail"] = f"Island 分配: {assigned}/{len(algorithms)} 个算法"
+        current_phase = state.get("phase", step.get("phase", ""))
+        _record_deliverable(state_path, step.get("step", "island_assign"), current_phase,
+                          "island_assign",
+                          f"Island分配: {assigned}/{len(algorithms)}算法",
+                          {"assigned": assigned, "total": len(algorithms)})
+        _push_internal_event(session_id, "island_assigned",
+                             {"phase": "W6 结果分析", "assigned": assigned})
+    finally:
+        cc.close()
     return result
 
 
