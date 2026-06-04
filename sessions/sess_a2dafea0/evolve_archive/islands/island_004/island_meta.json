@@ -1,0 +1,16 @@
+{
+  "id": "island_004",
+  "name": "Dual_critic_attention Island",
+  "method_family": "dual_critic_attention",
+  "centroid_cell": "*+*+*+dual_critic_attention",
+  "created_from": "v_dual_critic_attention_1780479223",
+  "created_at": "2026-06-03T17:33:43.306482",
+  "variants": [
+    {
+      "id": "v_dual_critic_attention_1780479223",
+      "cell": "*+*+*+dual_critic_attention",
+      "score": 785.9,
+      "claim_atom_id": "node_1780471897184_e5782d0a"
+    }
+  ]
+}

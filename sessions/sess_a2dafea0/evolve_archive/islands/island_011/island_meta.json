@@ -1,0 +1,16 @@
+{
+  "id": "island_011",
+  "name": "Td_variance Island",
+  "method_family": "td_variance",
+  "centroid_cell": "*+*+*+td_variance",
+  "created_from": "v_td_variance_1780479223",
+  "created_at": "2026-06-03T17:33:43.312343",
+  "variants": [
+    {
+      "id": "v_td_variance_1780479223",
+      "cell": "*+*+*+td_variance",
+      "score": 854.5,
+      "claim_atom_id": "node_1780471897212_bb81203b"
+    }
+  ]
+}

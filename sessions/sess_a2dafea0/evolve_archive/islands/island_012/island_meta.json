@@ -1,0 +1,16 @@
+{
+  "id": "island_012",
+  "name": "Value_uncertainty Island",
+  "method_family": "value_uncertainty",
+  "centroid_cell": "*+*+*+value_uncertainty",
+  "created_from": "v_value_uncertainty_1780479223",
+  "created_at": "2026-06-03T17:33:43.313277",
+  "variants": [
+    {
+      "id": "v_value_uncertainty_1780479223",
+      "cell": "*+*+*+value_uncertainty",
+      "score": 688.8,
+      "claim_atom_id": "node_1780471897216_94bcb047"
+    }
+  ]
+}

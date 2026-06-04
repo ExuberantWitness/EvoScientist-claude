@@ -1,0 +1,16 @@
+{
+  "id": "island_001",
+  "name": "Attention_prior Island",
+  "method_family": "attention_prior",
+  "centroid_cell": "*+*+*+attention_prior",
+  "created_from": "v_attention_prior_1780479223",
+  "created_at": "2026-06-03T17:33:43.300848",
+  "variants": [
+    {
+      "id": "v_attention_prior_1780479223",
+      "cell": "*+*+*+attention_prior",
+      "score": 562.3,
+      "claim_atom_id": "node_1780471897172_c8942d38"
+    }
+  ]
+}

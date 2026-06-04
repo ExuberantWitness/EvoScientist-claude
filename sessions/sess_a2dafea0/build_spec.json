@@ -1,0 +1,62 @@
+{
+  "spec_id": "1396ebf0",
+  "target_method": "基于分位数方差与梯度范数融合的状态依赖自适应探索AC算法",
+  "target_baseline": "",
+  "research_topic": "如何改进actor critic算法提升Hopper-v4控制能力",
+  "hypothesis": "在Hopper-v4的早期低分阶段，通过联合双Critic分位数方差（鲁棒不确定性）和Q值对动作的梯度范数（动作敏感度）生成状态依赖的噪声缩放和熵权重，能比单一信号方法更精细地控制探索-利用权衡，避免策略陷入局部最优或过度随机，从而提升样本效率和最终性能。",
+  "method_sketch": "### 伪代码\n\n```python\n# 初始化参数\nactor = GaussianActor(state_dim, action_dim)  # 输出均值和log_std\ncritic1 = Critic(state_dim, action_dim)\ncritic2 = Critic(state_dim, action_dim)\n# 新增组件：调节网络（输入：状态、分位数方差、梯度范数，输出：sigma_scale(s), beta(s)）\nmodulator = Modulator(state_dim, hidden_dim=64, output_dim=2)  # 输出sigma_scale和beta（正数）\n# 目标网络\ncritic1_target = copy(critic1)\ncritic2_target = copy(critic2)\nactor_target = copy(actor)\n\nfor each iteration:\n    # 采样转换\n    s, a, r, s_next, done = sample_batch()\n    \n    # 计算当前状态的梯度范数和分位数方差\n    # 1. 梯度范数: ||∇_a Q(s,a)||_2, 取两个Critic的均值\n    q1 = critic1(s, a)\n    q2 = critic2(s, a)\n    grad = torch.autograd.grad((q1+q2)/2, a, create_graph=False)[0]  # 使用均值Q\n    grad_norm = grad.norm(dim=-1, keepdim=True)  # shape [batch, 1]\n    \n    # 2. 分位数方差: 对每个Critic输出分位数（如0.25和0.75）的方差\n    # 简化实现：使用双Critic的Q值方差（不进行分位数重采样）\n    q_var = torch.var(torch.stack([q1, q2], dim=1), dim=1, unbiased=False)  # shape [batch, 1]\n    # 实际实现中可用IQN风格的分位数网络，但为简单此处用双Q方差\n    \n    # 3. 调节网络生成状态依赖系数\n    mod_input = torch.cat([s, grad_norm, q_var], dim=-1)  # 融合状态、梯度范数、方差\n    sigma_scale, beta = modulator(mod_input)  # both positive, shape [batch, 1]\n    \n    # 4. 策略前向：使用sigma_scale缩放动作噪声\n    mu, log_std = actor(s)\n    # 原始log_std不变，但采样时使用sigma_scale乘以标准差？或者直接调整log_std\n    # 更合理：调整log_std的偏移量：log_std = log_std + log(sigma_scale)\n    log_std_adjusted = log_std + torch.log(sigma_scale)  # 放大或缩小噪声\n    std_adjusted = log_std_adjusted.exp()\n    dist = Normal(mu, std_adjusted)\n    a_sample = dist.rsample()\n    log_prob = dist.log_prob(a_sample).sum(dim=-1, keepdim=True)\n    \n    # 5. Critic更新（标准TD3延迟更新）\n    with torch.no_grad():\n        noise = (torch.randn_like(a) * target_policy_noise).clamp(-noise_clip, noise_clip)\n        a_next = actor_target(s_next) + noise\n        q1_next = critic1_target(s_next, a_next)\n        q2_next = critic2_target(s_next, a_next)\n        q_target = torch.min(q1_next, q2_next)\n        q_target = r + gamma * (1-done) * q_target\n    q1_current = critic1(s, a)\n    q2_current = critic2(s, a)\n    critic_loss = F.mse_loss(q1_current, q_target) + F.mse_loss(q2_current, q_target)\n    \n    # 6. Actor更新（延迟更新）\n    a_new = actor(s).rsample()  # 使用调整后的分布？需要actor前向一次\n    # 更应该使用当前策略的样本\n    mu, log_std = actor(s)\n    log_std_adjusted = log_std + torch.log(sigma_scale.detach())  # sigma_scale不传播到actor调整\n    std_adjusted = log_std_adjusted.exp()\n    dist_adj = Normal(mu, std_adjusted)\n    a_new = dist_adj.rsample()\n    log_prob_new = dist_adj.log_prob(a_new).sum(dim=-1, keepdim=True)\n    q1_new = critic1(s, a_new)\n    q2_new = critic2(s, a_new)\n    q_new = torch.min(q1_new, q2_new)\n    # 使用beta调节熵权重\n    actor_loss = - (q_new - beta.detach() * log_prob_new).mean()  # 类似SAC但beta状态依赖\n    # 等同于最小化 -E[Q - beta * log_prob]\n    \n    # 7. 调节网络更新：最小化策略梯度更新后的Q值误差，或额外奖励\n    # 目标：使sigma_scale和beta使得actor能获得更高Q值\n    # 简单方案：将modulator输出作为超参数对待，不单独优化？但为了自适应，需要优化\n    # 使用meta-gradient：通过actor损失对sigma_scale和beta求导很难\n    # 替代：在actor更新后，计算调节网络的损失：最大化累积Q值？\n    # 实现：使用一个简单的REINFORCE-like损失\n    # 这里简化：将调节网络视为输出系数，不单独更新，而是将其参数作为可学习超参数\n    # 但为了更稳定，可以在每次actor更新后，用当前Q值监督调节网络：\n    # Q值大的状态对应的sigma_scale应小（更确定性），beta应小（熵权重低）\n    # 设置目标：sigma_target = 1.0 / (1.0 + q_scaled)  # q_scaled是归一化Q\n    # beta_target = 1.0 / (1.0 + q_scaled)  # 高Q时小熵\n    # 但这种关联可能过于简单\n    # 因此在第一次迭代中，我们暂时不更新modulator，仅作为固定超参数，观察效果\n    # 未来改进：引入辅助任务\n```\n\n### 架构改动列表\n\n- **ADD**: `Modulator` 调节网络，输入: 状态 + 梯度范数 + Q方差，输出: sigma_scale(正数)和beta(正数)\n- **MODIFY**: `Actor` forward: 在计算动作分布时，使用sigma_scale缩放log_std (log_std_adjusted = log_std + log(sigma_scale))\n- **MODIFY**: `Critic` 更新: 额外计算梯度范数(∇_a Q)和双Q方差，传递给modulator\n- **MODIFY**: `Actor`损失函数: 从标准策略梯度改为带熵项的形式，且beta是状态依赖的\n- **REMOVE**: 无\n\n### 损失函数签名\n\n1. `critic_loss(q1, q2, q_target) -> Tensor`\n   - 标准MSE损失: `F.mse_loss(q1, q_target) + F.mse_loss(q2, q_target)`\n   - 说明: 双Critic分别回归到同一个目标Q值（取双目标Q的最小值）\n\n2. `actor_loss(q_new, log_prob_new, beta) -> Tensor`\n   - `actor_loss = -(q_new - beta * log_prob_new).mean()`\n   - 说明: 最大化Q值同时最大化熵，但熵的权重beta是状态依赖的（来自modulator），因此不同状态有不同的探索偏好\n\n3. `modulator_loss(sigma_scale, beta, q_values) -> Tensor` (可选，用于训练modulator)\n   - 由于modulator的更新较为复杂，第一版中可固定其输出为初始值(如sigma_scale=1.0, beta=0.2)，或使用简单的启发式规则: 当q_var大时，beta增大鼓励探索；当grad_norm大时，sigma_scale减小控制噪声。\n\n### 计算开销估计\n\n本方案相对于标准TD3/SAC，新增的开销主要来自以下几部分：\n\n1. **梯度范数计算**：每次actor更新时，需要对当前batch的状态-动作对计算Q值对动作的梯度。这涉及一次额外的反向传播（通过Q网络对动作求导），计算量相当于一次额外的Q网络前向（因为求导时需要构建计算图）。如果使用`torch.autograd.grad`直接计算，开销大约是Q网络前向的两倍（因为需要存储中间激活）。对于典型的batch size 256和隐层256的Q网络，每次actor更新额外增加约0.5ms（在GPU上）和约0.8ms（在CPU上）。由于actor更新频率通常较低（如每2个step一次），总体增加可忽略。\n\n2. **分位数方差**：当前简化实现使用双Critic输出的方差，这仅需两次Q前向，已经存在于TD3中（双Critic），因此无额外开销。若采用真正的分位数网络（如IQN），则代价较大（需要N分位数采样），但本方案不影响。\n\n3. **调节网络(MOD)前向**：输入为状态(11维)+梯度范数(1维)+方差(1维)，共13维，输出2维，隐层64。前向一次约0.01ms（CPU），可忽略不计。\n\n4. **Actor分布调整**：对log_std添加偏移，只涉及加法和exp，无额外开销。\n\n5. **总开销**：相对于标准TD3，每次actor更新大约增加30%的计算时间（主要来自梯度计算），但由于actor更新不频繁（如每2个step一次），总体训练时间增加约10-15%。相对于SAC，由于我们采用了TD3的延迟更新，反而可能更高效。\n\n6. **内存开销**：增加一个约13-2-64的MLP网络，参数约(13*64 + 64 + 64*2 + 2) = 866个参数，内存占\n[...truncated]",
+  "component_changes": [
+    {
+      "action": "MODIFY",
+      "component": "SAC",
+      "reason": "Required by: 基于分位数方差与梯度范数融合的状态依赖自适应探索AC算法",
+      "before": "{\"source\": \"github_search\", \"category\": \"algorithms\", \"method\": \"SAC\"}",
+      "after": "[To be specified per 基于分位数方差与梯度范数融合的状态依赖自适应探索AC算法]"
+    },
+    {
+      "action": "MODIFY",
+      "component": "TD3",
+      "reason": "Required by: 基于分位数方差与梯度范数融合的状态依赖自适应探索AC算法",
+      "before": "{\"source\": \"github_search\", \"category\": \"algorithms\", \"method\": \"TD3\"}",
+      "after": "[To be specified per 基于分位数方差与梯度范数融合的状态依赖自适应探索AC算法]"
+    },
+    {
+      "action": "MODIFY",
+      "component": "Experiment: dual_critic_attention",
+      "reason": "Required by: 基于分位数方差与梯度范数融合的状态依赖自适应探索AC算法",
+      "before": "{\"score_mean\": 785.9, \"score_std\": 228.2, \"seeds\": 5, \"env\": \"Hopper-v4\", \"status\": \"validated\", \"success\": true}",
+      "after": "[To be specified per 基于分位数方差与梯度范数融合的状态依赖自适应探索AC算法]"
+    }
+  ],
+  "loss_specs": [],
+  "hyperparams": {
+    "learning_rate": 0.0003,
+    "batch_size": 256,
+    "buffer_size": 1000000,
+    "gamma": 0.99,
+    "tau": 0.005,
+    "total_timesteps": 1000000,
+    "eval_frequency": 10000,
+    "seed_count": 5
+  },
+  "baselines": [],
+  "benchmark": "",
+  "success_criteria": [
+    "Mean return > best baseline () on confirmed benchmark environment",
+    "p < 0.05 over 5 seeds",
+    "Training wall time < 2x baseline"
+  ],
+  "cc_atom_ids": [
+    "node_1780145142461_e13de494",
+    "node_1780145142464_2ee0cc05",
+    "node_1780145142466_b7d6013f",
+    "node_1780145142468_2e5d3859",
+    "node_1780145142470_82e50bde",
+    "node_1780145142472_b7d91cf7",
+    "node_1780145142474_8881cb00",
+    "node_1780145142476_663e672b",
+    "node_1780145353332_2d2924cd",
+    "node_1780145355945_434f2bfe"
+  ],
+  "evidence_ids": []
+}

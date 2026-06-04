@@ -1,0 +1,16 @@
+{
+  "id": "island_007",
+  "name": "Iqn_quantile_simple Island",
+  "method_family": "iqn_quantile_simple",
+  "centroid_cell": "*+*+*+iqn_quantile_simple",
+  "created_from": "v_iqn_quantile_simple_1780479223",
+  "created_at": "2026-06-03T17:33:43.308808",
+  "variants": [
+    {
+      "id": "v_iqn_quantile_simple_1780479223",
+      "cell": "*+*+*+iqn_quantile_simple",
+      "score": 820.4,
+      "claim_atom_id": "node_1780471897196_6caf288b"
+    }
+  ]
+}

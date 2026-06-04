@@ -1,0 +1,8 @@
+# Exclude heavy experiment artifacts
+hopper_experiments*/
+parallel_logs/
+*.pt
+*.pth
+*.mp4
+*.gif
+__pycache__/

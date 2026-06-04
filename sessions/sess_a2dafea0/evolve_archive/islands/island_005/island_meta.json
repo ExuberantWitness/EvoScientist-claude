@@ -1,0 +1,16 @@
+{
+  "id": "island_005",
+  "name": "Gait_phase Island",
+  "method_family": "gait_phase",
+  "centroid_cell": "*+*+*+gait_phase",
+  "created_from": "v_gait_phase_1780479223",
+  "created_at": "2026-06-03T17:33:43.307244",
+  "variants": [
+    {
+      "id": "v_gait_phase_1780479223",
+      "cell": "*+*+*+gait_phase",
+      "score": 967.5,
+      "claim_atom_id": "node_1780471897188_1e3d86c8"
+    }
+  ]
+}

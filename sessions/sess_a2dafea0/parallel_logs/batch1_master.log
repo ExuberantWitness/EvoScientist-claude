@@ -1,0 +1,15 @@
+============================================
+Batch 1: sac td3 ddpg
+Output: /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/hopper_experiments
+Logs:   /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/parallel_logs
+Start:  2026年 05月 30日 星期六 23:26:29 CST
+============================================
+  Launching sac -> /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/parallel_logs/sac_batch1.log
+  Launching td3 -> /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/parallel_logs/td3_batch1.log
+  Launching ddpg -> /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/parallel_logs/ddpg_batch1.log
+PIDs: 2682437 2682438 2682439
+Waiting for batch 1 to complete...
+============================================
+Batch 1 done: 2026年 05月 31日 星期日 07:18:27 CST
+All processes completed successfully
+============================================

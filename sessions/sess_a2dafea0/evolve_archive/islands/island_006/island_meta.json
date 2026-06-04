@@ -1,0 +1,16 @@
+{
+  "id": "island_006",
+  "name": "Iqn_quantile Island",
+  "method_family": "iqn_quantile",
+  "centroid_cell": "*+*+*+iqn_quantile",
+  "created_from": "v_iqn_quantile_1780479223",
+  "created_at": "2026-06-03T17:33:43.308037",
+  "variants": [
+    {
+      "id": "v_iqn_quantile_1780479223",
+      "cell": "*+*+*+iqn_quantile",
+      "score": 0.0,
+      "claim_atom_id": "node_1780471897193_e947d5c2"
+    }
+  ]
+}

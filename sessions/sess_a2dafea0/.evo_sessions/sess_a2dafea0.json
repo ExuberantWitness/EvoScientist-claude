@@ -1,0 +1,14 @@
+{
+  "session_id": "sess_a2dafea0",
+  "workspace_dir": "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0",
+  "thread_id": "sess_a2dafea0",
+  "created_at": 1780534680.5240016,
+  "model": "deepseek-chat",
+  "provider": "deepseek",
+  "status": "idle",
+  "sub_agents_used": [],
+  "thread_count": 0,
+  "thread_summaries": [],
+  "last_response": "",
+  "fitness_history": []
+}

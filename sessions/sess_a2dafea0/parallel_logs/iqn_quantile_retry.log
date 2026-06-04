@@ -1,0 +1,88 @@
+Device: cuda
+Algorithms: ['iqn_quantile']
+Seeds: [0, 1, 2, 3, 4]
+Steps: 1000000
+/home/exuber/anaconda3/lib/python3.11/site-packages/gymnasium/envs/registration.py:513: DeprecationWarning: [33mWARN: The environment Hopper-v4 is out of date. You should consider upgrading to version `v5`.[0m
+  logger.deprecation(
+Env: Hopper-v4 (obs=11, act=3)
+
+============================================================
+Training IQN_QUANTILE
+============================================================
+
+--- iqn_quantile | Seed 0 ---
+/home/exuber/anaconda3/lib/python3.11/site-packages/gymnasium/envs/registration.py:513: DeprecationWarning: [33mWARN: The environment Hopper-v4 is out of date. You should consider upgrading to version `v5`.[0m
+  logger.deprecation(
+[Alg=iqn_quantile Seed=0] Starting training, total_steps=1000000, eval_freq=10000
+[Step   10000] Return: 110.3 ± 8 (min=96, max=123) [1s]
+[Step   20000] Return: 113.4 ± 8 (min=95, max=125) [2s]
+[Step   30000] Return: 175.1 ± 2 (min=173, max=177) [38s]
+[Step   40000] Return: 202.9 ± 4 (min=196, max=208) [106s]
+[Step   50000] Return: 46.1 ± 1 (min=44, max=47) [172s]
+[Step   60000] Return: 294.5 ± 71 (min=228, max=472) [240s]
+[Step   70000] Return: 41.3 ± 1 (min=39, max=44) [306s]
+[Step   80000] Return: 362.3 ± 29 (min=307, max=404) [374s]
+[Step   90000] Return: 374.7 ± 11 (min=347, max=384) [442s]
+[Step  100000] Return: 189.4 ± 46 (min=138, max=304) [510s]
+[Step  110000] Return: 364.8 ± 5 (min=358, max=373) [579s]
+[Step  120000] Return: 224.3 ± 4 (min=219, max=231) [647s]
+[Step  130000] Return: 278.3 ± 11 (min=267, max=308) [716s]
+[Step  140000] Return: 148.4 ± 158 (min=23, max=468) [784s]
+[Step  150000] Return: 357.4 ± 68 (min=275, max=448) [852s]
+[Step  160000] Return: 391.1 ± 58 (min=263, max=480) [921s]
+[Step  170000] Return: 285.3 ± 92 (min=125, max=451) [985s]
+[Step  180000] Return: 399.3 ± 57 (min=327, max=541) [1052s]
+[Step  190000] Return: 388.2 ± 57 (min=292, max=460) [1121s]
+[Step  200000] Return: 482.7 ± 80 (min=363, max=647) [1186s]
+[Step  210000] Return: 2.4 ± 0 (min=2, max=3) [1253s]
+[Step  220000] Return: 14.3 ± 4 (min=8, max=19) [1319s]
+[Step  230000] Return: 253.6 ± 99 (min=119, max=406) [1387s]
+[Step  240000] Return: 171.6 ± 84 (min=113, max=417) [1451s]
+[Step  250000] Return: 286.8 ± 197 (min=107, max=820) [1512s]
+[Step  260000] Return: 377.6 ± 309 (min=130, max=1043) [1572s]
+[Step  270000] Return: 353.3 ± 170 (min=151, max=636) [1632s]
+[Step  280000] Return: 702.1 ± 347 (min=322, max=1433) [1692s]
+[Step  290000] Return: 843.2 ± 414 (min=469, max=1628) [1753s]
+[Step  300000] Return: 312.6 ± 116 (min=119, max=494) [1813s]
+[Step  310000] Return: 312.1 ± 117 (min=184, max=466) [1874s]
+[Step  320000] Return: 535.8 ± 107 (min=385, max=678) [1934s]
+[Step  330000] Return: 259.2 ± 231 (min=104, max=675) [1994s]
+[Step  340000] Return: 243.6 ± 18 (min=222, max=267) [2055s]
+[Step  350000] Return: 229.8 ± 53 (min=138, max=321) [2116s]
+[Step  360000] Return: 199.4 ± 30 (min=153, max=253) [2176s]
+[Step  370000] Return: 266.7 ± 128 (min=109, max=464) [2237s]
+[Step  380000] Return: 234.4 ± 19 (min=211, max=280) [2297s]
+[Step  390000] Return: 386.9 ± 32 (min=308, max=439) [2358s]
+[Step  400000] Return: 821.3 ± 368 (min=69, max=1006) [2420s]
+[Step  410000] Return: 497.5 ± 47 (min=411, max=554) [2481s]
+[Step  420000] Return: 448.4 ± 56 (min=311, max=506) [2541s]
+[Step  430000] Return: 585.3 ± 234 (min=99, max=970) [2603s]
+[Step  440000] Return: 399.2 ± 198 (min=267, max=820) [2664s]
+[Step  450000] Return: 354.3 ± 163 (min=108, max=739) [2725s]
+[Step  460000] Return: 470.2 ± 221 (min=255, max=939) [2785s]
+[Step  470000] Return: 340.8 ± 82 (min=249, max=506) [2845s]
+[Step  480000] Return: 630.5 ± 313 (min=97, max=985) [2906s]
+Traceback (most recent call last):
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/train_all.py", line 239, in <module>
+    main()
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/train_all.py", line 218, in main
+    result = trainer.train()
+             ^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/trainer.py", line 237, in train
+    action = self._select_action(obs, deterministic=False)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/trainer.py", line 155, in _select_action
+    return self.agent.select_action(obs, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/iqn_quantile_agent.py", line 122, in select_action
+    action, _ = self.actor.sample(obs_t, deterministic=deterministic)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/networks.py", line 169, in sample
+    normal = torch.distributions.Normal(mean, std)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/anaconda3/lib/python3.11/site-packages/torch/distributions/normal.py", line 66, in __init__
+    super().__init__(batch_shape, validate_args=validate_args)
+  File "/home/exuber/anaconda3/lib/python3.11/site-packages/torch/distributions/distribution.py", line 77, in __init__
+    raise ValueError(
+ValueError: Expected parameter loc (Tensor of shape (1, 3)) of distribution Normal(loc: torch.Size([1, 3]), scale: torch.Size([1, 3])) to satisfy the constraint Real(), but found invalid values:
+tensor([[nan, nan, nan]], device='cuda:0')

@@ -1,0 +1,16 @@
+{
+  "id": "island_010",
+  "name": "Td3 Island",
+  "method_family": "td3",
+  "centroid_cell": "*+*+*+td3",
+  "created_from": "v_td3_1780479223",
+  "created_at": "2026-06-03T17:33:43.311331",
+  "variants": [
+    {
+      "id": "v_td3_1780479223",
+      "cell": "*+*+*+td3",
+      "score": 707.0,
+      "claim_atom_id": "node_1780471897208_26041007"
+    }
+  ]
+}

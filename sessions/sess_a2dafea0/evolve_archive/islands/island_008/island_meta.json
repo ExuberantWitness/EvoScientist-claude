@@ -1,0 +1,16 @@
+{
+  "id": "island_008",
+  "name": "Sac Island",
+  "method_family": "sac",
+  "centroid_cell": "*+*+*+sac",
+  "created_from": "v_sac_1780479223",
+  "created_at": "2026-06-03T17:33:43.309636",
+  "variants": [
+    {
+      "id": "v_sac_1780479223",
+      "cell": "*+*+*+sac",
+      "score": 387.6,
+      "claim_atom_id": "node_1780471897201_ae9e81f2"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "island_002",
+  "name": "Ddpg Island",
+  "method_family": "ddpg",
+  "centroid_cell": "*+*+*+ddpg",
+  "created_from": "v_ddpg_1780479223",
+  "created_at": "2026-06-03T17:33:43.301632",
+  "variants": [
+    {
+      "id": "v_ddpg_1780479223",
+      "cell": "*+*+*+ddpg",
+      "score": 1009.6,
+      "claim_atom_id": "node_1780471897176_6d14b413"
+    }
+  ]
+}

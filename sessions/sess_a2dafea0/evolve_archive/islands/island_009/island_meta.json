@@ -1,0 +1,16 @@
+{
+  "id": "island_009",
+  "name": "Taylor_curvature Island",
+  "method_family": "taylor_curvature",
+  "centroid_cell": "*+*+*+taylor_curvature",
+  "created_from": "v_taylor_curvature_1780479223",
+  "created_at": "2026-06-03T17:33:43.310471",
+  "variants": [
+    {
+      "id": "v_taylor_curvature_1780479223",
+      "cell": "*+*+*+taylor_curvature",
+      "score": 789.6,
+      "claim_atom_id": "node_1780471897204_086924f5"
+    }
+  ]
+}

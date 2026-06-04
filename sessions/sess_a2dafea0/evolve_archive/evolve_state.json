@@ -1,0 +1,1213 @@
+{
+  "cells": {
+    "low+low+low+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+low+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+low+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+medium+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+medium+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+medium+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+high+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+high+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+low+high+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+low+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+low+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+low+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+medium+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+medium+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+medium+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+high+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+high+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+medium+high+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+low+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+low+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+low+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+medium+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+medium+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+medium+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+high+low": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+high+medium": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "low+high+high+high": {
+      "dim_values": {
+        "accuracy": "low",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+low+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+low+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+low+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+medium+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+medium+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+medium+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+high+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+high+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+low+high+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+low+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+low+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+low+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+medium+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+medium+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+medium+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+high+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+high+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+medium+high+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+low+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+low+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+low+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+medium+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+medium+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+medium+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+high+low": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+high+medium": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "medium+high+high+high": {
+      "dim_values": {
+        "accuracy": "medium",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+low+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+low+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+low+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+medium+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+medium+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+medium+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+high+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+high+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+low+high+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "low",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+low+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+low+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+low+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+medium+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+medium+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+medium+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+high+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+high+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+medium+high+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "medium",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+low+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+low+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+low+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "low",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+medium+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+medium+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+medium+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "medium",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+high+low": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "low"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+high+medium": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "medium"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "high+high+high+high": {
+      "dim_values": {
+        "accuracy": "high",
+        "robustness": "high",
+        "efficiency": "high",
+        "completeness": "high"
+      },
+      "elite_id": null,
+      "elite_score": null,
+      "variants": [],
+      "anomalies": []
+    },
+    "*+*+*+*": {
+      "dim_values": {
+        "accuracy": "*",
+        "robustness": "*",
+        "efficiency": "*",
+        "completeness": "*"
+      },
+      "elite_id": "v_ddpg_1780479223",
+      "elite_score": 1009.6,
+      "variants": [
+        {
+          "id": "v_ddpg_1780479223",
+          "score": 1009.6,
+          "descriptor": {
+            "algorithm": "ddpg",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_dp_depth_1780479223",
+          "score": 985.1,
+          "descriptor": {
+            "algorithm": "dp_depth",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_dual_critic_attention_1780479223",
+          "score": 785.9,
+          "descriptor": {
+            "algorithm": "dual_critic_attention",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_gait_phase_1780479223",
+          "score": 967.5,
+          "descriptor": {
+            "algorithm": "gait_phase",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_iqn_quantile_1780479223",
+          "score": 0.0,
+          "descriptor": {
+            "algorithm": "iqn_quantile",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_iqn_quantile_simple_1780479223",
+          "score": 820.4,
+          "descriptor": {
+            "algorithm": "iqn_quantile_simple",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_sac_1780479223",
+          "score": 387.6,
+          "descriptor": {
+            "algorithm": "sac",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_taylor_curvature_1780479223",
+          "score": 789.6,
+          "descriptor": {
+            "algorithm": "taylor_curvature",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_td3_1780479223",
+          "score": 707.0,
+          "descriptor": {
+            "algorithm": "td3",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_td_variance_1780479223",
+          "score": 854.5,
+          "descriptor": {
+            "algorithm": "td_variance",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        },
+        {
+          "id": "v_value_uncertainty_1780479223",
+          "score": 688.8,
+          "descriptor": {
+            "algorithm": "value_uncertainty",
+            "source": "w5-analyze"
+          },
+          "claim_conditions": {
+            "code_path": ""
+          }
+        }
+      ],
+      "anomalies": []
+    }
+  },
+  "variant_history": [
+    {
+      "id": "v_ddpg_1780479223",
+      "score": 1009.6,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "ddpg",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_dp_depth_1780479223",
+      "score": 985.1,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "dp_depth",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_dual_critic_attention_1780479223",
+      "score": 785.9,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "dual_critic_attention",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_gait_phase_1780479223",
+      "score": 967.5,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "gait_phase",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_iqn_quantile_1780479223",
+      "score": 0.0,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "iqn_quantile",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_iqn_quantile_simple_1780479223",
+      "score": 820.4,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "iqn_quantile_simple",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_sac_1780479223",
+      "score": 387.6,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "sac",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_taylor_curvature_1780479223",
+      "score": 789.6,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "taylor_curvature",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_td3_1780479223",
+      "score": 707.0,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "td3",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_td_variance_1780479223",
+      "score": 854.5,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "td_variance",
+        "source": "w5-analyze"
+      }
+    },
+    {
+      "id": "v_value_uncertainty_1780479223",
+      "score": 688.8,
+      "cell": "*+*+*+*",
+      "descriptor": {
+        "algorithm": "value_uncertainty",
+        "source": "w5-analyze"
+      }
+    }
+  ],
+  "milestone_log": [],
+  "next_variant": 1
+}

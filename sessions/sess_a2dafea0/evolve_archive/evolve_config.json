@@ -1,0 +1,47 @@
+{
+  "dim_names": [
+    "accuracy",
+    "robustness",
+    "efficiency",
+    "completeness"
+  ],
+  "behavior_dims": [
+    {
+      "name": "accuracy",
+      "source": "rubric_standard",
+      "values": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "name": "robustness",
+      "source": "rubric_standard",
+      "values": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "name": "efficiency",
+      "source": "rubric_standard",
+      "values": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "name": "completeness",
+      "source": "rubric_standard",
+      "values": [
+        "low",
+        "medium",
+        "high"
+      ]
+    }
+  ],
+  "part3_slots_remaining": 3
+}

@@ -1,0 +1,119 @@
+Device: cuda
+Algorithms: ['iqn_quantile']
+Seeds: [0, 1, 2, 3, 4]
+Steps: 1000000
+/home/exuber/anaconda3/lib/python3.11/site-packages/gymnasium/envs/registration.py:513: DeprecationWarning: [33mWARN: The environment Hopper-v4 is out of date. You should consider upgrading to version `v5`.[0m
+  logger.deprecation(
+Env: Hopper-v4 (obs=11, act=3)
+
+============================================================
+Training IQN_QUANTILE
+============================================================
+
+--- iqn_quantile | Seed 0 ---
+/home/exuber/anaconda3/lib/python3.11/site-packages/gymnasium/envs/registration.py:513: DeprecationWarning: [33mWARN: The environment Hopper-v4 is out of date. You should consider upgrading to version `v5`.[0m
+  logger.deprecation(
+[Alg=iqn_quantile Seed=0] Starting training, total_steps=1000000, eval_freq=10000
+[Step   10000] Return: 236.6 ± 53 (min=166, max=337) [2s]
+[Step   20000] Return: 236.5 ± 48 (min=163, max=321) [3s]
+[Step   30000] Return: 150.1 ± 1 (min=147, max=152) [37s]
+[Step   40000] Return: 197.8 ± 1 (min=195, max=200) [102s]
+[Step   50000] Return: 368.6 ± 3 (min=365, max=373) [167s]
+[Step   60000] Return: 258.3 ± 2 (min=254, max=262) [232s]
+[Step   70000] Return: 390.5 ± 5 (min=385, max=398) [297s]
+[Step   80000] Return: 352.1 ± 4 (min=346, max=358) [362s]
+[Step   90000] Return: 405.2 ± 1 (min=403, max=408) [425s]
+[Step  100000] Return: 325.1 ± 31 (min=250, max=355) [487s]
+[Step  110000] Return: 244.8 ± 14 (min=232, max=271) [549s]
+[Step  120000] Return: 312.1 ± 7 (min=301, max=325) [610s]
+[Step  130000] Return: 517.3 ± 41 (min=441, max=565) [672s]
+[Step  140000] Return: 267.3 ± 4 (min=261, max=273) [734s]
+[Step  150000] Return: 200.9 ± 43 (min=182, max=330) [800s]
+[Step  160000] Return: 192.6 ± 10 (min=181, max=216) [864s]
+[Step  170000] Return: 412.0 ± 100 (min=257, max=527) [930s]
+[Step  180000] Return: 338.0 ± 4 (min=332, max=345) [995s]
+[Step  190000] Return: 375.9 ± 29 (min=319, max=424) [1060s]
+[Step  200000] Return: 332.9 ± 12 (min=302, max=344) [1125s]
+[Step  210000] Return: 375.9 ± 76 (min=237, max=502) [1191s]
+[Step  220000] Return: 501.0 ± 170 (min=238, max=794) [1258s]
+[Step  230000] Return: 378.7 ± 27 (min=341, max=413) [1325s]
+[Step  240000] Return: 482.7 ± 171 (min=90, max=654) [1392s]
+[Step  250000] Return: 356.4 ± 75 (min=253, max=552) [1460s]
+[Step  260000] Return: 300.5 ± 129 (min=109, max=442) [1527s]
+[Step  270000] Return: 512.1 ± 38 (min=422, max=567) [1595s]
+[Step  280000] Return: 481.9 ± 166 (min=140, max=771) [1663s]
+[Step  290000] Return: 320.1 ± 2 (min=318, max=323) [1730s]
+[Step  300000] Return: 845.3 ± 243 (min=477, max=1252) [1798s]
+[Step  310000] Return: 308.8 ± 19 (min=293, max=351) [1865s]
+[Step  320000] Return: 319.1 ± 5 (min=310, max=327) [1932s]
+[Step  330000] Return: 365.9 ± 28 (min=304, max=393) [2000s]
+[Step  340000] Return: 589.6 ± 137 (min=377, max=837) [2068s]
+[Step  350000] Return: 492.9 ± 217 (min=279, max=786) [2135s]
+[Step  360000] Return: 339.4 ± 91 (min=206, max=564) [2203s]
+[Step  370000] Return: 736.9 ± 443 (min=287, max=1590) [2271s]
+[Step  380000] Return: 1680.8 ± 588 (min=634, max=2491) [2339s]
+[Step  390000] Return: 772.0 ± 323 (min=465, max=1448) [2407s]
+[Step  400000] Return: 375.6 ± 148 (min=200, max=648) [2474s]
+[Step  410000] Return: 912.9 ± 263 (min=526, max=1389) [2542s]
+[Step  420000] Return: 491.6 ± 394 (min=78, max=1490) [2610s]
+[Step  430000] Return: 1138.6 ± 408 (min=706, max=2184) [2678s]
+[Step  440000] Return: 1601.5 ± 697 (min=357, max=2107) [2747s]
+[Step  450000] Return: 565.0 ± 377 (min=168, max=1299) [2814s]
+[Step  460000] Return: 971.5 ± 617 (min=398, max=2188) [2883s]
+[Step  470000] Return: 1197.3 ± 798 (min=115, max=2131) [2951s]
+[Step  480000] Return: 1816.2 ± 520 (min=305, max=2073) [3020s]
+[Step  490000] Return: 1581.7 ± 646 (min=201, max=2180) [3089s]
+[Step  500000] Return: 917.0 ± 579 (min=166, max=2228) [3157s]
+[Step  510000] Return: 1223.5 ± 789 (min=152, max=2223) [3225s]
+[Step  520000] Return: 1211.4 ± 582 (min=198, max=2237) [3293s]
+[Step  530000] Return: 1026.8 ± 547 (min=115, max=2142) [3361s]
+[Step  540000] Return: 806.4 ± 260 (min=338, max=1011) [3430s]
+[Step  550000] Return: 374.8 ± 235 (min=87, max=780) [3498s]
+[Step  560000] Return: 1059.7 ± 298 (min=475, max=1695) [3567s]
+[Step  570000] Return: 582.0 ± 283 (min=231, max=1003) [3635s]
+[Step  580000] Return: 906.8 ± 386 (min=424, max=1913) [3703s]
+[Step  590000] Return: 1206.3 ± 842 (min=83, max=2123) [3771s]
+[Step  600000] Return: 1320.5 ± 686 (min=375, max=2028) [3840s]
+[Step  610000] Return: 881.2 ± 439 (min=365, max=1969) [3908s]
+[Step  620000] Return: 1560.7 ± 602 (min=219, max=2090) [3977s]
+[Step  630000] Return: 1210.3 ± 729 (min=148, max=2098) [4045s]
+[Step  640000] Return: 1607.4 ± 771 (min=46, max=2027) [4114s]
+[Step  650000] Return: 1472.8 ± 717 (min=217, max=2076) [4183s]
+[Step  660000] Return: 1699.7 ± 471 (min=524, max=1965) [4252s]
+[Step  670000] Return: 1853.6 ± 453 (min=517, max=2098) [4321s]
+[Step  680000] Return: 1781.4 ± 653 (min=130, max=2168) [4389s]
+[Step  690000] Return: 1750.1 ± 610 (min=690, max=2323) [4458s]
+[Step  700000] Return: 1571.5 ± 756 (min=287, max=2245) [4527s]
+[Step  710000] Return: 1509.4 ± 797 (min=394, max=2351) [4593s]
+[Step  720000] Return: 978.5 ± 528 (min=346, max=2082) [4657s]
+[Step  730000] Return: 1333.8 ± 824 (min=76, max=2104) [4718s]
+[Step  740000] Return: 1008.2 ± 906 (min=64, max=2123) [4778s]
+[Step  750000] Return: 471.5 ± 775 (min=66, max=2078) [4838s]
+[Step  760000] Return: 1764.7 ± 676 (min=302, max=2212) [4901s]
+[Step  770000] Return: 1904.1 ± 213 (min=1504, max=2117) [4964s]
+[Step  780000] Return: 1373.3 ± 718 (min=70, max=2148) [5026s]
+[Step  790000] Return: 671.3 ± 448 (min=190, max=1495) [5087s]
+Traceback (most recent call last):
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/train_all.py", line 239, in <module>
+    main()
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/train_all.py", line 218, in main
+    result = trainer.train()
+             ^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/trainer.py", line 237, in train
+    action = self._select_action(obs, deterministic=False)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/trainer.py", line 155, in _select_action
+    return self.agent.select_action(obs, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/iqn_quantile_agent.py", line 122, in select_action
+    action, _ = self.actor.sample(obs_t, deterministic=deterministic)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions/sess_a2dafea0/vault/artifacts/code_session_20260602_163535/networks.py", line 169, in sample
+    normal = torch.distributions.Normal(mean, std)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/exuber/anaconda3/lib/python3.11/site-packages/torch/distributions/normal.py", line 66, in __init__
+    super().__init__(batch_shape, validate_args=validate_args)
+  File "/home/exuber/anaconda3/lib/python3.11/site-packages/torch/distributions/distribution.py", line 77, in __init__
+    raise ValueError(
+ValueError: Expected parameter loc (Tensor of shape (1, 3)) of distribution Normal(loc: torch.Size([1, 3]), scale: torch.Size([1, 3])) to satisfy the constraint Real(), but found invalid values:
+tensor([[nan, nan, nan]], device='cuda:0')

@@ -1,0 +1,12 @@
+- `2026-06-03T15:29:29` `grep -rn 'eval_results' '/hopper_experiments'`
+- `2026-06-03T15:29:38` `grep -rn 'final_return_mean' '/hopper_experiments/dp_depth'`
+- `2026-06-03T15:29:38` `grep -rn 'final_return_mean' '/hopper_experiments/attention_prior'`
+- `2026-06-03T15:29:38` `grep -rn 'final_return_mean' '/hopper_experiments/td3'`
+- `2026-06-03T15:29:38` `grep -rn 'final_return_mean' '/hopper_experiments/iqn_quantile_simple'`
+- `2026-06-03T15:29:39` `grep -rn 'final_return_mean' '/hopper_experiments/taylor_curvature'`
+- `2026-06-03T15:29:39` `grep -rn 'final_return_mean' '/hopper_experiments/td_variance'`
+- `2026-06-03T15:29:39` `grep -rn 'final_return_mean' '/hopper_experiments/ddpg'`
+- `2026-06-03T15:29:39` `grep -rn 'final_return_mean' '/hopper_experiments/value_uncertainty'`
+- `2026-06-03T15:29:39` `grep -rn 'final_return_mean' '/hopper_experiments/gait_phase'`
+- `2026-06-03T15:29:39` `grep -rn 'final_return_mean' '/hopper_experiments/sac'`
+- `2026-06-03T15:29:39` `grep -rn 'final_return_mean' '/hopper_experiments/dual_critic_attention'`

@@ -1,0 +1,16 @@
+{
+  "id": "island_003",
+  "name": "Dp_depth Island",
+  "method_family": "dp_depth",
+  "centroid_cell": "*+*+*+dp_depth",
+  "created_from": "v_dp_depth_1780479223",
+  "created_at": "2026-06-03T17:33:43.305652",
+  "variants": [
+    {
+      "id": "v_dp_depth_1780479223",
+      "cell": "*+*+*+dp_depth",
+      "score": 985.1,
+      "claim_atom_id": "node_1780471897180_90c0e06e"
+    }
+  ]
+}
