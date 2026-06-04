@@ -1,6 +1,6 @@
-# EvoScientist — Claude Code Edition
+# Flux-Insight
 
-Multi-agent scientific discovery system, rebuilt as composable Claude Code Skills.
+Multi-agent scientific discovery system, built as composable Claude Code Skills.
 
 ## Quick Start
 
