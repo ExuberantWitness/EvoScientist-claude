@@ -108,7 +108,11 @@ async def list_sessions_api(request):
         return JSONResponse(mgr.list_sessions())
     # Fallback: scan sessions directory when AgentManager not initialized
     sessions = []
-    sessions_base = Path('/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/sessions')
+    # Derive from project root: sdk/dashboard/monitor.py → project root
+    _project = Path(__file__).resolve().parent.parent
+    sessions_base = _project / 'sessions'
+    if not sessions_base.exists():
+        sessions_base = _project.parent / 'sessions'
     if sessions_base.exists():
         for sd in sorted(sessions_base.glob('sess_*'), key=lambda p: p.stat().st_mtime, reverse=True):
             sp = sd / 'PIPELINE_STATE.json'

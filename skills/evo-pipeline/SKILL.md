@@ -5,12 +5,43 @@ argument-hint: [research_proposal_or_question]
 allowed-tools: Bash(*), Read, Write, Skill, AskUserQuestion
 ---
 
-# EvoScientist Pipeline — 一键启动
+# Flux-Insight Pipeline — 一键启动
 
 研究问题: **$ARGUMENTS**
 
-项目根目录: `/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude`
-工作空间目录: `/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH`
+## 路径约定
+
+本 SKILL 使用以下变量。Claude Code 执行时自动解析为实际路径：
+
+| 变量 | 含义 | 自动发现方式 |
+|------|------|-------------|
+| `PROJECT_ROOT` | Flux-Insight 项目根目录 | 搜索包含 `CLAUDE.md` + `run_dashboard.py` 的目录 |
+| `WORKSPACE_ROOT` | 工作空间根目录 | `PROJECT_ROOT` 的父目录 |
+| `SKILLS_ROOT` | Claude Code Skills 目录 | `~/.claude/skills` |
+| `PYTHON_BIN` | Python (需 BGE-M3/FlagEmbedding) | `python3` 或 conda env，见步骤 0 |
+
+**在开始前，先执行以下发现命令，后续所有代码块使用这些 shell 变量：**
+
+```bash
+# 自动发现 PROJECT_ROOT (从当前目录向上搜索)
+_find_project_root() {
+    local d="$1"
+    while [ "$d" != "/" ]; do
+        if [ -f "$d/CLAUDE.md" ] && [ -f "$d/run_dashboard.py" ]; then
+            echo "$d"
+            return 0
+        fi
+        d=$(dirname "$d")
+    done
+    # Fallback: search home directory (max depth 6)
+    find "$HOME" -maxdepth 6 -name "run_dashboard.py" -path "*/Flux-Insight/*" 2>/dev/null | head -1 | xargs dirname 2>/dev/null
+}
+PROJECT_ROOT=$(_find_project_root "$(pwd)")
+WORKSPACE_ROOT=$(dirname "$PROJECT_ROOT")
+
+echo "PROJECT_ROOT=$PROJECT_ROOT"
+echo "WORKSPACE_ROOT=$WORKSPACE_ROOT"
+```
 
 ## 步骤 0: 清理旧进程 + 残留数据
 
@@ -25,7 +56,7 @@ python3 -c "
 import json
 from pathlib import Path
 
-ws = Path('/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH')
+ws = Path('$WORKSPACE_ROOT')
 sp = ws / 'PIPELINE_STATE.json'
 s = {}
 if sp.exists():
@@ -47,7 +78,7 @@ if sdir.exists():
             f.unlink()
     print('.evo_sessions cleaned')
 
-rpath = Path('/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude/agent-manager/.evo_session_registry.json')
+rpath = Path('$PROJECT_ROOT') / 'agent-manager/.evo_session_registry.json'
 if rpath.exists():
     registry = json.loads(rpath.read_text())
     valid = {sid: wspath for sid, wspath in registry.items()
@@ -69,17 +100,17 @@ if rpath.exists():
 
 ```bash
 # 第一步: 宽搜索（低门槛，从$ARGUMENTS提取英文关键词填入<query>）
-export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use v22.22.2 && cd /home/exuber/.claude/skills/github-search && node scripts/github-search.mjs "<query>" --language python --min-stars 10 --limit 15 2>&1
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use v22.22.2 && cd "$SKILLS_ROOT/github-search" && node scripts/github-search.mjs "<query>" --language python --min-stars 10 --limit 15 2>&1
 ```
 
 根据研究领域补充多角度搜索：
 
 ```bash
 # 搜索算法实现
-export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use v22.22.2 && cd /home/exuber/.claude/skills/github-search && node scripts/github-search.mjs "<query>" --language python --min-stars 10 --limit 15 2>&1
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use v22.22.2 && cd "$SKILLS_ROOT/github-search" && node scripts/github-search.mjs "<query>" --language python --min-stars 10 --limit 15 2>&1
 
 # 搜索框架和库
-export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use v22.22.2 && cd /home/exuber/.claude/skills/github-search && node scripts/github-search.mjs "<query>" --language python --min-stars 50 --limit 10 2>&1
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use v22.22.2 && cd "$SKILLS_ROOT/github-search" && node scripts/github-search.mjs "<query>" --language python --min-stars 50 --limit 10 2>&1
 ```
 
 如果 GitHub API 返回 0 结果（非 rate limit），执行 LLM 驱动的查询重试:
@@ -112,8 +143,8 @@ Output as JSON: {"analysis":"...", "reformulated_queries":["query1","query2","qu
 
 ## 步骤 2: Bootstrap 工作空间
 
-```
-cd /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude && PYTHONPATH=. python pes_controller/bootstrap.py '$ARGUMENTS' /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH
+```bash
+cd "$PROJECT_ROOT" && PYTHONPATH=. python3 pes_controller/bootstrap.py '$ARGUMENTS' "$WORKSPACE_ROOT"
 ```
 
 从输出中提取 `session_id`、`session_dir`。
@@ -125,7 +156,7 @@ python3 -c "
 import json, sys
 from pathlib import Path
 
-sys.path.insert(0, '/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude')
+sys.path.insert(0, '$PROJECT_ROOT')
 from claim_chain.chain import ClaimChainV2
 
 sd = Path('{session_dir}')
@@ -171,10 +202,22 @@ print(f'Written {written} baseline atoms to cc.db')
 ## 步骤 3.5: 启动 BGE-M3 Embedding 服务
 
 ```bash
+# 自动发现含 FlagEmbedding 的 Python
+PYTHON_BIN="python3"
+if ! python3 -c "import FlagEmbedding" 2>/dev/null; then
+    # 尝试常见 conda 路径
+    for _py in "$HOME/anaconda3/bin/python" "$HOME/miniconda3/bin/python"; do
+        if [ -f "$_py" ] && "$_py" -c "import FlagEmbedding" 2>/dev/null; then
+            PYTHON_BIN="$_py"
+            break
+        fi
+    done
+fi
+echo "Using Python: $PYTHON_BIN"
+
 # 后台启动 BGE socket server (常驻，agent 通过 cc_query_tool 连接)
-# 使用 anaconda3 Python (有 FlagEmbedding/BGE-M3 依赖)
 pkill -f bge_socket_server 2>/dev/null; sleep 1
-cd /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude && /home/exuber/anaconda3/bin/python tools/bge_socket_server.py --workspace {session_dir} 2>&1 &
+cd "$PROJECT_ROOT" && "$PYTHON_BIN" tools/bge_socket_server.py --workspace {session_dir} 2>&1 &
 sleep 5
 echo "BGE socket server started"
 ```
@@ -184,7 +227,7 @@ echo "BGE socket server started"
 ```bash
 python3 -c "
 import sys
-sys.path.insert(0, '/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude')
+sys.path.insert(0, '$PROJECT_ROOT')
 from tools.cc_query_tool import _ensure_embeddings
 
 socket_path = '{session_dir}/_index/bge_socket.sock'
@@ -197,7 +240,7 @@ print(f'Embeddings computed: {count} atoms')
 ## 步骤 4: 启动 Dashboard + 展示 URL
 
 ```bash
-/home/exuber/anaconda3/bin/python /home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH/EvoScientist-claude/run_dashboard.py 2>&1 &
+cd "$PROJECT_ROOT" && PYTHON_BIN="${PYTHON_BIN:-python3}" && "$PYTHON_BIN" run_dashboard.py 2>&1 &
 sleep 2
 ```
 

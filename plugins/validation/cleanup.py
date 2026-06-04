@@ -45,7 +45,7 @@ SCATTERED_MD = [
 def main():
     parser = argparse.ArgumentParser(description="清理 workspace 根目录散落文件")
     parser.add_argument("--dry-run", action="store_true", help="只列出将移动的文件，不实际移动")
-    parser.add_argument("--workspace", default="/home/exuber/CODE/CORE/pythonProject1/AUTORESEARCH")
+    parser.add_argument("--workspace", default=str(Path.cwd()))
     args = parser.parse_args()
 
     ws = Path(args.workspace)
