@@ -8,9 +8,9 @@ Multi-agent scientific discovery system, rebuilt as composable Claude Code Skill
 # Install skills into Claude Code
 cp -r skills/* ~/.claude/skills/
 
-# (Optional) Set up LLM review MCP
-pip install -r mcp-servers/llm-review/requirements.txt
-claude mcp add llm-review -- python3 mcp-servers/llm-review/server.py
+# (Optional) Set up LLM review MCP (servers from ARIS repo)
+pip install mcp httpx
+# See docs/MCP_SETUP.md for full instructions
 
 # Run full pipeline in Claude Code
 claude

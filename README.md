@@ -20,7 +20,7 @@
 >
 > 🪶 **极简架构** — Skills 模式零依赖，纯 Markdown 文件，复制即用。Dashboard 模式提供 Web 管线控制台、迭代管理和知识图谱可视化。
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat)](LICENSE) · [![Skills](https://img.shields.io/badge/Skills-20+-green?style=flat)]() · [![MCP Tools](https://img.shields.io/badge/MCP_Tools-8-orange?style=flat)]() · [![CC](https://img.shields.io/badge/Claim_Chain-SQLite-purple?style=flat)]() · [![Python](https://img.shields.io/badge/Python-3.11+-blue?style=flat)]()
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat)](LICENSE) · [![Skills](https://img.shields.io/badge/Skills-21-green?style=flat)]() · [![CC](https://img.shields.io/badge/Claim_Chain-SQLite-8A2BE2?style=flat)]() · [![Python](https://img.shields.io/badge/Python-3.11+-blue?style=flat)]()
 
 ---
 
@@ -67,7 +67,7 @@ Dashboard 提供：
 
 - 🔄 **20+ 个可组合 Skills** — 单独使用或链式调用，覆盖研究全生命周期，纯 Markdown 零依赖
 - 🧬 **四层进化架构** — L1 程序化基准测试 → L2 Rubric 多维评估 → L3 MAP-Elites 质量多样性进化 → L4 Claim Chain 知识图谱，星型拓扑中心化协作
-- 🧠 **Claim Chain v2** — SQLite 知识图谱 (cc.db)，18 种关系类型，BGE-M3 语义嵌入，temporal metadata (iter/phase/timestamp)
+- 🧠 **Claim Chain v2** — SQLite 知识图谱 (cc.db)，20 种关系类型，BGE-M3 语义嵌入，temporal metadata (iter/phase/timestamp)
 - 🔄 **迭代版本管理** — git-like 快照 + undo 回退，满意标记 iter_complete / 不满意回滚 iter_rollback，跨迭代知识注入，decision ledger 审计
 - 📊 **Dashboard 可视化** — vis.js 力导向知识图谱 + 迭代控制面板 + 实时 Persona 事件流 (SSE)，运行于 localhost:8420
 - 🗺️ **MAP-Elites 进化网格** — 3×3 行为空间归档，exploit/explore 采样策略，FitnessTracker 停滞检测，PES (Plan-Execute-Summary) 循环
@@ -237,28 +237,24 @@ EvoScientist 的核心创新之一。PES Controller 调用 4 种 Persona（novel
 
 ## 🔀 跨模型审稿桥接 (MCP Servers)
 
-| MCP Server | 支持的模型 | 说明 |
-|------------|-----------|------|
-| **llm-review** | GPT-4o, DeepSeek, Kimi, MiniMax, GLM, 任何 OpenAI 兼容 API | 通用评审桥接 |
-| **gemini-review** | Gemini 2.5 Flash, Gemini Pro | Google Gemini 专用 |
-| **feishu-notify** | — | 飞书/Lark 消息推送（实验完成通知） |
-
-安装示例：
+跨模型审稿 MCP 服务器来自 [ARIS](https://github.com/wanshuiyin/Auto-claude-code-research-in-sleep) 项目。克隆 ARIS 后安装：
 
 ```bash
-# GPT/DeepSeek 评审
+# GPT/DeepSeek/MiniMax/GLM/Kimi — 通用 OpenAI 兼容 API
 pip install mcp httpx
 claude mcp add llm-review \
   -e LLM_API_KEY=sk-xxx \
   -e LLM_BASE_URL=https://api.deepseek.com/v1 \
   -e LLM_MODEL=deepseek-chat \
-  -- python3 mcp-servers/llm-review/server.py
+  -- python3 /path/to/ARIS/mcp-servers/llm-review/server.py
 
-# Gemini 评审
+# Google Gemini
 claude mcp add gemini-review \
   -e GEMINI_API_KEY=xxx \
-  -- python3 mcp-servers/gemini-review/server.py
+  -- python3 /path/to/ARIS/mcp-servers/gemini-review/server.py
 ```
+
+或者直接使用 Claude Code 内置的 MCP 聊天工具 (`mcp__llm-chat__chat`) 进行单模型评审。
 
 > 📚 详细配置见 [MCP Setup Guide](docs/MCP_SETUP.md)
 
@@ -308,85 +304,105 @@ python run_dashboard.py &
 
 ```
 EvoScientist-claude/
-├── README.md                          # 本文档
+├── README.md
 ├── CLAUDE.md                          # Claude Code 项目配置
 ├── LICENSE                            # Apache 2.0
-├── .env.example                       # 环境变量模板
+├── .env.example
 ├── .gitignore
 ├── run_dashboard.py                   # Dashboard 入口 (localhost:8420)
 │
-├── skills/                            # 20+ Claude Code Skills
-│   ├── evo-pipeline/SKILL.md         # 全流程编排器
-
-│   ├── evo-intake/SKILL.md           # 需求解析
-│   ├── evo-planner/SKILL.md          # 实验规划
-│   ├── evo-research/SKILL.md         # 文献调研
-│   ├── evo-ideation/SKILL.md         # 创意发现
-│   ├── evo-refine/SKILL.md           # 方法精炼
-│   ├── evo-code/SKILL.md             # 代码实现
-│   ├── evo-code-agent-pre/SKILL.md   # 代码前：CC 上下文
-│   ├── evo-code-agent-check/SKILL.md # 代码检查：更新 CC 状态
-│   ├── evo-code-agent-post/SKILL.md  # 代码后：CC 关联
-│   ├── evo-debug/SKILL.md            # 调试修复
-│   ├── evo-run/SKILL.md              # 实验执行
-│   ├── evo-analyze/SKILL.md          # 数据分析
-│   ├── evo-claim/SKILL.md            # 结果→声明判断门
-│   ├── evo-iterate/SKILL.md          # 迭代评估
-│   ├── evo-write/SKILL.md            # 报告撰写
-│   ├── evo-review/SKILL.md           # 跨模型审稿
-│   ├── evo-memory/SKILL.md           # 记忆管理
-│   └── research-wiki/SKILL.md        # 知识库
+├── skills/                            # 21 个 Claude Code Skills (纯 Markdown)
+│   ├── evo-pipeline/SKILL.md          # 全流程编排器 (一键启动)
+│   ├── evo-evolve/SKILL.md            # PES 质量多样性进化循环
+│   ├── evo-boot/SKILL.md              # Session 初始化 bootstrap
+│   ├── evo-intake/SKILL.md            # 需求解析 (W1)
+│   ├── evo-planner/SKILL.md           # 实验规划 (W2) — PLAN/REFLECTION 双模式
+│   ├── evo-research/SKILL.md          # 文献调研 (W3)
+│   ├── evo-ideation/SKILL.md          # 创意发现 (W3.5) — Elo 锦标赛排名
+│   ├── evo-refine/SKILL.md            # 方法精炼 (W3.6)
+│   ├── evo-code/SKILL.md              # 代码实现 (W4)
+│   ├── evo-code-agent-pre/SKILL.md    # 代码前置 — CC 上下文读取
+│   ├── evo-code-agent-check/SKILL.md  # 代码检查 — CC 状态更新
+│   ├── evo-code-agent-post/SKILL.md   # 代码后置 — CC 关联建立
+│   ├── evo-debug/SKILL.md             # 运行时调试 (W4.5)
+│   ├── evo-run/SKILL.md               # 实验执行 (W4.7)
+│   ├── evo-analyze/SKILL.md           # 数据分析 (W5)
+│   ├── evo-claim/SKILL.md             # 结果→声明判断门 (W5.6)
+│   ├── evo-iterate/SKILL.md           # 迭代评估 (W5.5)
+│   ├── evo-write/SKILL.md             # 论文写作 (W6)
+│   ├── evo-review/SKILL.md            # 跨模型审稿 (W7)
+│   ├── evo-memory/SKILL.md            # 持久化记忆管理
+│   └── research-wiki/SKILL.md         # 持久化知识库
 │
-├── pes_controller/                    # PES 自动流转引擎
-│   ├── controller.py                  # 主控制器 (W2-W8, persona, ELO, CC context)
-│   ├── bootstrap.py                   # Session 初始化
-│   ├── protocol.py                    # 状态读写 + 原子操作
-│   └── elo/                           # ELO 锦标赛 + RND 新颖性评估
+├── pes_controller/                    # PES 自动流转引擎 (58 文件)
+│   ├── controller.py                  # 主控制器 — 4-Persona, ELO, CC 上下文注入
+│   ├── bootstrap.py                   # Session 初始化 + 资源创建
+│   ├── protocol.py                    # 原子状态读写 + 产物验证
+│   ├── elo/                           # ELO 锦标赛引擎 + RND 新颖性评估
+│   └── rubric/                        # Rubric 多维评估 + 调度器 + 新颖性检测
 │
-├── claim_chain/                       # Claim Chain v2 知识图谱
-│   ├── chain.py                       # ClaimChainV2: SQLite CRUD + embedding
-│   ├── query.py                       # CCQueryInterface: 语义搜索 + 图遍历
-│   ├── grounding.py                   # CCGrounding: atom/relation 验证
-│   └── schemas/                       # Node/Edge dataclass, taxonomy, validation
+├── claim_chain/                       # Claim Chain v2 SQLite 知识图谱 (10 文件)
+│   ├── chain.py                       # ClaimChainV2 — CRUD + BGE-M3 embedding + session context
+│   ├── query.py                       # CCQueryInterface — 语义搜索 + 图遍历
+│   ├── grounding.py                   # CCGrounding — atom/relation 验证 + 门禁
+│   ├── codegraph.py                   # CodeGraph 集成 — 代码结构提取
+│   ├── cell_grid.py                   # MAP-Elites 行为网格
+│   ├── island_manager.py              # Island 管理 — 检测/分配/迁移
+│   ├── negative_archive.py            # 负样本归档 — 失败记录防重复
+│   ├── decomposer.py                  # 问题分解
+│   └── api.py                         # HTTP API 封装
 │
-├── sdk/
-│   ├── dashboard/monitor.py           # Starlette Web Dashboard + 迭代控制 API
-│   ├── memory/evo_auto_evolve.py      # PES 自动进化循环
+├── sdk/                               # 运行时 SDK (31 文件)
+│   ├── dashboard/                     # Starlette Web Dashboard — 管线 + 迭代控制 + SSE 事件
+│   ├── memory/evo_auto_evolve.py      # PES 自动进化循环 (Plan→Execute→Summary)
 │   ├── search/web_search.py           # Tavily + Web 搜索
-│   └── status/fitness.py              # Fitness 追踪器
+│   ├── status/fitness.py              # FitnessTracker 停滞检测
+│   ├── literature/                    # 文献摄取 (MinerU PDF 解析)
+│   ├── mcp/                           # MCP 客户端 + 注册表
+│   ├── middleware/                     # 工具调用中间件 (选择器/限流/错误处理)
+│   ├── tools/                         # SDK 工具 (skill_manager, search, execute, think)
+│   └── server.py                      # HTTP server 启动入口
 │
-├── plugins/
-│   ├── writing/markdown_parser.py     # Vault → CC 同步 + self-wiring
-│   ├── experimentation/agent_task.py  # 实验任务管理
-│   └── reporting/event_log.py         # 事件日志
+├── plugins/                           # 插件系统 (22 文件)
+│   ├── writing/markdown_parser.py     # Vault → CC 同步 + self-wiring + IndexSyncer
+│   ├── ideation/                      # 创意插件 — plan_templates, domain_presets, structure_mapping
+│   ├── experimentation/               # 实验插件 — agent_task, trainer_contract, recorder
+│   ├── grounding/                     # 知识锚定
+│   ├── reporting/                     # 报告插件 — event_log, vault_manager
+│   ├── validation/                    # 验证插件 — verify_atom, verify_plan, cleanup
+│   ├── research/writing/              # Research Wiki 持久化
+│   └── pipeline/                      # Pipeline 辅助
 │
-├── tools/
+├── application/                       # 应用层 (18 文件)
+│   ├── orchestrator.py                # ResearchPipeline — 全流程编排
+│   ├── personas/                      # 4-Persona 提示词系统
+│   ├── evolution/                     # 进化引擎 — pipeline, scoring, strategy, tree_search
+│   ├── mcp/                           # MCP 客户端 + 注册表
+│   ├── memory/                        # 持久化记忆 (user profile + experiment memory)
+│   └── meta/meta_agent.py             # Meta 自我优化 Agent
+│
+├── session/                           # Session 生命周期管理 (26 文件)
+│   ├── session.py                     # Session 核心
+│   ├── manager.py                     # Session 管理器
+│   ├── persistence.py                 # 持久化 (.evo_sessions/)
+│   ├── registry.py                    # 注册表 + 恢复
+│   ├── stream/                        # SSE 事件流 (emitter, events, tracker)
+│   ├── llm/                           # LLM 调用封装 (models, patches)
+│   └── config/settings.py             # 配置系统
+│
+├── tools/                             # 遗留工具集 (39 文件) — 已逐步迁移到 claim_chain/plugins/sdk
 │   ├── experiment_recorder.py         # 实验记录 → CC + events + Markdown
-│   ├── bge_socket_server.py           # BGE-M3 Unix socket 嵌入服务
+│   ├── bge_socket_server.py           # BGE-M3 Unix socket 嵌入服务 (1024-dim)
 │   └── cc_query_tool.py               # CC CLI: query/upsert/link
 │
-├── agent-manager_legacy/               # (Legacy) 多 Agent MCP 系统 — 不再维护
+├── agent-manager/                     # Evo Agent Manager (入口目录)
+├── agent-manager_legacy/              # (Legacy) 旧版多 Agent MCP 系统 — 不再维护
 │
-├── mcp-servers/                       # 跨模型审稿桥接
-│   ├── llm-review/server.py          # GPT/DeepSeek/MiniMax/GLM
-│   ├── gemini-review/server.py       # Google Gemini
-│   └── feishu-notify/server.py       # 飞书通知
+├── templates/                         # 研究工件模板 (6 个 Markdown)
+├── docs/                              # 文档 (QUICK_START, SKILL_MAP, MCP_SETUP)
 │
-├── templates/                         # 研究工件模板
-│   ├── RESEARCH_PROPOSAL_TEMPLATE.md
-│   ├── EXPERIMENT_PLAN_TEMPLATE.md
-│   ├── EXPERIMENT_LOG_TEMPLATE.md
-│   ├── ANALYSIS_REPORT_TEMPLATE.md
-│   ├── FINAL_REPORT_TEMPLATE.md
-│   └── MEMORY_TEMPLATE.md
-│
-├── session/                           # Session 生命周期管理
-├── application/                       # Personas, orchestrator, evolution
-│
-└── docs/                              # 文档
-    ├── QUICK_START.md
-    ├── SKILL_MAP.md
-    └── MCP_SETUP.md
+├── old/                               # 旧版代码 (26 文件) — 保留供参考
+└── tests/                             # 测试 (test_cross_phase.py)
 ```
 
 ---
@@ -411,7 +427,7 @@ EvoScientist-claude/
 
 - [x] **20+ 核心 Skills** — 覆盖研究全生命周期 + PES 质量多样性进化 + code-agent 四阶段 (pre/code/check/post)
 - [x] **四层进化架构** — Claim Chain (L4) + Rubric (L2) + MAP-Elites Grid (L3) + Programmatic GT (L1)
-- [x] **Claim Chain v2** — SQLite 知识图谱 (cc.db)，18 种关系类型，BGE-M3 语义嵌入，temporal metadata
+- [x] **Claim Chain v2** — SQLite 知识图谱 (cc.db)，20 种关系类型，BGE-M3 语义嵌入，temporal metadata
 - [x] **迭代版本管理** — jump_to_plan 快照 + undo，CC 满意/不满意语义，跨迭代知识注入
 - [x] **Dashboard 迭代控制** — 阶段流转 + 撤销回到Plan + 迭代目录管理 + decision ledger 审计
 - [x] **MAP-Elites 进化网格** — 3×3 行为归档，exploit/explore 采样，FitnessTracker 停滞检测
@@ -543,7 +559,7 @@ Apache 2.0 — 同原版 EvoScientist。
 1. **Skills Mode** (zero-dependency): 20+ composable Markdown skills for the full research lifecycle
 2. **Dashboard Mode** (Web console): localhost:8420 with phase transitions, iteration management (undo/rollback), Claim Chain v2 visualization, and decision ledger audit
 
-**New in v0.3.0:** Claim Chain v2 — SQLite-backed knowledge graph (cc.db) with 18 edge types, BGE-M3 semantic embeddings, and temporal metadata (iter/phase/timestamp) on every atom. Iteration management with git-like snapshots, undo, and cross-iteration knowledge injection via W2 persona prompts.
+**New in v0.3.0:** Claim Chain v2 — SQLite-backed knowledge graph (cc.db) with 20 edge types, BGE-M3 semantic embeddings, and temporal metadata (iter/phase/timestamp) on every atom. Iteration management with git-like snapshots, undo, and cross-iteration knowledge injection via W2 persona prompts.
 
 Quick start: `cp -r skills/* ~/.claude/skills/ && /evo-pipeline "your proposal"`
 
