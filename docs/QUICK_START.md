@@ -40,12 +40,12 @@ claude mcp add feishu-notify -e FEISHU_WEBHOOK_URL=your_url -- python3 ~/.claude
 ### Full Pipeline (Autonomous)
 ```
 claude
-> /evo-pipeline "Investigate whether knowledge distillation from GPT-4 improves BERT performance on low-resource NER"
+> /flux-pipeline "Investigate whether knowledge distillation from GPT-4 improves BERT performance on low-resource NER"
 ```
 
 ### Full Pipeline (Interactive)
 ```
-> /evo-pipeline "Your research question" — AUTO_PROCEED: false
+> /flux-pipeline "Your research question" — AUTO_PROCEED: false
 ```
 
 ### Individual Skills
@@ -68,7 +68,7 @@ claude
 ### Parameter Override
 All skills support inline parameter overrides:
 ```
-> /evo-pipeline "goal" — AUTO_PROCEED: true, SKIP_RESEARCH: true, CODE_MODE: effort
+> /flux-pipeline "goal" — AUTO_PROCEED: true, SKIP_RESEARCH: true, CODE_MODE: effort
 > /evo-review "report" — MAX_ROUNDS: 5, DIFFICULTY: hard
 > /evo-code "task" — PREFLIGHT: false
 ```

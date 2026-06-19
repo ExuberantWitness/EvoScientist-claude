@@ -32,7 +32,7 @@ class HookEmitter:
     Socket 不可用时降级为 no-op，不影响 Agent 正常运行。
     """
 
-    def __init__(self, socket_path: str = "/tmp/evo-pipeline-bridge.sock"):
+    def __init__(self, socket_path: str = "/tmp/flux-pipeline-bridge.sock"):
         self.socket_path = socket_path
         self._connected = False
         self._try_connect()
@@ -156,7 +156,7 @@ class AgentManager:
     MAX_CONTEXT_CHARS = 2_400_000  # ~800K tokens (80% of DeepSeek's 1M)
 
     def __init__(self, base_dir: str | None = None,
-                 hook_socket_path: str = "/tmp/evo-pipeline-bridge.sock",
+                 hook_socket_path: str = "/tmp/flux-pipeline-bridge.sock",
                  use_persistent_checkpointer: bool = True):
         self.base_dir = base_dir or str(Path(__file__).parent.parent)
         self.sessions: dict[str, AgentSession] = {}

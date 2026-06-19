@@ -55,7 +55,7 @@ This document explains how EvoScientist's original Python multi-agent system map
 | `/evo-ideation` | Combines research-ideation + idea-tournament |
 | `/evo-iterate` | Extracted from main workflow Step 4 (evaluate & iterate) |
 | `/evo-memory` | Replaces EvoMemoryMiddleware with explicit skill |
-| `/evo-pipeline` | Replaces the LangGraph agent graph orchestration |
+| `/flux-pipeline` | Replaces the LangGraph agent graph orchestration |
 
 ## Workflow Comparison
 
@@ -69,7 +69,7 @@ User Input → Main Agent → [delegates to sub-agents via "task" tool]
 
 ### Claude Code Skills
 ```
-User Input → /evo-pipeline orchestrates:
+User Input → /flux-pipeline orchestrates:
   /evo-intake → /evo-planner → /evo-research → /evo-ideation
   → /evo-code → /evo-debug → /evo-run
   → /evo-analyze → /evo-iterate (loop)

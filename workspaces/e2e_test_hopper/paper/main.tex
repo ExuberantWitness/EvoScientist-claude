@@ -1,0 +1,58 @@
+\documentclass[11pt]{article}
+
+% ICLR 2025 format
+\usepackage{iclr2025_conference}
+\usepackage{times}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{enumitem}
+
+\title{Adaptive Feature Alignment for Adversarial Robustness}
+
+\author{Anonymous Author(s)\\
+Affiliation\\
+\texttt{email@example.com}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Adversarial robustness remains a critical challenge in deep learning. While adversarial training has shown promise, it often degrades clean accuracy. In this paper, we propose an adaptive feature alignment framework that addresses this trade-off. Our method explicitly aligns feature representations across different perturbation levels using layer-specific adaptive weights. Extensive experiments on CIFAR-10, CIFAR-100, and ImageNet demonstrate that our approach achieves state-of-the-art robust accuracy while maintaining competitive clean accuracy. Specifically, we improve robust accuracy by up to 5\% compared to existing methods.
+\end{abstract}
+
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_methodology}
+\input{sections/04_experiments}
+\input{sections/05_conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\clearpage
+\appendix
+\section{Additional Experimental Details}
+\label{sec:appendix}
+
+\subsection{Compute Resources}
+All experiments were conducted on NVIDIA A100 GPUs with 80GB memory. Each experiment required approximately 12 hours for CIFAR-10, 24 hours for CIFAR-100, and 72 hours for ImageNet.
+
+\subsection{Detailed Architecture}
+We provide the detailed architecture of our adaptive feature alignment module in Figure \ref{fig:architecture}.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{figures/architecture.pdf}
+\caption{Architecture of the proposed adaptive feature alignment module.}
+\label{fig:architecture}
+\end{figure}
+
+\end{document}

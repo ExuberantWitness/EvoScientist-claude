@@ -1,0 +1,20 @@
+% ... (前面的内容) ...
+
+\begin{algorithm}[h]
+\caption{Training Procedure}
+\label{alg:training}
+\begin{algorithmic}[1]
+\Require Training data $\mathcal{D}$, learning rate $\eta$
+\Ensure Trained model $\theta$
+\State Initialize model parameters $\theta$
+\For{each epoch $e = 1$ to $E$}
+    \For{each batch $b \in \mathcal{D}$}
+        \State Compute loss $\mathcal{L}_{total} = \mathcal{L}_{task} + \lambda \mathcal{L}_{reg}$
+        \State Update $\theta \gets \theta - \eta \nabla_\theta \mathcal{L}_{total}$
+    \EndFor
+\EndFor
+\State \Return $\theta$
+\end{algorithmic}
+\end{algorithm}
+
+% ... (后面的内容) ...

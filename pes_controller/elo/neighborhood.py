@@ -32,13 +32,20 @@ EMBED_DIM = 1024
 
 
 class RNDEvaluator:
-    """BGE-M3 embedding + RND computation (paper algorithm)."""
+    """Embedding + RND computation (paper algorithm).
 
-    def __init__(self, kb_path: Path | str | None = None):
+    Accepts an optional EmbeddingProvider. When provided, _encode()
+    delegates to it instead of loading FlagEmbedding directly.
+    """
+
+    def __init__(self, kb_path: Path | str | None = None,
+                 provider: Any | None = None):
         self._kb_path = Path(kb_path) if kb_path else None
-        self._model = None  # lazy-init BGE-M3
-        self._entries: list[dict] = []        # [{text, embedding, ...}]
-        self._embeddings: np.ndarray | None = None  # (N, 1024) cache
+        self._provider = provider  # EmbeddingProvider or None
+        self._model = None  # lazy-init BGE-M3 (only when no provider)
+        self._entries: list[dict] = []
+        self._embed_dim: int = 1024  # default, updated on first encode
+        self._embeddings: np.ndarray | None = None  # (N, D) cache
         self._dirty = False
 
     # ------------------------------------------------------------------
@@ -63,13 +70,23 @@ class RNDEvaluator:
         return self._model
 
     def _encode(self, texts: list[str]) -> np.ndarray:
-        """Encode texts to BGE-M3 dense embeddings (1024-dim)."""
+        """Encode texts to dense embeddings."""
         if not texts:
-            return np.empty((0, EMBED_DIM), dtype=np.float32)
+            return np.empty((0, self._embed_dim), dtype=np.float32)
+
+        if self._provider is not None:
+            vecs = self._provider.encode(texts)
+            if isinstance(vecs, list):
+                vecs = np.array(vecs, dtype=np.float32)
+            self._embed_dim = vecs.shape[1]
+            return vecs
+
+        # Fallback: load BGE-M3 directly
         out = self.model.encode(texts, return_dense=True, batch_size=32)
         vecs = out["dense_vecs"]
         if isinstance(vecs, list):
             vecs = np.array(vecs, dtype=np.float32)
+        self._embed_dim = vecs.shape[1]
         return vecs
 
     # ------------------------------------------------------------------
@@ -118,12 +135,12 @@ class RNDEvaluator:
             return
         n = len(self._entries)
         if n == 0:
-            self._embeddings = np.empty((0, EMBED_DIM), dtype=np.float32)
+            self._embeddings = np.empty((0, self._embed_dim), dtype=np.float32)
             return
-        arr = np.zeros((n, EMBED_DIM), dtype=np.float32)
+        arr = np.zeros((n, self._embed_dim), dtype=np.float32)
         for i, e in enumerate(self._entries):
             emb = e.get("embedding")
-            if emb is not None and len(emb) == EMBED_DIM:
+            if emb is not None and len(emb) == self._embed_dim:
                 arr[i] = np.array(emb, dtype=np.float32)
         self._embeddings = arr
 

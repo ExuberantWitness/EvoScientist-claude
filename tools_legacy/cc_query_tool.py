@@ -83,6 +83,12 @@ def _ensure_embeddings(cc_db_path: str, socket_path: str) -> int:
     so there is no lock contention."""
     import sqlite3
 
+    # Try provider-based embedding first (no socket needed)
+    count = _ensure_embeddings_provider(cc_db_path)
+    if count >= 0:
+        return count
+
+    # Fallback: socket-based embedding
     if not Path(socket_path).exists():
         return 0
 
@@ -114,6 +120,49 @@ def _ensure_embeddings(cc_db_path: str, socket_path: str) -> int:
     conn.close()
     logger.info(f"Embedded {len(rows)} atoms → {cc_db_path}")
     return len(rows)
+
+
+def _ensure_embeddings_provider(cc_db_path: str) -> int:
+    """Fill NULL embeddings using EmbeddingProvider (no socket needed).
+
+    Returns count embedded, or -1 if no provider available.
+    """
+    import sqlite3
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from pes_controller.embedding_provider import get_embedding_provider
+    except ImportError:
+        return -1
+
+    provider = get_embedding_provider()
+    if provider is None:
+        return -1
+
+    conn = sqlite3.connect(cc_db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    rows = conn.execute(
+        "SELECT id, title, summary FROM nodes WHERE embedding IS NULL"
+    ).fetchall()
+
+    if not rows:
+        conn.close()
+        return 0
+
+    texts = [f"{r[1]}: {r[2][:500]}" for r in rows]
+    try:
+        vecs = provider.encode(texts)
+        for i, row in enumerate(rows):
+            emb_json = json.dumps(vecs[i].tolist(), ensure_ascii=False)
+            conn.execute("UPDATE nodes SET embedding = ? WHERE id = ?", (emb_json, row[0]))
+        conn.commit()
+        logger.info(f"Provider embedded {len(rows)} atoms → {cc_db_path} (provider={provider.name})")
+        return len(rows)
+    except Exception as e:
+        logger.error(f"Provider embed failed: {e}")
+        return -1
+    finally:
+        conn.close()
 
 
 # ── SQL backend ──

@@ -1,5 +1,5 @@
 """
-EvoScientist Agent Manager — MCP Server.
+Flux-Insight Agent Manager — MCP Server.
 
 Exposes 17 tools to Claude Code for controlling the multi-agent system:
   evo_create_session, evo_send, evo_discuss, evo_status,
@@ -7,6 +7,9 @@ Exposes 17 tools to Claude Code for controlling the multi-agent system:
   evo_pipeline_control, evo_run_tournament, evo_distill, evo_get_evolution_memory,
   evo_get_fitness, evo_get_strategy, evo_patch_strategy, evo_rollback_strategy,
   evo_meta_evolve
+
+AgentManager is loaded lazily — if session.manager is unavailable,
+falls back to _LightweightManager (file-based sessions + EventBus).
 """
 
 import argparse
@@ -21,18 +24,22 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from session.manager import AgentManager
-
 logger = logging.getLogger(__name__)
 
 # Global manager instance (initialized on first use)
-_manager: AgentManager | None = None
+_manager = None
 
 
-def get_manager(base_dir: str | None = None) -> AgentManager:
+def get_manager(base_dir: str | None = None):
     global _manager
     if _manager is None:
-        _manager = AgentManager(base_dir=base_dir)
+        try:
+            from session.manager import AgentManager
+            _manager = AgentManager(base_dir=base_dir)
+        except ImportError as e:
+            logger.warning(f"AgentManager not available ({e}), running in lightweight mode")
+            from sdk.dashboard.monitor import _LightweightManager
+            _manager = _LightweightManager()
     return _manager
 
 
@@ -620,15 +627,21 @@ def create_server(base_dir: str | None = None, dashboard_port: int = 8420) -> Se
     mgr = get_manager(base_dir)
 
     # Wire manager to dashboard
-    from .dashboard import set_manager, set_bridge
+    try:
+        from sdk.dashboard.monitor import set_manager, set_bridge
+    except ImportError:
+        from .dashboard.monitor import set_manager, set_bridge
     set_manager(mgr)
 
-    # Create and wire PipelineBridge (对标 Ping Island HookSocketServer)
-    from .pipeline_bridge import PipelineBridge
-    bridge = PipelineBridge()
-    bridge.set_event_bus(mgr.event_bus)
-    bridge.set_manager(mgr)
-    set_bridge(bridge)
+    # Create and wire PipelineBridge (optional — may not exist in lightweight mode)
+    try:
+        from pes_controller.pipeline_bridge import PipelineBridge
+        bridge = PipelineBridge()
+        bridge.set_event_bus(mgr.event_bus)
+        bridge.set_manager(mgr)
+        set_bridge(bridge)
+    except (ImportError, Exception) as e:
+        logger.warning(f"PipelineBridge not available: {e}")
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -657,10 +670,13 @@ async def run_server(base_dir: str | None = None, dashboard_port: int = 8420):
 
     server = create_server(base_dir)
 
-    # Start dashboard web server in background thread (shares AgentManager)
+    # Start dashboard web server in background thread
     if dashboard_port and dashboard_port > 0:
         try:
-            from .dashboard import start_dashboard
+            try:
+                from sdk.dashboard.monitor import start_dashboard
+            except ImportError:
+                from .dashboard.monitor import start_dashboard
             start_dashboard(port=dashboard_port)
         except Exception as e:
             logger.warning(f"Dashboard failed to start: {e}")

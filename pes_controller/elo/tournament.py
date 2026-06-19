@@ -55,6 +55,33 @@ ELO_DIMENSIONS: dict[str, dict] = {
         "product_satisfaction": "产物规格满足度——是否包含伪代码/架构改动列表/损失函数签名/计算开销估计？",
         "scenario": "软件开发 — 专家评审团",
     },
+    "W7.1 论文计划": {
+        "dimensions": ["elo_novelty", "validity", "impact", "story_coherence", "product_satisfaction"],
+        "elo_novelty": "创新性——论文核心 Claim 是否具有非显而易见性？是否开辟新研究方向？",
+        "validity": "可行性——逻辑漏洞检查：问题-方法-证据链条是否合理？假设是否经过论证？",
+        "impact": "影响力——研究是否可能对领域产生显著影响？贡献是否够顶会水平？",
+        "story_coherence": "叙事一致性——One-Sentence Contribution 是否清晰？What/Why/So What 叙事逻辑是否连贯？",
+        "product_satisfaction": "产物规格满足度——是否包含：工作标题、Venue、Claims-Evidence Matrix、章节结构、图表计划、引用计划？",
+        "scenario": "论文规划评审 — Program Committee",
+    },
+    "W7.5 审稿修复": {
+        "dimensions": ["theoretical_rigor", "claims_evidence_alignment", "writing_clarity", "self_containedness", "notation_consistency"],
+        "theoretical_rigor": "理论严谨性——假设-模型匹配度，数学推导是否完整",
+        "claims_evidence_alignment": "声明-证据对齐——每个声明是否有实验支撑？是否存在不合理的声明？",
+        "writing_clarity": "写作清晰度——表述是否自洽、易懂？叙事弱点是否已修复？",
+        "self_containedness": "自含性——定理/引理是否独立可读？",
+        "notation_consistency": "符号一致性——全文符号是否统一？",
+        "scenario": "论文写作质量评审 — Writing Quality Committee",
+    },
+    "W8 审阅": {
+        "dimensions": ["elo_novelty", "claims_evidence_alignment", "impact", "writing_clarity", "product_satisfaction"],
+        "elo_novelty": "创新性——最终论文的核心贡献是否具有非显而易见性？",
+        "claims_evidence_alignment": "声明-证据对齐——所有声明是否有充分实验证据？是否存在 cherry-picked results？",
+        "impact": "影响力——研究对领域的长期价值",
+        "writing_clarity": "写作清晰度——全文叙事是否连贯？格式是否合规（页数、引用）？",
+        "product_satisfaction": "产物完整性——是否包含所有必需产物？",
+        "scenario": "最终审阅 — Program Chair",
+    },
 }
 
 
@@ -228,12 +255,14 @@ class EloTournament:
         initial_rating: float = 1500.0,
         max_rounds: int | None = None,
         phase: str = "W2 问题分析",
+        llm_client: Any = None,  # LLMClient instance (takes precedence over httpx)
     ):
         self.judge_model = judge_model
         self.k_factor = k_factor
         self.initial_rating = initial_rating
         self.max_rounds = max_rounds  # None = full round-robin
         self.phase = phase
+        self.llm_client = llm_client  # If provided, use LLMClient instead of httpx
         self._dims = ELO_DIMENSIONS.get(phase, {})
         self._dim_names = self._dims.get("dimensions", ["novelty", "feasibility", "relevance", "clarity"])
         self._judge_prompt = _build_judge_prompt(phase)
@@ -501,9 +530,32 @@ Proposal B: {b.get('title', 'Untitled')}
             return None, None
 
     async def _call_judge(self, prompt: str, use_phase_prompt: bool = False) -> str:
-        """Call the LLM judge model."""
-        system_prompt = self._judge_prompt if use_phase_prompt else _build_judge_prompt(self.phase)
+        """Call the LLM judge model.
 
+        Uses LLMClient (openai SDK) when available; falls back to httpx raw HTTP.
+        LLMClient.chat() is synchronous, so we wrap it with asyncio.to_thread().
+        """
+        system_prompt = self._judge_prompt if use_phase_prompt else _build_judge_prompt(self.phase)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        # Primary path: LLMClient (openai SDK)
+        if self.llm_client is not None:
+            try:
+                content, _ = await asyncio.to_thread(
+                    self.llm_client.chat_with_retry,
+                    messages,
+                    1500,
+                    0.1,
+                )
+                return content
+            except Exception as e:
+                logger.error(f"[EloTournament] LLMClient call failed: {e}")
+                raise
+
+        # Fallback: httpx raw HTTP (backward compat)
         try:
             import os
 
@@ -527,10 +579,7 @@ Proposal B: {b.get('title', 'Untitled')}
                     },
                     json={
                         "model": self.judge_model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt},
-                        ],
+                        "messages": messages,
                         "temperature": 0.1,
                         "max_tokens": 1500,
                     },
@@ -539,7 +588,7 @@ Proposal B: {b.get('title', 'Untitled')}
                 return data["choices"][0]["message"]["content"]
 
         except Exception as e:
-            logger.error(f"[EloTournament] LLM call failed: {e}")
+            logger.error(f"[EloTournament] httpx fallback failed: {e}")
             raise
 
     @staticmethod

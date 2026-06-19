@@ -33,9 +33,11 @@ DEFAULT_SOCKET_NAME = "bge_socket.sock"
 
 
 def get_rnd_evaluator():
-    """Lazy-import RNDEvaluator — the sole BGE-M3 owner."""
+    """Lazy-import RNDEvaluator with best available embedding provider."""
+    from pes_controller.embedding_provider import get_embedding_provider
     from pes_controller.elo.neighborhood import RNDEvaluator
-    return RNDEvaluator()
+    provider = get_embedding_provider()
+    return RNDEvaluator(provider=provider)
 
 
 def _load_model(rnd):

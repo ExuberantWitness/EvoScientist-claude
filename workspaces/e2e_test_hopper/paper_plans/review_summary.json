@@ -1,0 +1,70 @@
+{
+  "timestamp": "2024-05-24T10:30:00Z",
+  "per_plan": {
+    "plan_novel_academic": {
+      "structural_check": {
+        "has_title": true,
+        "has_hypothesis": true,
+        "has_one_sentence_contribution": true,
+        "has_claims_matrix": true,
+        "has_section_structure": true,
+        "has_figure_plan": true,
+        "has_reference_plan": true,
+        "has_risk_analysis": true,
+        "missing_items": []
+      },
+      "llm_scores": {
+        "elo_novelty": 8.5,
+        "validity": 8.0,
+        "impact": 7.5,
+        "story_coherence": 8.0,
+        "product_satisfaction": 9.0
+      },
+      "overall_comment": "该方案结构完整，核心假设清晰，Claims-Evidence Matrix 设计合理。创新性较高，且叙事逻辑连贯。章节和图表计划详细，风险分析到位。是一个高质量的学术型论文计划。"
+    },
+    "plan_industry_application": {
+      "structural_check": {
+        "has_title": true,
+        "has_hypothesis": true,
+        "has_one_sentence_contribution": true,
+        "has_claims_matrix": true,
+        "has_section_structure": true,
+        "has_figure_plan": false,
+        "has_reference_plan": true,
+        "has_risk_analysis": true,
+        "missing_items": ["has_figure_plan"]
+      },
+      "llm_scores": {
+        "elo_novelty": 6.5,
+        "validity": 9.0,
+        "impact": 8.5,
+        "story_coherence": 7.5,
+        "product_satisfaction": 7.0
+      },
+      "overall_comment": "方案实用性极强，问题-方法链条非常扎实，影响力潜力大。但缺少详细的图表计划，这会降低论文的可读性和说服力。建议补充图表规划。"
+    },
+    "plan_replication_study": {
+      "structural_check": {
+        "has_title": true,
+        "has_hypothesis": true,
+        "has_one_sentence_contribution": true,
+        "has_claims_matrix": true,
+        "has_section_structure": true,
+        "has_figure_plan": true,
+        "has_reference_plan": true,
+        "has_risk_analysis": false,
+        "missing_items": ["has_risk_analysis"]
+      },
+      "llm_scores": {
+        "elo_novelty": 5.0,
+        "validity": 9.5,
+        "impact": 6.0,
+        "story_coherence": 9.0,
+        "impact": 5.5,
+        "product_satisfaction": 6.5
+      },
+      "overall_comment": "该复制性研究方案在方法论上非常严谨，叙事清晰。但创新性较低，且缺少风险分析，可能低估了复制过程中可能遇到的挑战（如环境差异、数据不可得等）。"
+    }
+  },
+  "recommendation": "**推荐方案：plan_novel_academic**。该方案在所有维度上表现均衡且优秀，结构完整，创新性高，叙事连贯，风险可控。它最有可能产出一篇高影响力的学术论文。"
+}

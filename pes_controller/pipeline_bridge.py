@@ -21,7 +21,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Socket 路径 (与 HookEmitter 默认值一致)
-DEFAULT_SOCKET_PATH = "/tmp/evo-pipeline-bridge.sock"
+DEFAULT_SOCKET_PATH = "/tmp/flux-pipeline-bridge.sock"
 
 
 class PipelineBridge:

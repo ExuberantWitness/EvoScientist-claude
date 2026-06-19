@@ -1,0 +1,14 @@
+\section{Related Work}
+\label{sec:related_work}
+
+\subsection{Adversarial Attacks}
+Adversarial attacks can be broadly categorized into white-box and black-box attacks. White-box attacks \cite{goodfellow2014explaining, kurakin2016adversarial, madry2017towards} assume full knowledge of the model architecture and parameters, while black-box attacks \cite{papernot2017practical, chen2017zoo} operate under limited information. The Fast Gradient Sign Method (FGSM) \cite{goodfellow2014explaining} and Projected Gradient Descent (PGD) \cite{madry2017towards} are among the most widely studied white-box attacks.
+
+\subsection{Defense Mechanisms}
+Defense strategies against adversarial attacks include adversarial training \cite{madry2017towards, wong2020fast}, input preprocessing \cite{guo2017countering, liao2018defense}, and certified defenses \cite{cohen2019certified, wong2018provable}. Among these, adversarial training has shown the most empirical success, though it often degrades clean accuracy.
+
+\subsection{Robustness-Accuracy Trade-off}
+Recent work has explored the fundamental tension between robustness and accuracy \cite{tsipras2018robustness, zhang2019theoretically}. Several approaches have been proposed to mitigate this trade-off, including TRADES \cite{zhang2019theoretically}, which explicitly balances natural and robust errors, and MART \cite{wang2019improving}, which emphasizes misclassified examples.
+
+\subsection{Feature Alignment}
+Feature alignment techniques have been explored in domain adaptation \cite{ganin2016domain, tzeng2017adversarial} and more recently in adversarial robustness \cite{zhang2019feature, xie2019feature}. Our work builds upon these foundations but introduces a novel adaptive weighting mechanism that considers layer-specific sensitivity to perturbations.

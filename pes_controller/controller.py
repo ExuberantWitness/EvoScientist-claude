@@ -36,26 +36,39 @@ PHASE_PLAN_2   = "W3 方案方向"
 PHASE_IDEATE   = "W4 具体方案生成"
 PHASE_CODE     = "W5 代码实现"
 PHASE_ANALYZE  = "W6 结果分析"
-PHASE_WRITE    = "W7 论文写作"
+PHASE_WRITE_PLAN   = "W7.1 论文计划"
+PHASE_WRITE_FIGURE = "W7.2 图表生成"
+PHASE_WRITE_LATEX  = "W7.3 LaTeX写作"
+PHASE_WRITE_COMPILE= "W7.4 编译"
+PHASE_WRITE_IMPROVE= "W7.5 审稿修复"
 PHASE_REVIEW   = "W8 审阅"
 PHASE_TERMINATED = "已终止"
 # Deleted: PHASE_PLAN_3 (W2.3), PHASE_RESEARCH (W3) — persona self-searches now
+# Backward compat: PHASE_WRITE replaced by W7.1-W7.5 sub-phases
 
 AUTO_ADVANCE_PHASES = frozenset({PHASE_PLAN_1, PHASE_PLAN_2, PHASE_IDEATE})
 
 PHASES = [PHASE_PLAN_1, PHASE_PLAN_2, PHASE_IDEATE,
-          PHASE_CODE, PHASE_ANALYZE, PHASE_WRITE, PHASE_REVIEW]
+          PHASE_CODE, PHASE_ANALYZE,
+	          PHASE_WRITE_PLAN, PHASE_WRITE_FIGURE, PHASE_WRITE_LATEX,
+	          PHASE_WRITE_COMPILE, PHASE_WRITE_IMPROVE,
+	          PHASE_REVIEW]
 
-AGENT_SDK_PHASES = frozenset({PHASE_WRITE, PHASE_REVIEW})
+AGENT_SDK_PHASES = frozenset({PHASE_WRITE_PLAN, PHASE_WRITE_FIGURE, PHASE_WRITE_LATEX,
+                               PHASE_WRITE_COMPILE, PHASE_WRITE_IMPROVE, PHASE_REVIEW})
 
 TRANSITIONS = {
     PHASE_PLAN_1:   [PHASE_PLAN_2],
     PHASE_PLAN_2:   [PHASE_IDEATE],
     PHASE_IDEATE:   [PHASE_CODE],
     PHASE_CODE:     [PHASE_ANALYZE],
-    PHASE_ANALYZE:  [PHASE_PLAN_1, PHASE_WRITE],
-    PHASE_WRITE:    [PHASE_REVIEW, PHASE_TERMINATED],
-    PHASE_REVIEW:   [PHASE_WRITE],
+    PHASE_ANALYZE:  [PHASE_PLAN_1, PHASE_WRITE_PLAN],
+    PHASE_WRITE_PLAN:   [PHASE_WRITE_FIGURE],
+    PHASE_WRITE_FIGURE: [PHASE_WRITE_LATEX],
+    PHASE_WRITE_LATEX:  [PHASE_WRITE_COMPILE],
+    PHASE_WRITE_COMPILE:[PHASE_WRITE_IMPROVE],
+    PHASE_WRITE_IMPROVE:[PHASE_REVIEW],
+    PHASE_REVIEW:   [PHASE_WRITE_PLAN, PHASE_CODE, PHASE_TERMINATED],
 }
 
 _PERSONA_CHAIN = [
@@ -76,8 +89,12 @@ CHAIN_STEPS = {
         "multi_agent_discuss", "evolution_memory",
         "island_assign", "refine_atoms", "write_claim_chain",
     ],
-    PHASE_WRITE:   ["invoke_skill_write"],
-    PHASE_REVIEW:  ["invoke_skill_review"],
+    PHASE_WRITE_PLAN:   ["invoke_skill_paper_plan", "verify_deliverables"],
+    PHASE_WRITE_FIGURE: ["invoke_skill_paper_figure", "verify_deliverables"],
+    PHASE_WRITE_LATEX:  ["invoke_skill_paper_write", "verify_deliverables"],
+    PHASE_WRITE_COMPILE:["invoke_skill_paper_compile", "verify_deliverables"],
+    PHASE_WRITE_IMPROVE:["invoke_skill_paper_improve", "verify_deliverables"],
+    PHASE_REVIEW:       ["invoke_skill_flux_review", "verify_deliverables"],
 }
 
 FOUR_PERSONA_AGENTS = [
@@ -92,8 +109,12 @@ AGENT_ROLES = {
     PHASE_PLAN_2:   FOUR_PERSONA_AGENTS,
     PHASE_IDEATE:   FOUR_PERSONA_AGENTS,
     PHASE_ANALYZE:  ["analyst", "planner", "researcher"],
-    PHASE_WRITE:    ["writer"],
-    PHASE_REVIEW:   ["writer"],
+    PHASE_WRITE_PLAN:   ["writer"],
+    PHASE_WRITE_FIGURE: ["writer"],
+    PHASE_WRITE_LATEX:  ["writer"],
+    PHASE_WRITE_COMPILE:["writer"],
+    PHASE_WRITE_IMPROVE:["writer"],
+    PHASE_REVIEW:       ["writer"],
 }
 
 PRODUCT_SPECS = {
@@ -103,6 +124,7 @@ PRODUCT_SPECS = {
             "因果分析(为什么这个难点会导致性能瓶颈)",
             "baseline为何无法解决(现有方法的局限性)",
         ],
+        "deliverables": [],
     },
     PHASE_PLAN_2: {
         "required": [
@@ -111,6 +133,7 @@ PRODUCT_SPECS = {
             "技术路径概要(用什么方法解决)",
             "与baseline的区分点",
         ],
+        "deliverables": [],
     },
     PHASE_IDEATE: {
         "required": [
@@ -119,6 +142,52 @@ PRODUCT_SPECS = {
             "损失函数签名(fn_name(args) -> Tensor + 说明)",
             "计算开销估计",
         ],
+        "deliverables": [],
+    },
+    PHASE_WRITE_PLAN: {
+        "required": [
+            "NARRATIVE_REPORT.md exists",
+            "PAPER_PLAN.md exists with: working title, venue, Claims-Evidence Matrix, section structure with page budgets, Figure Plan table, Citation Plan",
+        ],
+        "deliverables": ["NARRATIVE_REPORT.md", "PAPER_PLAN.md"],
+    },
+    PHASE_WRITE_FIGURE: {
+        "required": [
+            "figures/ directory exists",
+            "At least 1 .pdf file in figures/",
+            "figures/latex_includes.tex exists and non-empty",
+        ],
+        "deliverables": ["figures/", "figures/latex_includes.tex"],
+    },
+    PHASE_WRITE_LATEX: {
+        "required": [
+            "paper/main.tex exists",
+            "paper/sections/ has .tex files",
+            "paper/references.bib exists",
+            "paper/math_commands.tex exists",
+        ],
+        "deliverables": ["paper/main.tex", "paper/sections/", "paper/references.bib", "paper/math_commands.tex"],
+    },
+    PHASE_WRITE_COMPILE: {
+        "required": [
+            "paper/main.pdf exists and > 100KB",
+        ],
+        "deliverables": ["paper/main.pdf"],
+    },
+    PHASE_WRITE_IMPROVE: {
+        "required": [
+            "PAPER_IMPROVEMENT_LOG.md exists",
+            "PAPER_IMPROVEMENT_STATE.json exists with status='completed'",
+        ],
+        "deliverables": ["paper/main.pdf", "PAPER_IMPROVEMENT_LOG.md", "PAPER_IMPROVEMENT_STATE.json"],
+    },
+    PHASE_REVIEW: {
+        "required": [
+            "AUTO_REVIEW.md exists with: round history, full raw reviewer text, fixes, remaining issues",
+            "REVIEW_STATE.json exists with status='completed'",
+            "CLAIMS_FROM_RESULTS.md exists",
+        ],
+        "deliverables": ["AUTO_REVIEW.md", "REVIEW_STATE.json", "CLAIMS_FROM_RESULTS.md"],
     },
 }
 
@@ -129,8 +198,16 @@ _PHASE_MIGRATION = {
     "ELO筛选": "W4 具体方案生成",
     "实验执行": "W5 代码实现",
     "结果分析": "W6 结果分析",
-    "论文写作": "W7 论文写作",
+    "论文写作": "W7.1 论文计划",
     "论文审阅": "W8 审阅",
+}
+
+# Backward compatibility aliases: old phase names → new phases
+_PHASE_ALIASES = {
+    "W7 论文写作": PHASE_WRITE_PLAN,
+    "W6 Write": PHASE_WRITE_PLAN,
+    "W7 Write": PHASE_WRITE_PLAN,
+    "W7 Review": PHASE_REVIEW,
 }
 
 
@@ -432,6 +509,11 @@ class PESController:
         if phase in _PHASE_MIGRATION:
             state["phase"] = _PHASE_MIGRATION[phase]
             atomic_write(self.state_path, state)
+        # Apply backward compat aliases (e.g. "W7 论文写作" → W7.1)
+        phase = state.get("phase", PHASE_PLAN_1)
+        if phase in _PHASE_ALIASES:
+            state["phase"] = _PHASE_ALIASES[phase]
+            atomic_write(self.state_path, state)
         return state
 
     def _write_state(self, state: dict):
@@ -573,8 +655,12 @@ class PESController:
             PHASE_IDEATE: "4-Persona独立生成伪代码级方案 → ELO排序 → EM",
             PHASE_CODE: "Spec-first：生成BuildSpec → 代码实现",
             PHASE_ANALYZE: "Island/Rubric扫描 → 多Agent分析 → 结果写入CC",
-            PHASE_WRITE: "撰写论文报告，汇总所有实验发现",
-            PHASE_REVIEW: "外部LLM审阅论文",
+            PHASE_WRITE_PLAN: "论文计划: Claims-Evidence Matrix + section structure + 图表计划",
+            PHASE_WRITE_FIGURE: "图表生成: 从实验数据生成矢量格式图表",
+            PHASE_WRITE_LATEX: "LaTeX写作: 基于PAPER_PLAN逐section生成内容",
+            PHASE_WRITE_COMPILE: "编译: 编译paper/main.tex为PDF，修复错误",
+            PHASE_WRITE_IMPROVE: "审稿修复: 外部LLM多轮审稿修复",
+            PHASE_REVIEW: "多轮研究审阅（含故事逻辑维度）",
         }
         return descriptions.get(phase, "")
 
@@ -757,8 +843,12 @@ class PESController:
             PHASE_IDEATE: f"第{iteration+1}轮·W4 具体方案生成。伪代码级实现方案。{em_suffix}",
             PHASE_CODE: f"第{iteration+1}轮·W4 Code。单Agent代码实现。{em_suffix}",
             PHASE_ANALYZE: f"第{iteration+1}轮·W5 Analyze。当前最佳{best:.1f}。Judge+Rubrics评分。{em_suffix}",
-            PHASE_WRITE: f"W6 Write。基于实验结果撰写论文报告。{em_suffix}",
-            PHASE_REVIEW: f"W7 Review。外部审阅评估论文质量。{em_suffix}",
+            PHASE_WRITE_PLAN: f"W7.1 论文计划。构建Claims-Evidence Matrix和大纲。{em_suffix}",
+            PHASE_WRITE_FIGURE: f"W7.2 图表生成。基于PAPER_PLAN生成矢量图表。{em_suffix}",
+            PHASE_WRITE_LATEX: f"W7.3 LaTeX写作。逐section生成内容。{em_suffix}",
+            PHASE_WRITE_COMPILE: f"W7.4 编译。编译paper/main.tex为PDF。{em_suffix}",
+            PHASE_WRITE_IMPROVE: f"W7.5 审稿修复。外部LLM多轮审稿修复。{em_suffix}",
+            PHASE_REVIEW: f"W8 Review。多轮研究审阅（含故事逻辑维度）。{em_suffix}",
         }
         return prompts.get(phase, f"当前阶段: {phase}")
 
@@ -1275,26 +1365,111 @@ class PESController:
                 "argument": f"[{phase}] 变体入岛分配。检测 Island 合并候选。",
             }
 
-        elif step_name == "invoke_skill_write":
+        elif step_name == "invoke_skill_paper_plan":
             return {
                 "done": False,
                 "phase": phase,
                 "step": step_name,
                 "step_index": state.get("sub_loop_step", 0) - 1,
                 "action": "invoke_skill",
-                "skill": "/evo-write",
-                "argument": f"基于所有实验结果和分析报告撰写论文。研究问题: {state.get('research_topic', '')}",
+                "skill": "/flux-paper-plan",
+                "instruction": (
+                    "生成论文大纲。若缺少NARRATIVE_REPORT.md，先从W6讨论记录+cc.db提取核心发现。"
+                    "构建Claims-Evidence Matrix。完成故事框架自检（One-Sentence Contribution + What/Why/So What）。"
+                    f"研究问题: {state.get('research_topic', '')}"
+                ),
             }
 
-        elif step_name == "invoke_skill_review":
+        elif step_name == "invoke_skill_paper_figure":
             return {
                 "done": False,
                 "phase": phase,
                 "step": step_name,
                 "step_index": state.get("sub_loop_step", 0) - 1,
                 "action": "invoke_skill",
-                "skill": "/evo-review",
-                "argument": "审阅论文报告。target >= 7/10 才能通过。",
+                "skill": "/flux-paper-figure",
+                "instruction": "基于PAPER_PLAN.md中的图表计划，从实验数据生成矢量格式图表。12-point质量检查。",
+            }
+
+        elif step_name == "invoke_skill_paper_write":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "invoke_skill",
+                "skill": "/flux-paper-write",
+                "instruction": (
+                    "基于PAPER_PLAN.md和figures/目录，逐section生成LaTeX内容。"
+                    "使用paper/math_commands.tex中的数学宏。"
+                    "遵循flux-shared-references/writing-principles.md。"
+                    f"研究问题: {state.get('research_topic', '')}"
+                ),
+            }
+
+        elif step_name == "invoke_skill_paper_compile":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "invoke_skill",
+                "skill": "/flux-paper-compile",
+                "instruction": "编译paper/main.tex为PDF。检查引用、字体、页面数。修复编译错误直到成功。",
+            }
+
+        elif step_name == "invoke_skill_paper_improve":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "invoke_skill",
+                "skill": "/flux-paper-improve",
+                "instruction": (
+                    "使用外部LLM（MiMo）对论文进行多轮审稿修复。"
+                    "每轮：提交论文→获取评分→修复问题→重新编译。"
+                    "最多3轮。保存每轮PDF快照。"
+                    f"研究问题: {state.get('research_topic', '')}"
+                ),
+            }
+
+        elif step_name == "invoke_skill_flux_review":
+            return {
+                "done": False,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "action": "invoke_skill",
+                "skill": "/flux-review-loop",
+                "instruction": (
+                    "多轮研究审稿（含故事逻辑维度）。"
+                    "三选一：回W5(修改算法) / 补实验(就地) / 放展望(limits)。"
+                    f"研究问题: {state.get('research_topic', '')}"
+                ),
+            }
+
+        elif step_name == "verify_deliverables":
+            specs = PRODUCT_SPECS.get(phase, {})
+            deliverables = specs.get("deliverables", [])
+            workspace_dir = Path(state.get("workspace_dir", "."))
+            missing = []
+            for d in deliverables:
+                p = workspace_dir / d
+                if d.endswith("/"):
+                    if not p.is_dir():
+                        missing.append(d)
+                else:
+                    if not p.exists():
+                        missing.append(d)
+            return {
+                "done": True,
+                "phase": phase,
+                "step": step_name,
+                "step_index": state.get("sub_loop_step", 0) - 1,
+                "verified": len(missing) == 0,
+                "missing": missing,
+                "deliverables": deliverables,
             }
 
         return {"done": True, "phase": phase}
@@ -1935,11 +2110,11 @@ session_folder: ""
             "deliverable_count": len(deliverables),
             "instruction": (
                 "implementation_plan.md 已生成。请在 VS Code Claude Code 中依次执行:\n"
-                "  1. /evo-code-agent-pre " + str(plan_path) + "\n"
+                "  1. /flux-code-agent-pre " + str(plan_path) + "\n"
                 "  2. [实现代码...]\n"
-                "  3. /evo-code-agent-check " + str(plan_path) + "\n"
+                "  3. /flux-code-agent-check " + str(plan_path) + "\n"
                 "  4. [修正...]\n"
-                "  5. /evo-code-agent-post " + str(plan_path) + "\n"
+                "  5. /flux-code-agent-post " + str(plan_path) + "\n"
                 "完成后 Dashboard 将检测到完成信号并进入 W5 Analyze。"
             ),
         }
@@ -2012,7 +2187,7 @@ session_folder: ""
         return parts
 
     def _wait_user_code(self, state: dict, phase: str) -> dict:
-        """等待用户通过 /evo-code-agent-post 完成代码实现。
+        """等待用户通过 /flux-code-agent-post 完成代码实现。
         通过检测 PIPELINE_STATE.json 中的 code_phase_status == 'completed'。
         """
         code_status = state.get("code_phase_status", "")
@@ -2038,7 +2213,7 @@ session_folder: ""
             "status": "awaiting_user",
             "instruction": (
                 "等待用户在 VS Code Claude Code 中完成代码实现。\n"
-                "完成后运行 /evo-code-agent-post 回传结果。"
+                "完成后运行 /flux-code-agent-post 回传结果。"
             ),
         }
 
@@ -2153,7 +2328,7 @@ session_folder: ""
             state["sub_loop_step"] = 0
             state["status"] = "in_progress"
             self._write_state(state)
-            return {"transitioned": True, "to": PHASE_WRITE}
+            return {"transitioned": True, "to": PHASE_WRITE_PLAN}
 
         elif action == "terminate":
             state["phase"] = PHASE_TERMINATED
@@ -2181,10 +2356,10 @@ session_folder: ""
                 if best >= target:
                     return PHASE_WRITE
             return PHASE_PLAN_1  # 未达标→回到Plan-1，Island上已有积累
-        elif phase == PHASE_WRITE:
+        elif phase == PHASE_WRITE_PLAN:
             return PHASE_TERMINATED  # 满意→终止（不满意由用户选Review）
         elif phase == PHASE_REVIEW:
-            return PHASE_WRITE  # Review后回到Write
+            return PHASE_WRITE_PLAN  # Review后回到Write
         return PHASE_TERMINATED
 
     def _compute_gap_analysis(self, state: dict) -> dict:

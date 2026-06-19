@@ -17,7 +17,7 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from pes_controller.protocol import atomic_read, atomic_write
-from pes_controller import PESController, PHASE_PLAN_1
+from pes_controller import PESController, PHASE_INTAKE
 from plugins.reporting.vault_manager import SessionStore
 
 
@@ -96,7 +96,7 @@ def bootstrap(research_topic: str, project_dir: str) -> dict:
     return {
         "session_id": session_id,
         "session_dir": str(session_dir),
-        "phase": state.get("phase", PHASE_PLAN_1),
+        "phase": state.get("phase", PHASE_INTAKE),
         "dashboard_url": dashboard_url,
     }
 

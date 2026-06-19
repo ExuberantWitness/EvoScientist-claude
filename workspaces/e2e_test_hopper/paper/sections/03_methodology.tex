@@ -1,0 +1,38 @@
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Problem Formulation}
+Let $f_{\theta}: \mathcal{X} \rightarrow \mathcal{Y}$ denote a neural network parameterized by $\theta$, where $\mathcal{X} \subset \mathbb{R}^{d}$ is the input space and $\mathcal{Y} = \{1, \ldots, K\}$ is the label space. Given a clean input $x \in \mathcal{X}$ with label $y \in \mathcal{Y}$, an adversarial perturbation $\delta$ is crafted to maximize the loss $\mathcal{L}(f_{\theta}(x+\delta), y)$ while constrained to $\|\delta\|_{p} \leq \epsilon$.
+
+\subsection{Adaptive Feature Alignment}
+Our key contribution is the Adaptive Feature Alignment (AFA) mechanism. For a network with $L$ layers, let $h_{l}(x)$ denote the feature representation at layer $l$ for input $x$. We define the feature alignment loss as:
+
+\begin{equation}
+\mathcal{L}_{\text{align}} = \sum_{l=1}^{L} \alpha_{l} \cdot \|h_{l}(x) - h_{l}(x+\delta)\|_{2}^{2}
+\end{equation}
+
+where $\alpha_{l}$ are learnable weights that adaptively determine the importance of each layer. The weights are computed as:
+
+\begin{equation}
+\alpha_{l} = \frac{\exp(w_{l})}{\sum_{j=1}^{L} \exp(w_{j})}
+\end{equation}
+
+where $w_{l}$ are trainable parameters initialized to $1/L$.
+
+\subsection{Training Objective}
+The overall training objective combines the standard cross-entropy loss with the feature alignment term:
+
+\begin{equation}
+\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}}(f_{\theta}(x), y) + \lambda \cdot \mathcal{L}_{\text{align}}(x, x+\delta)
+\end{equation}
+
+where $\lambda$ is a hyperparameter controlling the strength of the alignment regularization. We use PGD-10 for generating adversarial examples during training.
+
+\subsection{Theoretical Analysis}
+We provide a theoretical justification for our approach. Consider the Lipschitz continuity of the feature mapping:
+
+\begin{equation}
+\|h_{l}(x) - h_{l}(x+\delta)\| \leq \text{Lip}(h_{l}) \cdot \|\delta\|
+\end{equation}
+
+By minimizing the feature alignment loss, we effectively constrain the Lipschitz constant of the feature mappings, leading to improved robustness.

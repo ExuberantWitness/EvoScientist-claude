@@ -28,7 +28,11 @@ PHASE_MAX_DURATION: dict[str, int] = {
     "W4 具体方案生成": 999999,
     "W5 代码实现": 999999,
     "W6 结果分析": 999999,
-    "W7 论文写作": 999999,
+    "W7.1 论文计划": 999999,
+    "W7.2 图表生成": 999999,
+    "W7.3 LaTeX写作": 999999,
+    "W7.4 编译": 999999,
+    "W7.5 审稿修复": 999999,
     "W8 审阅": 999999,
 }
 
@@ -46,10 +50,17 @@ STEP_MAX_DURATION: dict[str, int] = {
     "scan_islands_rubrics": 999999,
     "write_claim_chain":   999999,
     "island_assign":       999999,
+    "invoke_four_personas_paper": 999999,
+    "elo_tournament_paper": 999999,
+    "verify_paper_plan_products": 999999,
+    "present_paper_plan_options": 999999,
+    "invoke_skill_paper_figure": 999999,
+    "invoke_skill_paper_write": 999999,
+    "invoke_skill_paper_compile": 999999,
 }
 
-# Agent SDK phases — these should have agent_heartbeat
-AGENT_SDK_PHASES = frozenset({"W5 代码实现", "W7 论文写作", "W8 审阅"})
+# Agent SDK phases removed (Decision #19/40) — all execution is internal via SkillExecutor
+# Heartbeat checks no longer needed for subprocess-based phases
 
 # Timeout alerts disabled
 NO_EVENTS_STALL_SEC = 999999
@@ -269,11 +280,8 @@ class PipelineWatchdog:
         return alerts
 
     def _check_heartbeat(self, state: dict) -> list[Alert]:
-        """Check agent heartbeat for Agent SDK phases."""
-        alerts = []
-        phase = state.get("phase", "")
-        if phase not in AGENT_SDK_PHASES:
-            return alerts
+        """Check agent heartbeat — disabled (Agent SDK removed, all execution internal)."""
+        return []
         status = state.get("status", "")
         if status != "in_progress":
             return alerts
@@ -411,7 +419,7 @@ class PipelineWatchdog:
                 elapsed = time.time() - last_ts
             else:
                 elapsed = 0
-            if elapsed > 600 and phase not in AGENT_SDK_PHASES:
+            if elapsed > 600:
                 sid_short = sid[:12]
                 alerts.append(Alert(
                     id=f"orphan_progress_{sid_short}",
@@ -438,36 +446,8 @@ class PipelineWatchdog:
         return alerts
 
     def _check_agent_phases(self, state: dict) -> list[Alert]:
-        """Check agent SDK subprocess phases for expected behavior."""
-        alerts = []
-        phase = state.get("phase", "")
-        if phase not in AGENT_SDK_PHASES:
-            return alerts
-        status = state.get("status", "")
-        if status != "in_progress":
-            return alerts
-
-        sid = state.get("session_id", "")
-        if not sid:
-            return alerts
-
-        # Check session's discuss/agent health
-        if self._agent_manager:
-            session = self._agent_manager.sessions.get(sid)
-            if session:
-                # If session status is "error", flag it
-                if session.status == "error":
-                    sid_short = sid[:12]
-                    alerts.append(Alert(
-                        id=f"agent_error_{sid_short}",
-                        severity=Severity.ERROR,
-                        category="state",
-                        message=f"Agent session status='error' 在 phase='{phase}'",
-                        suggestion=f"查看 session last_response 了解错误详情。可能需要重启 Agent SDK 子进程。",
-                        session_id=sid, phase=phase,
-                    ))
-
-        return alerts
+        """Check agent phases — disabled (Agent SDK removed, all execution internal via SkillExecutor)."""
+        return []
 
     def _check_awaiting_decision(self, state: dict) -> list[Alert]:
         """Nag when pipeline is stuck waiting for user decision."""

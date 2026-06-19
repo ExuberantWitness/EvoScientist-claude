@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "skills": {
+    "flux-paper-plan": {"phase": "W7.1", "skill_path": "skills/flux-paper-plan/SKILL.md", "mcp_tools": ["mcp__llm-review__chat_session"]},
+    "flux-paper-figure": {"phase": "W7.2", "skill_path": "skills/flux-paper-figure/SKILL.md", "mcp_tools": ["mcp__llm-review__chat_session"]},
+    "flux-paper-write": {"phase": "W7.3", "skill_path": "skills/flux-paper-write/SKILL.md", "mcp_tools": ["mcp__llm-review__chat_session"]},
+    "flux-paper-compile": {"phase": "W7.4", "skill_path": "skills/flux-paper-compile/SKILL.md", "mcp_tools": []},
+    "flux-paper-improve": {"phase": "W7.5", "skill_path": "skills/flux-paper-improve/SKILL.md", "mcp_tools": ["mcp__llm-review__chat_session"]},
+    "flux-review-loop": {"phase": "W8", "skill_path": "skills/flux-review-loop/SKILL.md", "mcp_tools": ["mcp__llm-review__chat_session"]},
+    "flux-result-to-claim": {"phase": "aux", "skill_path": "skills/flux-result-to-claim/SKILL.md", "mcp_tools": ["mcp__llm-review__chat"]},
+    "flux-novelty-check": {"phase": "aux", "skill_path": "skills/flux-novelty-check/SKILL.md", "mcp_tools": ["mcp__llm-review__chat"]},
+    "flux-proof-writer": {"phase": "aux", "skill_path": "skills/flux-proof-writer/SKILL.md", "mcp_tools": ["mcp__llm-review__chat_session"]},
+    "flux-formula-derivation": {"phase": "aux", "skill_path": "skills/flux-formula-derivation/SKILL.md", "mcp_tools": ["mcp__llm-review__chat"]},
+    "flux-paper-illustration": {"phase": "aux", "skill_path": "skills/flux-paper-illustration/SKILL.md", "mcp_tools": ["mcp__llm-review__chat"]}
+  }
+}

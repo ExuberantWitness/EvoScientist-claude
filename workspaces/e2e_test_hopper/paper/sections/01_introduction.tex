@@ -1,0 +1,17 @@
+\section{Introduction}
+\label{sec:introduction}
+
+Deep learning has revolutionized numerous fields, from computer vision to natural language processing. However, the deployment of deep neural networks in safety-critical applications remains challenging due to their vulnerability to adversarial perturbations \cite{goodfellow2014explaining, szegedy2013intriguing}. These carefully crafted input modifications, often imperceptible to humans, can cause significant performance degradation and lead to catastrophic failures.
+
+Recent advances in adversarial robustness have focused on developing defense mechanisms \cite{madry2017towards, wong2020fast, zhang2019theoretically}. Among these, adversarial training has emerged as one of the most effective approaches, where models are trained on adversarially perturbed examples to learn robust feature representations. Despite its effectiveness, adversarial training often comes at the cost of reduced clean accuracy, creating a fundamental tension between robustness and standard performance.
+
+In this work, we propose a novel framework that addresses the robustness-accuracy trade-off through adaptive feature alignment. Our key insight is that adversarial perturbations primarily affect high-level semantic features, while low-level features remain relatively stable. By explicitly aligning feature representations across different perturbation levels, we can achieve both high clean accuracy and strong robustness.
+
+Specifically, our contributions are threefold:
+\begin{itemize}
+    \item We introduce a feature alignment mechanism that adaptively weights the contribution of different network layers based on their sensitivity to adversarial perturbations.
+    \item We propose a novel training objective that combines standard cross-entropy loss with a feature consistency regularization term.
+    \item We demonstrate through extensive experiments on multiple benchmark datasets that our method achieves state-of-the-art results, improving robust accuracy by up to 5\% while maintaining competitive clean accuracy.
+\end{itemize}
+
+The remainder of this paper is organized as follows. Section \ref{sec:related_work} discusses related work. Section \ref{sec:methodology} presents our proposed framework in detail. Section \ref{sec:experiments} describes our experimental setup and results. Finally, Section \ref{sec:conclusion} concludes the paper.

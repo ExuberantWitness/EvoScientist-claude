@@ -1,0 +1,8 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+In this paper, we proposed a novel framework for addressing the challenges of efficient long-range dependency modeling. Our method, which combines sparse attention with a learnable memory module, achieves state-of-the-art performance on three benchmark datasets while maintaining linear complexity. The key contribution lies in the theoretical analysis of the memory-augmented attention mechanism, which provides a principled way to balance expressiveness and efficiency.
+
+However, our work has several limitations. First, the performance of the memory module is sensitive to the choice of memory size, which requires tuning on a validation set. Second, the current implementation is optimized for GPU clusters and may not be directly applicable to resource-constrained edge devices. Finally, the theoretical guarantees only hold under certain smoothness assumptions of the input data distribution.
+
+Future work will explore adaptive memory size mechanisms to eliminate manual tuning. We also plan to extend our framework to other modalities such as video and point cloud data, where long-range dependencies are equally critical. Additionally, we aim to develop a distilled version of our model for deployment on mobile platforms.
